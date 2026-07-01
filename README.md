@@ -29,7 +29,7 @@ see the whole thing working before wiring up anything real.
 ## Quick start
 
 ```bash
-git clone https://github.com/your-username/homenet-hub.git
+git clone https://github.com/bevanho777-max/HomeNet-Hub.git
 cd homenet-hub
 
 # (optional) start from the example config — the app also falls back to it automatically
