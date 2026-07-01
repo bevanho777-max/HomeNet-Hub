@@ -1,0 +1,40 @@
+# theme.yaml — appearance (§12-step6). VISUAL ONLY.
+#
+# Brand TEXT lives in layout.header.title (that is the authority for the title);
+# theme controls fonts/colors. `subtitle` here is the only brand text theme adds
+# (optional, renders a small line under the title; omit for no change).
+#
+# Every default below is EXACTLY the value currently baked into web/tokens.css,
+# so an UNMODIFIED theme renders pixel-identical to the built-in look. Edit a
+# value and it overrides the CSS variable at runtime (hot-reloaded).
+
+# page font stack  (tokens.css html,body font-family)
+font_family: 'ui-sans-serif, -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif'
+
+# subtitle: "self-hosted monitoring"   # optional; omitted by default (no change)
+
+# page background gradient stops
+background:
+  base0: "#04060c"      # tokens.css --bg0 (top)
+  base1: "#080c16"      # tokens.css --bg1 (mid)
+  base2: "#0b1120"      # tokens.css --bg2 (bottom)
+
+# card surface (§0 fixed value — do not lighten)
+card_bg: "rgba(14, 19, 28, 0.92)"   # tokens.css --card-bg
+
+# status colors → lv-ok / lv-warn / lv-danger / lv-cool
+status:
+  ok: "#5ef0a8"         # tokens.css --green
+  warn: "#ffd24a"       # tokens.css --yellow
+  danger: "#ff6b7a"     # tokens.css --red
+  cool: "#4fe3d0"       # tokens.css --cyan
+
+# optional named identity palette. Targets may reference a hex directly (as the
+# examples do) or pick one of these names — both are accepted; kept for reference.
+accent:
+  blue: "#5aa6ff"
+  cyan: "#4fe3d0"
+  violet: "#b89cff"
+  orange: "#ff9d5c"
+  gold: "#ffcf5a"
+  green: "#5ad19a"

@@ -1,0 +1,201 @@
+# targets.yaml — data sources (§4.2)  ·  NEUTRAL DEMO
+# Each target declares HOW to collect (source) and HOW to map raw JSON into
+# metric keys (map). Adding a machine = add a block here + a card in layout.yaml.
+#
+# This file ships in DEMO MODE: every active target uses `type: demo`, which
+# synthesizes plausible, slowly-moving values from the `map` below — so a fresh
+# clone with NO real backend and NO env still shows a live, animated panel.
+#
+# To go live: replace a target's `source` with a real collector (http/http_push/
+# sql/exec) pointing at your own machine — the `map` stays the same. See the
+# disabled "real-backend examples" near the bottom.
+
+defaults:
+  http_proxy: ""
+  timeout: "3s"
+
+targets:
+  # ── Gateway / this host ──
+  - id: gateway
+    name: "Gateway"
+    color: "#5aa6ff"
+    enabled: true
+    source: { type: demo, interval: "1.5s" }
+    map:
+      cpu:        "$.cpu"
+      mem_pct:    "$.mem.pct"
+      disk_pct:   "$.disk.pct"
+      mem_bytes:  { v: "$.mem.used_g", max: "$.mem.total_g" }
+      disk_bytes: { v: "$.disk.used_g", max: "$.disk.total_g" }
+      loadavg:    { m1: "$.load[0]", m5: "$.load[1]", m15: "$.load[2]" }
+      net:        { rx: "$.net.rx", tx: "$.net.tx" }
+      uptime:     { d: "$.uptime.days", h: "$.uptime.hours" }
+
+  # ── GPU node 1 ──
+  - id: gpu1
+    name: "GPU Node 1"
+    color: "#4fe3d0"
+    badge: "GPU Node"
+    source: { type: demo, interval: "1.5s" }
+    map:
+      gpu:        "$.gpu"
+      vram_pct:   "$.vram.pct"
+      cpu:        "$.cpu"
+      vram_bytes: { v: "$.vram.used_g", max: "$.vram.total_g" }
+      mem_bytes:  { v: "$.mem.used_g",  max: "$.mem.total_g" }
+      gpu_temp:   "$.gpu_temp"
+      gpu_power:  "$.gpu_power"
+      disk_bytes: { v: "$.disk.used_g", max: "$.disk.total_g" }
+      net:        { rx: "$.net.rx", tx: "$.net.tx" }
+
+  # ── GPU node 2 ──
+  - id: gpu2
+    name: "GPU Node 2"
+    color: "#b89cff"
+    badge: "GPU Node"
+    source: { type: demo, interval: "1.5s" }
+    map:
+      gpu:        "$.gpu"
+      vram_pct:   "$.vram.pct"
+      cpu:        "$.cpu"
+      vram_bytes: { v: "$.vram.used_g", max: "$.vram.total_g" }
+      mem_bytes:  { v: "$.mem.used_g",  max: "$.mem.total_g" }
+      gpu_temp:   "$.gpu_temp"
+      gpu_power:  "$.gpu_power"
+      disk_bytes: { v: "$.disk.used_g", max: "$.disk.total_g" }
+      net:        { rx: "$.net.rx", tx: "$.net.tx" }
+
+  # ── GPU node 3 ──
+  - id: gpu3
+    name: "GPU Node 3"
+    color: "#ff9d5c"
+    badge: "GPU Node"
+    source: { type: demo, interval: "1.5s" }
+    map:
+      gpu:        "$.gpu"
+      vram_pct:   "$.vram.pct"
+      cpu:        "$.cpu"
+      vram_bytes: { v: "$.vram.used_g", max: "$.vram.total_g" }
+      mem_bytes:  { v: "$.mem.used_g",  max: "$.mem.total_g" }
+      gpu_temp:   "$.gpu_temp"
+      gpu_power:  "$.gpu_power"
+      disk_bytes: { v: "$.disk.used_g", max: "$.disk.total_g" }
+      net:        { rx: "$.net.rx", tx: "$.net.tx" }
+
+  # ── Token accounting (demo synthesizes raw model rows; classify buckets them) ──
+  - id: token
+    name: "Token Usage"
+    color: "#ffcf5a"
+    source: { type: demo, interval: "15s" }
+    classify:
+      by: model
+      rules:
+        - { name: "Chat / Large", match: { regex: "chat|instruct|large|[0-9]{2,}b" }, color: "#4fe3d0" }
+        - { name: "Embedding",    match: { regex: "embed|bge" },                       color: "#8b93a3" }
+        - { name: "Vision",       match: { regex: "vl|vision" },                       color: "#b89cff" }
+      fallback: { name: "Other", color: "#8b93a3" }
+    map:
+      token_speed: "$.token_speed"
+
+  # ── Service liveness ──
+  - id: svc_api
+    name: "API Gateway"
+    color: "#5ad19a"
+    source: { type: demo, interval: "8s" }
+    map:
+      latency:  "$.latency_ms"
+      procs:    "$.procs"
+      sessions: "$.sessions"
+      skills:   "$.skills"
+      status:   "$.status"
+
+  - id: svc_imagegen
+    name: "Image Gen"
+    source: { type: demo, interval: "8s" }
+    map:
+      status:  "$.status"
+      latency: "$.latency_ms"
+
+  - id: svc_inference
+    name: "Inference"
+    source: { type: demo, interval: "8s" }
+    map:
+      status:  "$.status"
+      latency: "$.latency_ms"
+
+  - id: svc_notify
+    name: "Notifier"
+    source: { type: demo, interval: "8s" }
+    map:
+      status:  "$.status"
+      latency: "$.latency_ms"
+
+  # ── Inference backend (info-style service card) ──
+  - id: inference
+    name: "Inference Backend"
+    color: "#b89cff"
+    badge: "LLM"
+    source: { type: demo, interval: "8s" }
+    map:
+      status:  "$.status"
+      latency: "$.latency_ms"
+      model:   "$.model"
+      role:    "$.role"
+
+  # ════════════════════════════════════════════════════════════════════════
+  #  REAL-BACKEND EXAMPLES (disabled). Flip enabled:true and point at your own
+  #  machines to go live; or just paste one of these `source` forms over a demo
+  #  target above (the `map` is identical). These show the real collector shapes.
+  # ════════════════════════════════════════════════════════════════════════
+
+  # http: pull a machine's report endpoint — replace with your own backend
+  - id: gpu_real_example
+    name: "GPU Node (real http)"
+    badge: "GPU Node"
+    enabled: false
+    source: { type: http, url: "http://gpu-node-1.example.local:9100/report", interval: "1.5s" }
+    map:
+      gpu:        "$.gpu"
+      vram_pct:   "$.vram.pct"
+      cpu:        "$.cpu"
+      vram_bytes: { v: "$.vram.used_g", max: "$.vram.total_g" }
+      gpu_temp:   "$.gpu_temp"
+      gpu_power:  "$.gpu_power"
+
+  # sql: read-only Postgres token accounting — replace with your own backend
+  - id: token_real_example
+    name: "Token Usage (real sql)"
+    enabled: false
+    source:
+      type: sql
+      driver: postgres
+      dsn_env: "PG_DSN"               # ← read-only DB account in .env
+      query_file: "queries/token_summary.sql"
+      interval: "15s"
+    classify:
+      by: model
+      rules:
+        - { name: "Chat / Large", match: { regex: "chat|instruct|large|[0-9]{2,}b" }, color: "#4fe3d0" }
+        - { name: "Embedding",    match: { regex: "embed|bge" },                       color: "#8b93a3" }
+        - { name: "Vision",       match: { regex: "vl|vision" },                       color: "#b89cff" }
+      fallback: { name: "Other", color: "#8b93a3" }
+    map:
+      token_speed: "$.token_speed"
+
+  # exec: local allowlisted command (ping). ping_host needs an RFC1918 IP;
+  # the docs IPs below are placeholders — replace before enabling.
+  - id: ping_router
+    name: "Router (ping)"
+    source: { type: exec, command: ping_host, args: ["192.0.2.1"], interval: "30s" }
+    enabled: false
+    map:
+      latency: "$.latency_ms"
+      status:  "$.status"
+
+  - id: ping_nas
+    name: "NAS (ping)"
+    source: { type: exec, command: ping_host, args: ["192.0.2.2"], interval: "30s" }
+    enabled: false
+    map:
+      latency: "$.latency_ms"
+      status:  "$.status"

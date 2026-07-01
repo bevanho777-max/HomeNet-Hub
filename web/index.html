@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Dashboard</title>
+  <link rel="stylesheet" href="/tokens.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="logo">◆</span><h1 id="title"></h1></div>
+    <div class="meta">
+      <span id="conn" class="conn"></span>
+      <span id="clock" class="updated">—</span>
+    </div>
+  </header>
+
+  <!-- service pill row (status_bar.targets) -->
+  <section id="services" class="chips"></section>
+
+  <!-- machine / token / service cards (layout.grid) -->
+  <main id="grid" class="grid"></main>
+
+  <!-- history dual-compare (layout.history) -->
+  <section class="history" id="history" hidden>
+    <div class="hist-head">
+      <h2 id="historyTitle"></h2>
+      <div class="ranges" id="rangeBtns"></div>
+    </div>
+    <div class="hist-split">
+      <div class="hist-pane">
+        <select class="hostSel" data-pane="L"></select>
+        <canvas class="histCanvas" data-pane="L" height="240"></canvas>
+        <div class="legend" data-pane="L"></div>
+      </div>
+      <div class="hist-pane">
+        <select class="hostSel" data-pane="R"></select>
+        <canvas class="histCanvas" data-pane="R" height="240"></canvas>
+        <div class="legend" data-pane="R"></div>
+      </div>
+    </div>
+  </section>
+
+  <details class="raw">
+    <summary id="rawTitle"></summary>
+    <pre id="rawjson">—</pre>
+  </details>
+
+  <!-- token detail modal -->
+  <div class="modal-mask" id="tokenModal">
+    <div class="modal">
+      <div class="modal-head">
+        <h2 id="tokenModalTitle"></h2>
+        <button class="modal-close" id="tokenModalClose"></button>
+      </div>
+      <div class="ranges" id="tokenModalRanges"></div>
+      <canvas id="tokenModalCanvas" height="220" style="width:100%;display:block;margin-top:16px"></canvas>
+      <div id="tokenModalTable"></div>
+    </div>
+  </div>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

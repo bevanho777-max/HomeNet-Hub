@@ -1,0 +1,39 @@
+{
+  "name": "homenet-hub",
+  "version": "1.0.0",
+  "private": false,
+  "type": "module",
+  "description": "Config-driven, self-hostable home-lab monitoring dashboard. Fastify + SQLite, YAML-configured, hot-reloadable.",
+  "license": "MIT",
+  "keywords": [
+    "monitoring",
+    "dashboard",
+    "homelab",
+    "self-hosted",
+    "fastify",
+    "config-driven",
+    "gpu"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/bevanho777-max/HomeNet-Hub.git"
+  },
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js",
+    "check": "node --check server/index.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@fastify/static": "^8.0.3",
+    "ajv": "^8.17.1",
+    "better-sqlite3": "^12.10.0",
+    "chokidar": "^4.0.3",
+    "fastify": "^5.2.0",
+    "jsonpath-plus": "^10.2.0",
+    "pg": "^8.13.1",
+    "yaml": "^2.6.1"
+  }
+}

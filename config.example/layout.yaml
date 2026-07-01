@@ -1,0 +1,93 @@
+# layout.yaml — presentation (§4.3)  ·  NEUTRAL EXAMPLE
+# Pure view config: which target renders as which card type, which metrics go on
+# rings vs. the key/value grid, and the header/status-bar/history wiring. Column
+# width & wrapping come from the CSS grid (auto-fit), not from here.
+#
+# All display text is config-driven (§12-step2). "HomeNet Hub" is the product
+# name; everything else here is neutral and meant to be edited. Free-text fields
+# accept any language (write your own localized strings).
+
+header:
+  title: "HomeNet Hub"              # product name — change to your own if you like
+  clock: true                       # live clock, top-right
+
+# Global UI chrome labels (i18n-ready). Generic fallbacks live in the frontend;
+# these override them. Omit a key to fall back to the built-in text.
+text:
+  raw_title: "Raw JSON (debug)"
+  modal_close: "Close"
+  conn_connecting: "Connecting…"
+  conn_online: "Online"
+  conn_offline: "Disconnected"
+
+status_bar:                         # top service pill row
+  targets: [svc_api, svc_imagegen, svc_inference, svc_notify]
+
+grid:
+  # row 1 — four machine cards
+  - target: gateway
+    type: machine
+    rings: [cpu, mem_pct, disk_pct]
+    items: [mem_bytes, disk_bytes, loadavg, net]
+    header_right: uptime
+
+  - target: gpu1
+    type: machine
+    rings: [gpu, vram_pct, cpu]
+    items: [vram_bytes, mem_bytes, gpu_temp, gpu_power, disk_bytes, net]
+
+  - target: gpu2
+    type: machine
+    rings: [gpu, vram_pct, cpu]
+    items: [vram_bytes, mem_bytes, gpu_temp, gpu_power, disk_bytes, net]
+
+  - target: gpu3
+    type: machine
+    rings: [gpu, vram_pct, cpu]
+    items: [vram_bytes, mem_bytes, gpu_temp, gpu_power, disk_bytes, net]
+
+  # row 2 — token / api / inference
+  - target: token
+    type: token
+    clickable: detail               # click → /api/token_detail modal
+    front_max: 3                    # §12-step6: max class boxes on card front (modal shows all)
+    header_right: "LiteLLM · {token_speed} t/s"
+    hint: "Click the card for per-model detail"
+    detail_title: "Token Detail · by Model"
+    columns:
+      model: "Model"
+      tokens: "Tokens"
+      requests: "Requests"
+      share: "Share"
+    labels:                              # §12-step2 patch: token card front labels
+      today: "Today"                     # stat-box "today" prefix
+      requests_suffix: "req"             # stat-box request-count suffix
+      total: "Total"                     # the total/aggregate column label
+
+  - target: svc_api
+    type: service
+    header_right: status
+    items: [procs, sessions, skills, latency]
+
+  - target: inference
+    type: service
+    header_right: badge
+    items: [status, latency, model, role]
+
+  # §12-step4: generic info card — pure label/value list, no target needed.
+  # Add any "info box" by adding a type:info card here; no code changes.
+  - type: info
+    title: "About"
+    items:
+      - { label: "Version", value: "v2.0.0" }
+      - { label: "Mode", value: "Demo (synthetic data)" }
+      - { label: "Nodes", value: "3 GPU + gateway" }
+      - { label: "Source", value: "config-driven YAML" }
+
+history:                            # bottom — dual-pane compare
+  type: dual_compare
+  title: "History · Dual Compare"
+  ranges: ["1h", "6h", "24h"]
+  default_range: "6h"
+  selectable_targets: [gpu1, gpu2, gpu3, gateway]
+  default: [gpu1, gpu2]

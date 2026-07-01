@@ -1,0 +1,35 @@
+# metrics.yaml — metric templates (§4.1)
+# Defines WHAT a metric is (label / unit / thresholds / formatting), decoupled
+# from which machine reports it. Reusable across every target.
+#
+# Status mapping (computed server-side in normalize.js):
+#   value >= danger          -> level "danger" (red)
+#   value >= warn            -> level "warn"   (yellow)
+#   otherwise                -> level "ok"     (green)
+#   value === null           -> display "—", level "cool" (NEVER rendered as 0%)
+#   higher_is_better: true   -> threshold comparison is inverted.
+
+metrics:
+  cpu:         { label: "CPU",     unit: "%",  thresholds: { warn: 70, danger: 90 } }
+  mem_pct:     { label: "Memory",  unit: "%",  thresholds: { warn: 80, danger: 92 } }
+  disk_pct:    { label: "Disk",    unit: "%",  thresholds: { warn: 75, danger: 90 } }
+  gpu:         { label: "GPU",     unit: "%",  thresholds: { warn: 80, danger: 95 } }
+  vram_pct:    { label: "VRAM",    unit: "%",  thresholds: { warn: 80, danger: 92 } }
+  gpu_temp:    { label: "Temp",    unit: "°C", thresholds: { warn: 75, danger: 88 } }
+  gpu_power:   { label: "Power",   unit: "W",  thresholds: { warn: 250, danger: 320 } }
+  mem_bytes:   { label: "Memory",  unit: "G",  format: "{v}/{max}G" }
+  vram_bytes:  { label: "VRAM",    unit: "G",  format: "{v}/{max}G" }
+  disk_bytes:  { label: "Disk",    unit: "G",  format: "{v}/{max}G" }
+  net:         { label: "Network", format: "↓{rx} ↑{tx}" }
+  loadavg:     { label: "Load",    format: "{m1} {m5} {m15}" }
+  uptime:      { label: "Uptime",  format: "{d}d {h}h" }
+  latency:     { label: "Latency", unit: "ms", thresholds: { warn: 800, danger: 2500 } }
+  token_speed: { label: "t/s",     higher_is_better: true }
+
+  # service-card scalar fields (no thresholds, shown verbatim)
+  status:      { label: "Status" }
+  procs:       { label: "Processes" }
+  sessions:    { label: "Sessions" }
+  skills:      { label: "Skills" }
+  model:       { label: "Model" }
+  role:        { label: "Role" }

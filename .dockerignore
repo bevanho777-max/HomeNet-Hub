@@ -1,0 +1,8 @@
+node_modules
+config
+data
+.env
+.git
+*.log
+**/*.bak.*
+screenshots

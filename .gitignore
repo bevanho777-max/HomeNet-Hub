@@ -1,0 +1,26 @@
+# --- secrets & real config (never commit) ---
+.env
+config/
+!config/.gitkeep
+
+# --- runtime data (SQLite timeseries lives on a mounted volume) ---
+data/
+!data/.gitkeep
+
+# --- node ---
+node_modules/
+npm-debug.log*
+*.log
+
+# --- backups & scratch (never commit) ---
+*.bak
+*.bak.*
+
+# --- local-only working conventions (not part of the published project) ---
+CLAUDE.md
+
+# --- editor / OS ---
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

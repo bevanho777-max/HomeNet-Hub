@@ -1,0 +1,15 @@
+services:
+  homenet-hub:
+    build: .
+    container_name: homenet-hub
+    restart: unless-stopped
+    ports:
+      - "3100:3100"
+    environment:
+      - PORT=3100
+      - PG_DSN=${PG_DSN:-}                # read-only token DB (optional; demo needs none)
+      - PUSH_TOKEN_GPU1=${PUSH_TOKEN_GPU1:-} # http_push shared secret (optional)
+    volumes:
+      - ./config:/app/config:ro          # YAML config, read-only mount (edit on host → chokidar hot-reload)
+      - ./data:/app/data                 # SQLite timeseries volume (persisted)
+    extra_hosts: []                      # LAN direct, nothing special
