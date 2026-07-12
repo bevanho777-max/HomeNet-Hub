@@ -150,6 +150,7 @@ const gridCard = {
     type: { enum: ['machine', 'token', 'service', 'history', 'info', 'stack'] },
     children: { type: 'array', items: { type: 'string' } }, // B12: stack child target ids
     direction: { enum: ['row', 'column'] }, // B12: stack layout direction (default column)
+    min_row_width: { type: 'number' }, // B12-row: min px width to lay row out (else children×180)
     title: { type: 'string' },               // §12-step4: info card title (no target needed)
     rings: { type: 'array', items: { type: 'string' } },
     // metric-key strings (machine/service) OR {label,value,level} objects (info, §12-step4)

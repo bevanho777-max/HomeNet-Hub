@@ -125,6 +125,20 @@ function autoColor(target, snap, cardType) {
   return roles[role] || '';
 }
 
+// B12-row: a row-stack lays out horizontally only when its measured width meets
+// the threshold (data-min = min_row_width, else children × 180px); otherwise it
+// wraps back to column. CSS container queries can't take a configurable px value,
+// so we measure and toggle `.is-row` here (re-run on every render + on resize).
+function layoutStacks() {
+  document.querySelectorAll('.stack[data-dir="row"]').forEach((el) => {
+    // Measure the AVAILABLE width in the stable column state (row content can grow
+    // the element and self-lock the decision), then re-apply row only if it fits.
+    el.classList.remove('is-row');
+    const min = Number(el.dataset.min) || 360;
+    if (el.clientWidth >= min) el.classList.add('is-row'); // reading clientWidth forces reflow first
+  });
+}
+
 function render() {
   if (!CONFIG) return;
   const metrics = CONFIG.metrics || {};
@@ -149,6 +163,7 @@ function render() {
     else if (gc.type === 'info') cards.push(renderInfo(gc, target, snap));
   }
   mountCards('grid', cards);
+  layoutStacks();
 
   $('#rawjson').textContent = JSON.stringify(lastSnap, null, 2);
 }
@@ -369,6 +384,7 @@ configTick(true).then(() => {
 // B15 §1/§3: on returning to the foreground, refresh everything immediately
 // (don't wait for the next interval) and resume timers; on hidden, pause the
 // timers to save power (mobile browsers throttle/freeze them anyway).
+window.addEventListener('resize', layoutStacks); // B12-row: re-measure stacks on resize
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') {
     snapTick();

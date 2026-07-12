@@ -25,13 +25,16 @@ export function renderStack(gc, resolve, metrics) {
       + `</div>`;
   }).filter(Boolean).join('<div class="stack-div"></div>');
 
-  // B12: direction row|column (default column). .stack is the query container;
-  // .stack-inner holds the flex row/col so a narrow container can fall back to column.
+  // B12: direction row|column (default column). Row lays out only when the card is
+  // actually wide enough — app.js measures .stack and toggles `.is-row`. Threshold
+  // is `min_row_width` (else children × 180px) so a ~400px 4-col slot still rows
+  // while a narrow phone card wraps back to column.
   const dir = gc.direction === 'row' ? 'row' : 'column';
+  const minW = Number(gc.min_row_width) || ((gc.children || []).length * 180);
   return card({
     key: gc.key || `stack:${(gc.children || []).join(',')}`,
     title: gc.title || '',                 // outer frame usually title-less; children carry headers
-    body: `<div class="stack" data-dir="${dir}"><div class="stack-inner">${inners}</div></div>`,
+    body: `<div class="stack" data-dir="${dir}" data-min="${minW}"><div class="stack-inner">${inners}</div></div>`,
     accent: gc.accent || '',
     stale: false,
   });

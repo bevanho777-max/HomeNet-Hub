@@ -56,6 +56,7 @@
 
 html, body {
   margin: 0; min-height: 100%;
+  overflow-x: hidden; /* B12-row: page never grows past the viewport (stable stack measurement) */
   color: var(--text);
   background:
     radial-gradient(1100px 600px at 8% -5%, rgba(79,227,208,0.10), transparent 55%),
@@ -100,6 +101,7 @@ html, body {
 .grid { display: grid; gap: var(--s4); padding: var(--s4) var(--s6) var(--s5); grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
 .card {
   position: relative; border-radius: var(--radius); padding: var(--s4) var(--s4) var(--s5);
+  min-width: 0; /* grid item: stay within track (don't let wide content grow the card) */
   background:
     linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0.006) 40%),
     var(--card-bg);
@@ -139,10 +141,9 @@ html, body {
 .card.stale { opacity: 0.55; }
 
 /* ---------- B12: 堆叠卡(多 service 共享外框,各留头部)---------- */
-.stack { container-type: inline-size; }        /* 查询容器:窄时 row 回落 column */
-.stack-inner { display: flex; flex-direction: column; }
-.stack[data-dir="row"] .stack-inner { flex-direction: row; align-items: stretch; }
-.stack[data-dir="row"] .stack-item { flex: 1; min-width: 0; } /* 水平等分 */
+.stack-inner { display: flex; flex-direction: column; }        /* default + column fallback */
+.stack.is-row .stack-inner { flex-direction: row; align-items: stretch; } /* app.js adds .is-row when wide enough */
+.stack.is-row .stack-item { flex: 1; min-width: 0; } /* 水平等分 */
 .stack-item h2 {
   font-size: 12.5px; font-weight: 600; margin: 0 0 var(--s3);
   color: var(--muted); letter-spacing: 1px;
@@ -151,13 +152,7 @@ html, body {
 .stack-item[style*="--accent"] h2 { color: var(--accent); } /* 各子卡身份色头部 */
 .stack-item h2 .tag { margin-left: auto; font-size: 11px; color: var(--muted2); font-weight: 500; letter-spacing: 0.5px; }
 .stack-div { flex: 0 0 auto; height: 1px; width: auto; margin: var(--s3) 0; background: linear-gradient(90deg, transparent, var(--hair), transparent); }
-.stack[data-dir="row"] .stack-div { width: 1px; height: auto; align-self: stretch; margin: 0 var(--s3); background: linear-gradient(180deg, transparent, var(--hair), transparent); }
-/* 窄容器(<480px):row 回落 column,分隔线转回水平 */
-@container (max-width: 480px) {
-  .stack[data-dir="row"] .stack-inner { flex-direction: column; }
-  .stack[data-dir="row"] .stack-item { flex: 1 1 auto; }
-  .stack[data-dir="row"] .stack-div { width: auto; height: 1px; align-self: auto; margin: var(--s3) 0; background: linear-gradient(90deg, transparent, var(--hair), transparent); }
-}
+.stack.is-row .stack-div { width: 1px; height: auto; align-self: stretch; margin: 0 var(--s3); background: linear-gradient(180deg, transparent, var(--hair), transparent); }
 h2:empty { display: none; } /* 堆叠卡外框无标题时不留空行 */
 
 /* ---------- 环形仪表 ---------- */
