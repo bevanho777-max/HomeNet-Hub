@@ -39,6 +39,7 @@ export function renderToken(gridCard, target, snap) {
   const colHtml = cols.map((c) => `
     <div class="tk-col">
       <div class="tk-h" style="color:${esc(c.color)}">${esc(c.label)}</div>
+      <div class="tk-div"></div>
       <div class="tk-all">${esc(c.all)}</div>
       <div class="tk-sub">${esc(todayLabel)} ${esc(c.today)}</div>
       <div class="tk-sub">${esc(c.requests ?? 0)} ${esc(reqLabel)}</div>

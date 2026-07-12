@@ -104,7 +104,11 @@ html, body {
     var(--card-bg);
   border: 1px solid transparent;
   background-clip: padding-box;
-  box-shadow: var(--shadow);
+  /* v1 三层外圈光晕：落影 + 发丝 + 身份辉光(§0 第三层 0 4px 20px -10px,20px 版) */
+  box-shadow:
+    0 8px 24px -8px rgba(0,0,0,0.6),
+    0 0 0 1px rgba(255,255,255,0.02),
+    0 4px 20px -10px var(--accent, rgba(80,120,180,0.22));
   /* §0: 无 backdrop-filter blur */
   transition: transform .35s cubic-bezier(.2,.7,.2,1), box-shadow .35s;
 }
@@ -123,14 +127,10 @@ html, body {
   display: flex; align-items: center; gap: var(--s2);
 }
 .card h2 .tag { margin-left: auto; font-size: 11px; color: var(--muted2); font-weight: 500; letter-spacing: 0.5px; }
-/* ===== 身份识别色:染 h2 + 实体 border + §0 glow(box-shadow 第一层 0 4px 20px -10px)===== */
+/* ===== 身份识别色:染 h2 + 实体 border(辉光由 .card 基规则第三层 var(--accent) 承载,v1 同构)===== */
 .card[style*="--accent"] h2 { color: var(--accent); }
 .card[style*="--accent"] {
   border-color: color-mix(in srgb, var(--accent) 30%, transparent);
-  box-shadow: 0 4px 20px -10px var(--accent), var(--shadow);
-}
-.card[style*="--accent"]:hover {
-  box-shadow: 0 4px 20px -10px var(--accent), 0 22px 50px -18px rgba(0,0,0,0.9), 0 3px 10px -4px rgba(0,0,0,0.7);
 }
 .card.clickable { cursor: pointer; }
 .card.stale { opacity: 0.55; }
@@ -196,7 +196,9 @@ html, body {
 /* ---------- Token 三栏 ---------- */
 .tk-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: var(--s2); margin-bottom: var(--s4); }
 .tk-col { text-align: center; padding: var(--s3) var(--s2); background: var(--glass2); border: 1px solid var(--hair); border-radius: 12px; }
-.tk-h { font-size: 11px; font-weight: 600; margin-bottom: var(--s2); letter-spacing: 0.4px; }
+.tk-h { font-size: 11px; font-weight: 600; margin-bottom: 5px; letter-spacing: 0.4px; }
+/* B6追加: Token stat-box 类目名↔数值 灰色渐变分隔(复用 --hair,不引新色) */
+.tk-div { height: 1px; margin: 0 0 5px; background: linear-gradient(90deg, transparent, var(--hair), transparent); }
 .tk-all { font-size: 18px; font-weight: 500; line-height: 1.1; }
 .tk-sub { font-size: 11px; color: var(--muted); margin-top: 3px; }
 
@@ -205,6 +207,13 @@ html, body {
   height: 92px; max-height: 92px; overflow: visible;
   display: flex; align-items: flex-end; gap: 12px;
   padding: 0 4px; margin-top: var(--s3);
+  position: relative;
+}
+/* B6追加: 柱状图 柱↔日期标签 之间一条横贯灰色渐变分隔(复用 --hair) */
+.spark::after {
+  content: ""; position: absolute; left: 4px; right: 4px; bottom: 13px; height: 1px;
+  background: linear-gradient(90deg, transparent, var(--hair), transparent);
+  pointer-events: none;
 }
 .spark .col { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: 4px; height: 100%; }
 .spark .col .n { font-size: 9.5px; color: var(--muted); line-height: 1; }
