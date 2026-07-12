@@ -38,6 +38,7 @@ targets:
     badge: "GPU Node"
     source: { type: demo, interval: "1.5s" }
     map:
+      uptime:     { s: "$.uptime_s" }   # B13 demo: header_right [badge, uptime]
       gpu:        "$.gpu"
       vram_pct:   "$.vram.pct"
       cpu:        "$.cpu"

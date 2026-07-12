@@ -126,7 +126,9 @@ html, body {
   color: var(--muted); letter-spacing: 1px;
   display: flex; align-items: center; gap: var(--s2);
 }
-.card h2 .tag { margin-left: auto; font-size: 11px; color: var(--muted2); font-weight: 500; letter-spacing: 0.5px; }
+.card h2 .tag { margin-left: auto; font-size: 11px; color: var(--muted2); font-weight: 500; letter-spacing: 0.5px; display: inline-flex; align-items: center; gap: var(--s2); }
+/* B13: vertical hairline between combined header_right parts (e.g. badge │ uptime) */
+.tag-sep { width: 1px; height: 12px; display: inline-block; background: linear-gradient(180deg, transparent, var(--hair2), transparent); }
 /* ===== 身份识别色:染 h2 + 实体 border(辉光由 .card 基规则第三层 var(--accent) 承载,v1 同构)===== */
 .card[style*="--accent"] h2 { color: var(--accent); }
 .card[style*="--accent"] {

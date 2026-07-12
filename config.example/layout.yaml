@@ -35,6 +35,7 @@ grid:
     type: machine
     rings: [gpu, vram_pct, cpu]
     items: [vram_bytes, mem_bytes, gpu_temp, gpu_power, disk_bytes, net]
+    header_right: [badge, uptime]     # B13: combined "GPU Node │ 15d Xh"
 
   - target: gpu2
     type: machine

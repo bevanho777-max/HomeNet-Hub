@@ -167,7 +167,7 @@ const gridCard = {
         ],
       },
     },
-    header_right: { type: 'string' },
+    header_right: { anyOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }] }, // B13: single or combined
     clickable: { type: 'string' },
     // §12-step2: externalized card-local labels (all optional strings)
     hint: { type: 'string' },
