@@ -181,7 +181,7 @@ const gridCard = {
   // data-bound cards need a target; info cards may be static (no target)
   allOf: [
     { if: { properties: { type: { enum: ['machine', 'token', 'service', 'history'] } } }, then: { required: ['target'] } },
-    { if: { properties: { type: { const: 'stack' } } }, then: { required: ['children'] } }, // B12
+    { if: { properties: { type: { const: 'stack' } } }, then: { required: ['children', 'items'] } }, // B12; items required (B12-addendum)
   ],
   additionalProperties: true,
 };
