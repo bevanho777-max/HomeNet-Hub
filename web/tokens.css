@@ -23,10 +23,10 @@
   --glass2: rgba(255, 255, 255, 0.07);
   --hair: rgba(255, 255, 255, 0.09);
   --hair2: rgba(255, 255, 255, 0.16);
-  /* 文本 */
-  --text: #eef3fb;
-  --muted: rgba(238, 243, 251, 0.60);
-  --muted2: rgba(238, 243, 251, 0.38);
+  /* 文本（v1 暖金基调，§复刻）*/
+  --text: #cdc4a8;
+  --muted: rgba(205, 196, 168, 0.64);
+  --muted2: rgba(205, 196, 168, 0.42);
   /* 数据色（鲜艳） */
   --green: #5ef0a8;
   --yellow: #ffd24a;
@@ -100,7 +100,7 @@ html, body {
 .card {
   position: relative; border-radius: var(--radius); padding: var(--s4) var(--s4) var(--s5);
   background:
-    linear-gradient(180deg, rgba(255,255,255,0.055), rgba(255,255,255,0.012) 30%),
+    linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0.006) 40%),
     var(--card-bg);
   border: 1px solid transparent;
   background-clip: padding-box;
@@ -144,7 +144,7 @@ html, body {
   background: conic-gradient(var(--c) calc(var(--p) * 1%), var(--track) 0);
   display: grid; place-items: center; position: relative;
   transition: background .6s ease;
-  filter: drop-shadow(0 0 8px color-mix(in srgb, var(--c) 30%, transparent));
+  filter: drop-shadow(0 0 8px var(--c, rgba(80,140,200,0.5)));
 }
 .ring::before { content: ""; position: absolute; inset: 7px; border-radius: 50%; background: radial-gradient(circle at 50% 35%, #0e1626, #070b14); }
 .ring b { position: relative; z-index: 1; font-size: 17px; font-weight: 500; letter-spacing: 0.3px; }
@@ -177,11 +177,17 @@ html, body {
   border: 1px solid var(--hair);
   border-radius: 11px;
   padding: 9px 11px;
+  box-shadow: 0 0 10px -2px var(--accent, rgba(80,120,180,0.15));
   transition: border-color .3s, background .3s;
 }
 .kv .item:hover { border-color: var(--hair2); }
 .kv .item .label { font-size: 10.5px; color: var(--muted2); letter-spacing: 0.6px; text-transform: uppercase; opacity: 0.7; }
 .kv .item .value { font-size: 15.5px; font-weight: 500; letter-spacing: 0.2px; }
+/* ===== 键值区小块描边跟数据状态变色(v1:240-243 逐字，只设 border-color)===== */
+.kv .item.lv-danger { border-color: color-mix(in srgb, var(--red) 45%, transparent); }
+.kv .item.lv-warn   { border-color: color-mix(in srgb, var(--yellow) 42%, transparent); }
+.kv .item.lv-ok     { border-color: color-mix(in srgb, var(--green) 32%, transparent); }
+.kv .item.lv-cool   { border-color: color-mix(in srgb, var(--cyan) 38%, transparent); }
 
 /* ---------- 大数字 ---------- */
 .big { font-size: 38px; font-weight: 500; letter-spacing: 0.5px; line-height: 1.05; }

@@ -51,7 +51,7 @@ targets:
   # ── GPU node 2 ──
   - id: gpu2
     name: "GPU Node 2"
-    color: "#b89cff"
+    color: "#b18cff"
     badge: "GPU Node"
     source: { type: demo, interval: "1.5s" }
     map:
@@ -92,7 +92,7 @@ targets:
       rules:
         - { name: "Chat / Large", match: { regex: "chat|instruct|large|[0-9]{2,}b" }, color: "#4fe3d0" }
         - { name: "Embedding",    match: { regex: "embed|bge" },                       color: "#8b93a3" }
-        - { name: "Vision",       match: { regex: "vl|vision" },                       color: "#b89cff" }
+        - { name: "Vision",       match: { regex: "vl|vision" },                       color: "#b18cff" }
       fallback: { name: "Other", color: "#8b93a3" }
     map:
       token_speed: "$.token_speed"
@@ -133,7 +133,7 @@ targets:
   # ── Inference backend (info-style service card) ──
   - id: inference
     name: "Inference Backend"
-    color: "#b89cff"
+    color: "#b18cff"
     badge: "LLM"
     source: { type: demo, interval: "8s" }
     map:
@@ -177,7 +177,7 @@ targets:
       rules:
         - { name: "Chat / Large", match: { regex: "chat|instruct|large|[0-9]{2,}b" }, color: "#4fe3d0" }
         - { name: "Embedding",    match: { regex: "embed|bge" },                       color: "#8b93a3" }
-        - { name: "Vision",       match: { regex: "vl|vision" },                       color: "#b89cff" }
+        - { name: "Vision",       match: { regex: "vl|vision" },                       color: "#b18cff" }
       fallback: { name: "Other", color: "#8b93a3" }
     map:
       token_speed: "$.token_speed"
