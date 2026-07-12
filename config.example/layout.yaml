@@ -18,6 +18,7 @@ text:
   modal_close: "Close"
   conn_connecting: "Connecting…"
   conn_online: "Online"
+  conn_reconnecting: "Reconnecting…"   # B15: shown after a few consecutive poll failures
   conn_offline: "Disconnected"
 
 status_bar:                         # top service pill row

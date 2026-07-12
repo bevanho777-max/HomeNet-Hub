@@ -90,13 +90,22 @@ async function loadPane(idx) {
   const legend = document.querySelector(`.legend[data-pane="${idx}"]`);
   if (!canvas || !p?.target) return;
   try {
-    const r = await fetch(`/api/history?target=${encodeURIComponent(p.target)}&range=${curRange}`, { cache: 'no-store' });
-    const j = await r.json();
+    // B15: AbortController timeout so a stalled fetch can't wedge the pane.
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 5000);
+    let j;
+    try {
+      const r = await fetch(`/api/history?target=${encodeURIComponent(p.target)}&range=${curRange}`, { cache: 'no-store', signal: ctrl.signal });
+      j = await r.json();
+    } finally { clearTimeout(timer); }
     drawMulti(canvas, j.series || {}, legend);
   } catch { drawMulti(canvas, {}, legend); }
 }
 
 function loadAll() { panes.forEach((p) => loadPane(p.idx)); }
+
+// B15: called by app.js on foreground-restore to refresh panes immediately.
+export function historyRefresh() { loadAll(); }
 
 export function initHistory(config) {
   CFG = config.layout?.history;

@@ -7,7 +7,7 @@ import { renderToken } from './renderers/token.js';
 import { renderService } from './renderers/service.js';
 import { renderStack } from './renderers/stack.js';
 import { renderInfo } from './renderers/info.js';
-import { initHistory } from './renderers/history.js';
+import { initHistory, historyRefresh } from './renderers/history.js';
 import { esc, statusLevel } from './renderers/common.js';
 
 const FAST_MS = 1500;     // snapshot poll (machine/GPU rhythm)
@@ -162,24 +162,46 @@ function tokenCardCfg() {
   return (CONFIG?.layout?.grid || []).find((c) => c.type === 'token') || {};
 }
 
-// ── polling ──
+// ── polling (B15: resilient) ──
+// AbortController timeout so a stalled network can't wedge a tick indefinitely.
+async function fetchT(url, opts = {}, ms = 5000) {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), ms);
+  try { return await fetch(url, { ...opts, signal: ctrl.signal }); }
+  finally { clearTimeout(t); }
+}
+
+// Connection badge state machine — don't flap on a single transient blip.
+const RECONNECT_AT = 2;   // consecutive failures → "Reconnecting…" (yellow)
+const OFFLINE_AT = 5;     // consecutive failures → "Disconnected" (red)
+let failStreak = 0;
+function setConn(state) {
+  const el = $('#conn'); if (!el) return;
+  if (state === 'ok') { el.className = 'conn ok'; el.textContent = txt('conn_online', 'Online'); }
+  else if (state === 'reconnecting') { el.className = 'conn warn'; el.textContent = txt('conn_reconnecting', 'Reconnecting…'); }
+  else { el.className = 'conn bad'; el.textContent = txt('conn_offline', 'Disconnected'); }
+}
+
 async function snapTick() {
   try {
-    const r = await fetch('/api/snapshot', { cache: 'no-store' });
+    const r = await fetchT('/api/snapshot', { cache: 'no-store' });
+    if (!r.ok) throw new Error('http ' + r.status);
     lastSnap = await r.json();
-    $('#conn').className = 'conn ok';
-    $('#conn').textContent = txt('conn_online', 'Online');
+    failStreak = 0;
+    setConn('ok');
     render();
   } catch {
-    $('#conn').className = 'conn bad';
-    $('#conn').textContent = txt('conn_offline', 'Disconnected');
+    failStreak++;
+    if (failStreak >= OFFLINE_AT) setConn('bad');
+    else if (failStreak >= RECONNECT_AT) setConn('reconnecting');
+    // a single transient failure keeps the last-known badge (no flap)
   }
 }
 
 async function configTick(first = false) {
   try {
     const headers = CONFIG_ETAG ? { 'If-None-Match': CONFIG_ETAG } : {};
-    const r = await fetch('/api/config', { cache: 'no-store', headers });
+    const r = await fetchT('/api/config', { cache: 'no-store', headers });
     if (r.status === 304) return;
     if (!r.ok) return;
     CONFIG = await r.json();
@@ -260,7 +282,7 @@ function closeTokenModal() { $('#tokenModal').classList.remove('open'); }
 async function loadTokenDetail() {
   const tbl = $('#tokenModalTable');
   try {
-    const r = await fetch(`/api/token_detail?range=${tokenRange}`, { cache: 'no-store' });
+    const r = await fetchT(`/api/token_detail?range=${tokenRange}`, { cache: 'no-store' });
     const j = await r.json();
     if (j.error) { tbl.innerHTML = `<div class="note">Detail unavailable: ${esc(j.error)}</div>`; drawTokenChart({ days: [], classes: [], matrix: {} }); return; }
     drawTokenChart(j.series || { days: [], classes: [], matrix: {} });
@@ -318,10 +340,43 @@ function drawTokenChart(series) {
 $('#tokenModalClose').onclick = closeTokenModal;
 $('#tokenModal').onclick = (e) => { if (e.target.id === 'tokenModal') closeTokenModal(); };
 
+// B15 §4: relax the snapshot cadence on touch / narrow devices to save battery
+// (desktop unchanged). Evaluated as optional — a mild 2× relaxation only.
+function fastMs() {
+  const m = window.matchMedia;
+  const mobile = m && (m('(pointer: coarse)').matches || m('(max-width: 560px)').matches);
+  return mobile ? FAST_MS * 2 : FAST_MS;
+}
+
+let snapTimer = null, configTimer = null, clockTimer = null;
+function startTimers() {
+  stopTimers();
+  snapTimer = setInterval(snapTick, fastMs());
+  configTimer = setInterval(() => configTick(false), CONFIG_MS);
+  clockTimer = setInterval(tickClock, 1000);
+}
+function stopTimers() {
+  clearInterval(snapTimer); clearInterval(configTimer); clearInterval(clockTimer);
+  snapTimer = configTimer = clockTimer = null;
+}
+
 configTick(true).then(() => {
   snapTick();
-  setInterval(snapTick, FAST_MS);
-  setInterval(() => configTick(false), CONFIG_MS);
   tickClock();
-  setInterval(tickClock, 1000);
+  startTimers();
+});
+
+// B15 §1/§3: on returning to the foreground, refresh everything immediately
+// (don't wait for the next interval) and resume timers; on hidden, pause the
+// timers to save power (mobile browsers throttle/freeze them anyway).
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') {
+    snapTick();
+    configTick(false);
+    tickClock();
+    historyRefresh();
+    startTimers();
+  } else {
+    stopTimers();
+  }
 });
