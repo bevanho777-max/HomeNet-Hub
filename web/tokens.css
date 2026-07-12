@@ -238,7 +238,8 @@ html, body {
 .ranges { display: inline-flex; gap: var(--s1); background: var(--track); border-radius: 10px; padding: 3px; }
 .ranges button { background: transparent; color: var(--muted); border: 0; border-radius: 7px; padding: 6px 14px; font-size: 12px; cursor: pointer; font-weight: 500; transition: background .25s, color .25s; }
 .ranges button.active { background: var(--glass2); color: var(--text); box-shadow: 0 0 0 1px var(--hair) inset; }
-.hist-split { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s4); }
+/* B10: N panes — auto-fit so 2/3/N screens lay out and wrap responsively */
+.hist-split { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: var(--s4); }
 .hist-pane { display: flex; flex-direction: column; gap: var(--s2); }
 .hostSel { align-self: flex-start; background: var(--glass2); color: var(--text); border: 1px solid var(--hair); border-radius: 9px; padding: 7px 13px; font-size: 13px; font-weight: 600; outline: none; color-scheme: dark; }
 .hostSel option { background: #0c1322; color: var(--text); }

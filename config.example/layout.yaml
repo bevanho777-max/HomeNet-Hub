@@ -85,9 +85,9 @@ grid:
       - { label: "Source", value: "config-driven YAML" }
 
 history:                            # bottom — dual-pane compare
-  type: dual_compare
-  title: "History · Dual Compare"
+  type: compare                     # B10: N-pane compare (dual_compare still accepted)
+  title: "History · Compare"
   ranges: ["1h", "6h", "24h"]
   default_range: "6h"
   selectable_targets: [gpu1, gpu2, gpu3, gateway]
-  default: [gpu1, gpu2]
+  panes: [gpu1, gpu2, gpu3]         # B10: N panes (falls back to `default: [a,b]` if omitted)

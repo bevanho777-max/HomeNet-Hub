@@ -185,6 +185,22 @@ targets:
     map:
       token_speed: "$.token_speed"
 
+  # http: OpenClaw self-reported stats — PHASE-2 contract (authoritative real source).
+  #   阶段2 以 OpenClaw 自报为唯一真源,替换 v1 过渡源(:3099/api/dashboard)。
+  #   Endpoint:  GET /stats  →  { "procs": <int>, "sessions": <int>, "skills": <int> }
+  #     procs    = OpenClaw 自身进程树计数
+  #     sessions = 活跃会话数
+  #     skills   = ~/.openclaw/skills 一级子目录数
+  #   (status/latency 由 http collector 自动附加;卡片 items 里列 procs/sessions/skills 即可)
+  - id: openclaw_real_example
+    name: "OpenClaw (real http /stats)"
+    enabled: false
+    source: { type: http, url: "http://openclaw-host.local:PORT/stats", interval: "8s" }
+    map:
+      procs:    "$.procs"
+      sessions: "$.sessions"
+      skills:   "$.skills"
+
   # exec: local allowlisted command (ping). ping_host needs an RFC1918 IP;
   # the docs IPs below are placeholders — replace before enabling.
   - id: ping_router

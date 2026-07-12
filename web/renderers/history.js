@@ -17,7 +17,7 @@ const SUBS = [
 
 let CFG = null;
 let curRange = '6h';
-const paneTarget = { L: null, R: null };
+let panes = []; // B10: [{ idx, target }] — N panes (was fixed L/R)
 let names = {};
 let METRICS = {};                       // metric templates from /api/config (§12-step5)
 const subUnit = (k) => METRICS[k]?.unit || '';
@@ -84,19 +84,19 @@ function drawMulti(canvas, series, legendEl) {
   }
 }
 
-async function loadPane(pane) {
-  const target = paneTarget[pane];
-  const canvas = document.querySelector(`.histCanvas[data-pane="${pane}"]`);
-  const legend = document.querySelector(`.legend[data-pane="${pane}"]`);
-  if (!canvas || !target) return;
+async function loadPane(idx) {
+  const p = panes[idx];
+  const canvas = document.querySelector(`.histCanvas[data-pane="${idx}"]`);
+  const legend = document.querySelector(`.legend[data-pane="${idx}"]`);
+  if (!canvas || !p?.target) return;
   try {
-    const r = await fetch(`/api/history?target=${encodeURIComponent(target)}&range=${curRange}`, { cache: 'no-store' });
+    const r = await fetch(`/api/history?target=${encodeURIComponent(p.target)}&range=${curRange}`, { cache: 'no-store' });
     const j = await r.json();
     drawMulti(canvas, j.series || {}, legend);
   } catch { drawMulti(canvas, {}, legend); }
 }
 
-function loadAll() { loadPane('L'); loadPane('R'); }
+function loadAll() { panes.forEach((p) => loadPane(p.idx)); }
 
 export function initHistory(config) {
   CFG = config.layout?.history;
@@ -108,8 +108,21 @@ export function initHistory(config) {
   METRICS = config.metrics || {};       // §12-step5: legend labels/units from config
   const selectable = (CFG.selectable_targets || []).filter((id) => names[id]);
   curRange = CFG.default_range || (CFG.ranges || ['6h'])[0];
-  paneTarget.L = (CFG.default || [])[0] || selectable[0] || null;
-  paneTarget.R = (CFG.default || [])[1] || selectable[1] || selectable[0] || null;
+  // B10: N panes from `panes: [...]`, backward-compatible with `default: [a,b]`.
+  const wanted = (Array.isArray(CFG.panes) && CFG.panes.length ? CFG.panes : (CFG.default || [])).filter((id) => names[id]);
+  const paneIds = wanted.length ? wanted : selectable.slice(0, 2);
+  panes = paneIds.map((t, i) => ({ idx: i, target: t }));
+
+  // build pane DOM (N panes)
+  const split = document.getElementById('histSplit');
+  if (split) {
+    split.innerHTML = panes.map((p) => `
+      <div class="hist-pane">
+        <select class="hostSel" data-pane="${p.idx}"></select>
+        <canvas class="histCanvas" data-pane="${p.idx}" height="240"></canvas>
+        <div class="legend" data-pane="${p.idx}"></div>
+      </div>`).join('');
+  }
 
   // range buttons
   const rb = document.getElementById('rangeBtns');
@@ -124,10 +137,10 @@ export function initHistory(config) {
 
   // host selects
   document.querySelectorAll('.hostSel').forEach((sel) => {
-    const pane = sel.dataset.pane;
+    const idx = Number(sel.dataset.pane);
     sel.innerHTML = selectable.map((id) => `<option value="${esc(id)}">${esc(names[id])}</option>`).join('');
-    if (paneTarget[pane]) sel.value = paneTarget[pane];
-    sel.onchange = () => { paneTarget[pane] = sel.value; loadPane(pane); };
+    if (panes[idx]?.target) sel.value = panes[idx].target;
+    sel.onchange = () => { if (panes[idx]) { panes[idx].target = sel.value; loadPane(idx); } };
   });
 
   window.addEventListener('resize', loadAll);
