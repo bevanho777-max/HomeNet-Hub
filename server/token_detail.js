@@ -60,7 +60,7 @@ function classOf(model, compiled) {
  * @param {object}   opts   { speed, classify }
  * @returns { columns, spark, series, table, speed }
  */
-export function pivotTokens(rows, { speed = null, classify = null, totalLabel = null } = {}) {
+export function pivotTokens(rows, { speed = null, classify = null, totalLabel = null, totals = null } = {}) {
   const compiled = compileClassify(classify);
   const classList = [...compiled.rules, compiled.fallback]; // ordered, display order
 
@@ -85,12 +85,27 @@ export function pivotTokens(rows, { speed = null, classify = null, totalLabel = 
     if (i != null) matrix[cls.key][i] += tok;
   }
 
+  // B4: cumulative all-time aggregates for the "all"/requests columns. When the
+  // caller supplies `totals` (per-model all-time rows), classify + sum those;
+  // otherwise fall back to the windowed byClass sums (previous behavior).
+  const useTotals = Array.isArray(totals) && totals.length > 0;
+  const cumByClass = new Map(classList.map((c) => [c.key, { all: 0, requests: 0 }]));
+  if (useTotals) {
+    for (const r of totals) {
+      const agg = cumByClass.get(classOf(r.model ?? r.model_class, compiled).key);
+      agg.all += Number(r.tokens) || 0;
+      agg.requests += Number(r.requests) || 0;
+    }
+  }
+  const allOf = (key) => (useTotals ? cumByClass.get(key).all : byClass.get(key).all);
+  const reqOf = (key) => (useTotals ? cumByClass.get(key).requests : byClass.get(key).requests);
+
   const columns = classList.map((c) => {
     const a = byClass.get(c.key);
     return {
       key: c.key, label: c.label, color: c.color,
-      all: compact(a.all), today: compact(a.today), requests: a.requests,
-      all_raw: a.all, today_raw: a.today,
+      all: compact(allOf(c.key)), today: compact(a.today), requests: reqOf(c.key),
+      all_raw: allOf(c.key), today_raw: a.today,
     };
   });
   // total column — label is config-driven (token card labels.total), generic fallback
@@ -118,13 +133,12 @@ export function pivotTokens(rows, { speed = null, classify = null, totalLabel = 
 
   // per-model table: always show the rule classes; show fallback only if used.
   const table = classList
-    .filter((c) => c.key !== 'fallback' || (byClass.get(c.key).all || 0) > 0)
+    .filter((c) => c.key !== 'fallback' || (allOf(c.key) || 0) > 0)
     .map((c) => {
-      const a = byClass.get(c.key);
       return {
         label: c.label, color: c.color,
-        tokens: compact(a.all), requests: a.requests,
-        share: totAll > 0 ? Math.round((a.all / totAll) * 100) : 0,
+        tokens: compact(allOf(c.key)), requests: reqOf(c.key),
+        share: totAll > 0 ? Math.round((allOf(c.key) / totAll) * 100) : 0,
       };
     });
 

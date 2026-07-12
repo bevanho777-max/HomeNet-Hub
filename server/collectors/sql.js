@@ -68,6 +68,53 @@ export async function collectSql(source, env, rangeDays) {
   return res.rows;
 }
 
+/**
+ * Run a queries/ file that returns a single scalar, bound to ONE whitelisted
+ * integer param. Same security envelope as collectSql: SQL only from queries/,
+ * one positional integer, zero concatenation. Used for the token-speed sample
+ * (and any future slow-cycle scalar). Returns a finite number or null.
+ * @param {object} source     the target.source (for dsn_env)
+ * @param {object} env        process.env
+ * @param {string} queryFile  config-relative path under queries/
+ * @param {number} paramInt   whitelisted integer (e.g. sample count)
+ * @param {string} [column]   column to read; default = first column of row 0
+ */
+export async function collectSqlScalar(source, env, queryFile, paramInt, column) {
+  const dsn = env[source.dsn_env];
+  if (!dsn) throw new Error(`env ${source.dsn_env} not set`);
+  const n = Number.isFinite(paramInt) ? Math.max(1, Math.min(1000, Math.floor(paramInt))) : 10;
+  const sql = readQuery(queryFile); // same resolveQueryFile whitelist (queries/ only, no ..)
+  const pool = await getPool(dsn);
+  const res = await pool.query(sql, [n]); // positional, integer only
+  const row = res.rows[0] || {};
+  const v = column ? row[column] : Object.values(row)[0];
+  const num = Number(v);
+  return Number.isFinite(num) ? num : null;
+}
+
+/**
+ * Run a queries/ file returning multiple rows. Same security envelope as
+ * collectSql (SQL only from queries/, zero concatenation). The param is OPTIONAL:
+ * omit it for a param-less all-time aggregate (e.g. the cumulative total) — that
+ * has zero injection surface; when present it is a single whitelisted integer.
+ * @param {object} source     the target.source (for dsn_env)
+ * @param {object} env        process.env
+ * @param {string} queryFile  config-relative path under queries/
+ * @param {number} [paramInt] optional whitelisted integer bound as $1
+ * @returns {Promise<object[]>} rows
+ */
+export async function collectSqlRows(source, env, queryFile, paramInt) {
+  const dsn = env[source.dsn_env];
+  if (!dsn) throw new Error(`env ${source.dsn_env} not set`);
+  const sql = readQuery(queryFile); // same resolveQueryFile whitelist (queries/ only, no ..)
+  const pool = await getPool(dsn);
+  const params = (paramInt === undefined || paramInt === null)
+    ? [] // param-less all-time aggregate
+    : [Math.max(1, Math.min(1000, Math.floor(Number(paramInt))))];
+  const res = await pool.query(sql, params); // positional, integer only (or none)
+  return res.rows;
+}
+
 export async function closeSqlPools() {
   for (const pool of _pools.values()) { try { await pool.end(); } catch { /* ignore */ } }
   _pools.clear();

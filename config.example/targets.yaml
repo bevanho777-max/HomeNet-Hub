@@ -171,6 +171,9 @@ targets:
       driver: postgres
       dsn_env: "PG_DSN"               # ← read-only DB account in .env
       query_file: "queries/token_summary.sql"
+      speed_query_file: "queries/token_speed.sql"  # optional: t/s over last N completions
+      speed_samples: 10               # whitelisted integer sample count
+      total_query_file: "queries/token_total.sql"  # optional: cumulative all-time (cached ~10min)
       interval: "15s"
     classify:
       by: model

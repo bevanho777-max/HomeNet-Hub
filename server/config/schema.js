@@ -62,6 +62,9 @@ const sourceSchema = {
     driver: { type: 'string' },
     dsn_env: { type: 'string' },
     query_file: { type: 'string' },
+    speed_query_file: { type: 'string' }, // B3 optional 2nd query → token_speed scalar
+    speed_samples: { type: 'number', default: 10 }, // B3 whitelisted sample count
+    total_query_file: { type: 'string' }, // B4 optional cumulative all-time query (slow-cycle cached)
     // exec
     command: { type: 'string' },
     args: { type: 'array', items: { type: ['string', 'number', 'boolean'] } },

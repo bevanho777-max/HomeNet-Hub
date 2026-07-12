@@ -4,14 +4,15 @@
 // hot-reload we tear down all timers and rebuild from the new config.
 import { collectHttp } from './http.js';
 import { collectExec } from './exec.js';
-import { collectSql } from './sql.js';
+import { collectSql, collectSqlScalar, collectSqlRows } from './sql.js';
 import { collectDemo, demoTokenRows, demoTokenSpeed } from './demo.js';
 import { markPush, isPushStale, checkPushToken } from './push.js';
 import { normalize, samplableRows } from '../normalize.js';
 import { pivotTokens } from '../token_detail.js';
 
-const SNAPSHOT_TOKEN_DAYS = 30; // window for the token card "all" + 5-day spark
+const SNAPSHOT_TOKEN_DAYS = 30; // window for the token card day-trend + 5-day spark
 const PUSH_SWEEP_MS = 5000;
+const TOTALS_TTL_MS = 600000; // B4: cumulative all-time totals cache TTL (10 min)
 
 export function parseDuration(s, fallbackMs = 5000) {
   if (typeof s === 'number') return s;
@@ -28,6 +29,7 @@ export class Scheduler {
     this.ctx = ctx;                 // { snapshot, tsdb, env, getMetrics }
     this.timers = [];
     this.pushTargets = new Map();   // id -> target (for token validation + sweep)
+    this._totals = new Map();       // B4: id -> { at, rows } cumulative all-time cache
     this._sweep = null;
   }
 
@@ -68,7 +70,29 @@ export class Scheduler {
       const type = target.source.type;
       if (type === 'sql') {
         const rows = await collectSql(target.source, env, SNAPSHOT_TOKEN_DAYS);
-        const pivot = pivotTokens(rows, { classify: target.classify, totalLabel: this.tokenLabels?.total });
+        // B3: optional 2nd query → token_speed scalar (same security envelope).
+        let speed = null;
+        if (target.source.speed_query_file) {
+          try {
+            speed = await collectSqlScalar(target.source, env, target.source.speed_query_file, target.source.speed_samples ?? 10, 'speed');
+          } catch { /* speed optional; leave null → "—" */ }
+        }
+        // B4: cumulative all-time totals for the "all"/requests columns, cached
+        // ~10min (full-table scan kept off the poll cadence). Trend/today/spark
+        // still come from the windowed `rows` above.
+        let totals = null;
+        if (target.source.total_query_file) {
+          const cached = this._totals.get(target.id);
+          if (cached && (Date.now() - cached.at) < TOTALS_TTL_MS) {
+            totals = cached.rows;
+          } else {
+            try {
+              totals = await collectSqlRows(target.source, env, target.source.total_query_file);
+              this._totals.set(target.id, { at: Date.now(), rows: totals });
+            } catch { totals = cached ? cached.rows : null; } // keep last good on error
+          }
+        }
+        const pivot = pivotTokens(rows, { classify: target.classify, totalLabel: this.tokenLabels?.total, speed, totals });
         const raw = { token_speed: pivot.speed };
         const norm = normalize(raw, target, metrics);
         snapshot.update(target.id, { online: true, metrics: norm.metrics, extra: { token: pivot } });
@@ -117,6 +141,7 @@ export class Scheduler {
     clearInterval(this._sweep);
     this._sweep = null;
     this.pushTargets.clear();
+    this._totals.clear();
   }
 
   stop() { this._clear(); }
