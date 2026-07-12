@@ -138,6 +138,8 @@ agent 对任何响应都不做分支处理,唯一职责是"采集→推送→睡
 - Claude 倒计时:读取现有 `claude-window.json`,算出 `remaining_min` 填入 `extra.claude`(吸收现 `claude-report.ps1` 职责,后者最终可退役)。
 - 推送:`Invoke-RestMethod -TimeoutSec 1 -Method Post -ContentType 'application/json; charset=utf-8' -Headers @{ 'X-Push-Token' = $Token }`,失败 `try/catch` 静默。
 
+> 注:`agents/` 下脚本注释一律用 **ASCII/英文**。中文注释在下载/转存链路上即便 BOM 完好也可能发生换行丢失导致行合并,ASCII-only 可规避该编码链路损伤。
+
 ## 6. 安装形态
 
 ### 6.1 Linux — systemd service(非 timer)
