@@ -28,11 +28,12 @@ function num(x) {
   return Number.isFinite(n) ? n : null;
 }
 
-// Network rate: keep <=3 significant digits, auto k->M->G, no wrapping.
-function fmtNet(kbps) {
-  let v = num(kbps);
+// Network rate: input is BYTES/sec (§4.2 rx_bps/tx_bps), auto B->K->M->G.
+function fmtNet(bps) {
+  let v = num(bps);
   if (v == null) return '—';
-  let u = 'k';
+  let u = 'B';
+  if (v >= 1000) { v /= 1000; u = 'K'; }
   if (v >= 1000) { v /= 1000; u = 'M'; }
   if (v >= 1000) { v /= 1000; u = 'G'; }
   const n = v >= 10 ? Math.round(v) : Math.round(v * 10) / 10;
