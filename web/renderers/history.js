@@ -8,10 +8,9 @@ import { esc } from './common.js';
 // from metrics.yaml (config) — §12-step5, so renaming a metric label there
 // updates the legend automatically. No display labels are hardcoded here.
 const SUBS = [
+  // B9: aligned to v1 history — exactly GPU% / VRAM% / Temp / Power (no cpu/mem_pct).
   { k: 'gpu',       color: '#6aa9ff', axis: 'L' },
   { k: 'vram_pct',  color: '#5eead4', axis: 'L' },
-  { k: 'cpu',       color: '#b18cff', axis: 'L' },
-  { k: 'mem_pct',   color: '#5aa6ff', axis: 'L' },
   { k: 'gpu_temp',  color: '#f7c948', axis: 'R' },
   { k: 'gpu_power', color: '#ff7b7b', axis: 'R' },
 ];
