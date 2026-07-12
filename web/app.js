@@ -106,6 +106,25 @@ function chip(target, snap) {
 // ── main render ──
 function targetById(id) { return (CONFIG.targets || []).find((t) => t.id === id) || { id }; }
 
+// B14: identity color for `color: auto` (or omitted) — role decided from live data.
+// GPU metrics present (⇔ payload gpus[] non-empty) → gpu; none → host; service/
+// token/stack → service. Switches in real-time (pull a card → gpu metrics null →
+// host color). An explicit color always wins (manual priority). Role colors are
+// overridable via theme.yaml `roles: { gpu, host, service }`.
+const ROLE_DEFAULT = { gpu: '#ff9d5c', host: '#5aa6ff', service: '#b18cff' };
+function autoColor(target, snap, cardType) {
+  if (target && target.color && target.color !== 'auto') return target.color; // manual wins
+  const roles = { ...ROLE_DEFAULT, ...(CONFIG.theme?.roles || {}) };
+  let role;
+  if (cardType === 'service' || cardType === 'token' || cardType === 'stack') role = 'service';
+  else {
+    const hasGpu = ['gpu', 'vram_pct', 'gpu_temp', 'gpu_power', 'vram_bytes']
+      .some((k) => typeof snap?.metrics?.[k]?.value === 'number');
+    role = hasGpu ? 'gpu' : 'host';
+  }
+  return roles[role] || '';
+}
+
 function render() {
   if (!CONFIG) return;
   const metrics = CONFIG.metrics || {};
@@ -117,12 +136,16 @@ function render() {
   // cards
   const cards = [];
   for (const gc of CONFIG.layout?.grid || []) {
-    const target = targetById(gc.target);
+    const raw = targetById(gc.target);
     const snap = lastSnap[gc.target];
+    const target = { ...raw, color: autoColor(raw, snap, gc.type) }; // B14: resolve auto/omitted color
     if (gc.type === 'machine') cards.push(renderMachine(gc, target, snap, metrics));
     else if (gc.type === 'token') cards.push(renderToken(gc, target, snap));
     else if (gc.type === 'service') cards.push(renderService(gc, target, snap, metrics));
-    else if (gc.type === 'stack') cards.push(renderStack(gc, (id) => ({ target: targetById(id), snap: lastSnap[id] }), metrics));
+    else if (gc.type === 'stack') cards.push(renderStack(gc, (id) => {
+      const t = targetById(id); const s = lastSnap[id];
+      return { target: { ...t, color: autoColor(t, s, 'service') }, snap: s };
+    }, metrics));
     else if (gc.type === 'info') cards.push(renderInfo(gc, target, snap));
   }
   mountCards('grid', cards);

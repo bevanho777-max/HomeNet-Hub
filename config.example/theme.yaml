@@ -38,3 +38,13 @@ accent:
   orange: "#ff9d5c"
   gold: "#ffcf5a"
   green: "#5ad19a"
+
+# role colors for targets with `color: auto` (or omitted). Decided live from data:
+#   gpu  = payload gpus[] non-empty (GPU metrics present)   → orange
+#   host = gpus[] empty (host-only)                         → blue
+#   service = service / token / stack cards                 → violet
+# Switches in real-time (pull a GPU card → its color turns host/blue).
+roles:
+  gpu: "#ff9d5c"
+  host: "#5aa6ff"
+  service: "#b18cff"

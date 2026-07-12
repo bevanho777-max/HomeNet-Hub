@@ -240,6 +240,7 @@ const themeSchema = {
       additionalProperties: true,
     },
     accent: { type: 'object', additionalProperties: { type: 'string' } },
+    roles: { type: 'object', additionalProperties: { type: 'string' } }, // B14: gpu/host/service auto-color
   },
   additionalProperties: true,
 };

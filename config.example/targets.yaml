@@ -18,7 +18,7 @@ targets:
   # ── Gateway / this host ──
   - id: gateway
     name: "Gateway"
-    color: "#5aa6ff"
+    color: auto            # B14 demo: role auto-detected → host (blue), no GPU metrics
     enabled: true
     source: { type: demo, interval: "1.5s" }
     map:
@@ -34,7 +34,7 @@ targets:
   # ── GPU node 1 ──
   - id: gpu1
     name: "GPU Node 1"
-    color: "#4fe3d0"
+    color: auto            # B14 demo: role auto-detected → gpu (orange), was cyan
     badge: "GPU Node"
     source: { type: demo, interval: "1.5s" }
     map:
