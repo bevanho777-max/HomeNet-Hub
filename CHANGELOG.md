@@ -56,6 +56,7 @@ Windows/Linux push agents, a v1 visual-parity pass, and 14 UI/data features (B1�
 | `df766f8` | B12-addendum stack `direction: row\|column` with narrow-container fallback · empty-`items` note (no silent blank card) | **yes** (server+web) |
 | `1496213` | B13 machine `header_right` array (`[badge, uptime]` → "RX 7900XTX │ 15d 7h"), backward-compatible | **yes** (server+web) |
 | `50f4d79` | B14 auto identity color by role (gpu/host/service) from live `gpus[]`; manual `color` wins; `theme.roles` overridable | **yes** (server+web) |
+| `086e7d9` | B15 resilient polling — visibility-aware refresh, fetch AbortController timeouts, reconnect badge (Online/Reconnecting/Disconnected), mobile cadence relaxation | **yes** (web) |
 
 ### Config surface added this release
 
