@@ -147,7 +147,8 @@ const gridCard = {
   required: ['type'],
   properties: {
     target: { type: 'string' },
-    type: { enum: ['machine', 'token', 'service', 'history', 'info'] },
+    type: { enum: ['machine', 'token', 'service', 'history', 'info', 'stack'] },
+    children: { type: 'array', items: { type: 'string' } }, // B12: stack child target ids
     title: { type: 'string' },               // §12-step4: info card title (no target needed)
     rings: { type: 'array', items: { type: 'string' } },
     // metric-key strings (machine/service) OR {label,value,level} objects (info, §12-step4)
@@ -179,6 +180,7 @@ const gridCard = {
   // data-bound cards need a target; info cards may be static (no target)
   allOf: [
     { if: { properties: { type: { enum: ['machine', 'token', 'service', 'history'] } } }, then: { required: ['target'] } },
+    { if: { properties: { type: { const: 'stack' } } }, then: { required: ['children'] } }, // B12
   ],
   additionalProperties: true,
 };
@@ -283,6 +285,7 @@ export function crossValidate({ metrics, targets, layout }) {
     // only string items are metric keys (machine/service); info items are
     // {label,value} objects and are not metric references.
     (c.items || []).forEach((m) => { if (typeof m === 'string') refMetric(m, `layout.grid[${c.target}].items`); });
+    (c.children || []).forEach((id) => refTarget(id, `layout.grid[type=stack].children`)); // B12
   }
   for (const id of layout?.status_bar?.targets || []) refTarget(id, 'layout.status_bar');
   for (const id of layout?.history?.selectable_targets || []) refTarget(id, 'layout.history.selectable_targets');

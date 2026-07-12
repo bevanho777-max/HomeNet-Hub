@@ -5,6 +5,7 @@
 import { renderMachine } from './renderers/machine.js';
 import { renderToken } from './renderers/token.js';
 import { renderService } from './renderers/service.js';
+import { renderStack } from './renderers/stack.js';
 import { renderInfo } from './renderers/info.js';
 import { initHistory } from './renderers/history.js';
 import { esc, statusLevel } from './renderers/common.js';
@@ -121,6 +122,7 @@ function render() {
     if (gc.type === 'machine') cards.push(renderMachine(gc, target, snap, metrics));
     else if (gc.type === 'token') cards.push(renderToken(gc, target, snap));
     else if (gc.type === 'service') cards.push(renderService(gc, target, snap, metrics));
+    else if (gc.type === 'stack') cards.push(renderStack(gc, (id) => ({ target: targetById(id), snap: lastSnap[id] }), metrics));
     else if (gc.type === 'info') cards.push(renderInfo(gc, target, snap));
   }
   mountCards('grid', cards);

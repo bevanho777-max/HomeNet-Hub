@@ -135,6 +135,18 @@ html, body {
 .card.clickable { cursor: pointer; }
 .card.stale { opacity: 0.55; }
 
+/* ---------- B12: 堆叠卡(多 service 共享外框,各留头部)---------- */
+.stack { display: flex; flex-direction: column; }
+.stack-item h2 {
+  font-size: 12.5px; font-weight: 600; margin: 0 0 var(--s3);
+  color: var(--muted); letter-spacing: 1px;
+  display: flex; align-items: center; gap: var(--s2);
+}
+.stack-item[style*="--accent"] h2 { color: var(--accent); } /* 各子卡身份色头部 */
+.stack-item h2 .tag { margin-left: auto; font-size: 11px; color: var(--muted2); font-weight: 500; letter-spacing: 0.5px; }
+.stack-div { height: 1px; margin: var(--s3) 0; background: linear-gradient(90deg, transparent, var(--hair), transparent); }
+h2:empty { display: none; } /* 堆叠卡外框无标题时不留空行 */
+
 /* ---------- 环形仪表 ---------- */
 .rings { display: flex; gap: var(--s4); flex-wrap: wrap; }
 .ring-wrap { display: flex; flex-direction: column; align-items: center; gap: var(--s2); flex: 1; min-width: 72px; }

@@ -132,8 +132,20 @@ targets:
 
   # ── Inference backend (info-style service card) ──
   - id: inference
-    name: "Inference Backend"
+    name: "Inference Backend · A"
     color: "#b18cff"
+    badge: "LLM"
+    source: { type: demo, interval: "8s" }
+    map:
+      status:  "$.status"
+      latency: "$.latency_ms"
+      model:   "$.model"
+      role:    "$.role"
+
+  # second inference backend — demoed as a B12 stack with `inference` above
+  - id: inference2
+    name: "Inference Backend · B"
+    color: "#4fe3d0"
     badge: "LLM"
     source: { type: demo, interval: "8s" }
     map:

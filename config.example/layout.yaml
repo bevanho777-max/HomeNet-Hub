@@ -69,8 +69,10 @@ grid:
     header_right: status
     items: [procs, sessions, skills, latency]
 
-  - target: inference
-    type: service
+  # B12: stack — two service backends in one frame (falls back to single `type:
+  # service` with a `target:`); each child keeps its own name/badge/identity color.
+  - type: stack
+    children: [inference, inference2]
     header_right: badge
     items: [status, latency, model, role]
 
