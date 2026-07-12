@@ -4,7 +4,7 @@
 // here for normalization. We also track staleness: if no push arrives within
 // a grace window the target is reported offline by the scheduler's sweep.
 
-const PUSH_GRACE_MS = Number(process.env.PUSH_GRACE_MS || 20000);
+const PUSH_GRACE_MS = Number(process.env.PUSH_GRACE_MS || 10000);
 
 const lastPush = new Map(); // targetId -> ts(ms)
 
@@ -12,10 +12,11 @@ export function markPush(targetId) {
   lastPush.set(targetId, Date.now());
 }
 
-export function isPushStale(targetId) {
+export function isPushStale(targetId, staleAfterS) {
   const t = lastPush.get(targetId);
   if (!t) return true;
-  return Date.now() - t > PUSH_GRACE_MS;
+  const grace = typeof staleAfterS === 'number' ? staleAfterS * 1000 : PUSH_GRACE_MS;
+  return Date.now() - t > grace;
 }
 
 // Validate the shared-secret header for a push target.

@@ -105,7 +105,23 @@ app.post('/api/push/:targetId', async (req, reply) => {
     app.log.warn(`[push:DENY] ${id}: ${v.reason}`);
     return reply.code(401).send({ error: 'unauthorized', reason: v.reason });
   }
-  scheduler.handlePush(target, req.body || {});
+  // §7.1 400 层:JSON 结构 / 体积 / 必填字段 / id 一致性
+  const body = req.body;
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    return reply.code(400).send({ ok: false, error: 'body must be a JSON object' });
+  }
+  if (Buffer.byteLength(JSON.stringify(body), 'utf8') > 8192) {
+    return reply.code(400).send({ ok: false, error: 'payload exceeds 8192 bytes' });
+  }
+  for (const f of ['v', 'id', 'ts', 'os', 'gpus']) {
+    if (body[f] === undefined) {
+      return reply.code(400).send({ ok: false, error: `missing required field: ${f}` });
+    }
+  }
+  if (body.id !== id) {
+    return reply.code(400).send({ ok: false, error: `id mismatch: body.id=${body.id} != :targetId=${id}` });
+  }
+  scheduler.handlePush(target, body);
   return { ok: true, target: id, ts: Date.now() };
 });
 

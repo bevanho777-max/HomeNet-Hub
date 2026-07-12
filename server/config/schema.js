@@ -57,6 +57,7 @@ const sourceSchema = {
     timeout: { type: 'string' },
     // http_push
     token_env: { type: 'string' },
+    stale_after_s: { type: 'number', default: 10 }, // §7.3 失效窗口秒;有效默认在 push.js(ajv 未开 useDefaults)
     // sql
     driver: { type: 'string' },
     dsn_env: { type: 'string' },

@@ -54,8 +54,8 @@ export class Scheduler {
 
     // single staleness sweep for push targets
     this._sweep = setInterval(() => {
-      for (const [id] of this.pushTargets) {
-        if (isPushStale(id)) this.ctx.snapshot.update(id, { online: false, error: 'no push (stale)' });
+      for (const [id, target] of this.pushTargets) {
+        if (isPushStale(id, target.source?.stale_after_s)) this.ctx.snapshot.update(id, { online: false, error: 'no push (stale)' });
       }
     }, PUSH_SWEEP_MS);
 
@@ -102,7 +102,8 @@ export class Scheduler {
     const metrics = this.ctx.getMetrics();
     markPush(target.id);
     const norm = normalize(body || {}, target, metrics);
-    this.ctx.snapshot.update(target.id, { online: true, metrics: norm.metrics });
+    // §7.5 原样保留原始 body.extra 到快照(缺省则 update 内部沿用上次)
+    this.ctx.snapshot.update(target.id, { online: true, metrics: norm.metrics, extra: body.extra });
     const rows = samplableRows(target.id, norm);
     if (rows.length) this.ctx.tsdb.record(rows);
   }
