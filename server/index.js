@@ -126,7 +126,15 @@ app.post('/api/push/:targetId', async (req, reply) => {
 });
 
 // static frontend (config-driven; rendered client-side)
-await app.register(fastifyStatic, { root: WEB_DIR, index: ['index.html'] });
+// §B5 cache-busting: serve static with `no-cache` so the browser revalidates
+// every asset (incl. the whole ES-module import graph) via ETag — after a deploy
+// changed files return 200 fresh, unchanged return 304. No hard-refresh needed.
+await app.register(fastifyStatic, {
+  root: WEB_DIR,
+  index: ['index.html'],
+  cacheControl: false, // we set our own header below; ETag/Last-Modified stay on
+  setHeaders(res) { res.setHeader('Cache-Control', 'no-cache'); },
+});
 
 // ── lifecycle ───────────────────────────────────────────────────────
 async function shutdown(sig) {
