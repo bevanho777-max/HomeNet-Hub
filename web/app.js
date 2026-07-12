@@ -7,7 +7,7 @@ import { renderToken } from './renderers/token.js';
 import { renderService } from './renderers/service.js';
 import { renderInfo } from './renderers/info.js';
 import { initHistory } from './renderers/history.js';
-import { esc } from './renderers/common.js';
+import { esc, statusLevel } from './renderers/common.js';
 
 const FAST_MS = 1500;     // snapshot poll (machine/GPU rhythm)
 const CONFIG_MS = 10000;  // config re-check (hot-reload pickup)
@@ -76,17 +76,16 @@ function updateBodyKeepRings(body, newHTML) {
 }
 
 // ── status pills ──
-function statusOnline(v) {
-  const s = String(v ?? '').toLowerCase();
-  return s === 'online' || s === 'running' || s === 'ok' || s === 'up';
-}
+// B1: green for healthy vocab, red only for explicit failure vocab (offline/down/
+// timeout/…) or transport failure (online===false); unknown/other → neutral grey.
 function chip(target, snap) {
   let cls = 'unknown', lat = '';
   if (snap) {
     if (snap.online === false) cls = 'offline';
     else {
       const st = snap.metrics?.status?.value;
-      cls = st == null ? 'online' : (statusOnline(st) ? 'online' : 'offline');
+      const lvl = statusLevel(st);
+      cls = st == null ? 'online' : (lvl === 'danger' ? 'offline' : lvl === 'ok' ? 'online' : 'unknown');
       const l = snap.metrics?.latency?.display;
       if (l && l !== '—') lat = `<span class="lat">${esc(l)}</span>`;
     }

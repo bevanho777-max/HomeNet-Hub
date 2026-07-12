@@ -1,14 +1,5 @@
 // service renderer (§6) — no rings; KV list + header_right status/badge.
-import { card, mget, lvClass, esc } from './common.js';
-
-// status string → status level (online=ok, unknown=neutral, else danger)
-function statusLevel(v) {
-  if (v == null) return null;
-  const s = String(v).toLowerCase();
-  if (s === 'online' || s === 'running' || s === 'ok' || s === 'up') return 'ok';
-  if (s === 'unknown' || s === '') return null;
-  return 'danger';
-}
+import { card, mget, lvClass, esc, statusLevel } from './common.js';
 
 export function renderService(gridCard, target, snap, metrics) {
   const title = target.name || target.id;
