@@ -72,6 +72,7 @@ grid:
   # B12: stack — two service backends in one frame (falls back to single `type:
   # service` with a `target:`); each child keeps its own name/badge/identity color.
   - type: stack
+    # direction: row               # optional: side-by-side (default column); narrow container (<480px) auto-wraps to column
     children: [inference, inference2]
     header_right: badge
     items: [status, latency, model, role]

@@ -25,10 +25,13 @@ export function renderStack(gc, resolve, metrics) {
       + `</div>`;
   }).filter(Boolean).join('<div class="stack-div"></div>');
 
+  // B12: direction row|column (default column). .stack is the query container;
+  // .stack-inner holds the flex row/col so a narrow container can fall back to column.
+  const dir = gc.direction === 'row' ? 'row' : 'column';
   return card({
     key: gc.key || `stack:${(gc.children || []).join(',')}`,
     title: gc.title || '',                 // outer frame usually title-less; children carry headers
-    body: `<div class="stack">${inners}</div>`,
+    body: `<div class="stack" data-dir="${dir}"><div class="stack-inner">${inners}</div></div>`,
     accent: gc.accent || '',
     stale: false,
   });

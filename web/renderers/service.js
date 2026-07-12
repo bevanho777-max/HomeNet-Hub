@@ -26,12 +26,15 @@ export function renderService(gridCard, target, snap, metrics) {
     tag = esc(mget(snap, gridCard.header_right).display || '');
   }
 
-  const items = (gridCard.items || []).map((k) => {
+  const itemKeys = gridCard.items || [];
+  const items = itemKeys.map((k) => {
     const m = mget(snap, k);
     const small = (k === 'model' || k === 'role') ? ' style="font-size:12px"' : '';
     const cls = k === 'status' ? lvClass(statusLevel(m.value)) : lvClass(m.level);
     return `<div class="item"><span class="label">${esc(label(k))}</span><span class="value ${cls}"${small}>${esc(m.display)}</span></div>`;
   }).join('');
 
-  return card({ key: target.id, title, tag, body: `<div class="kv">${items}</div>`, accent, stale: snap.stale });
+  // no items configured → show a note instead of a silent empty card body
+  const body = itemKeys.length ? `<div class="kv">${items}</div>` : '<div class="note">No fields configured</div>';
+  return card({ key: target.id, title, tag, body, accent, stale: snap.stale });
 }
