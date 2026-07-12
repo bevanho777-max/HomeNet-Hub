@@ -92,6 +92,12 @@ function normMetric(raw, mapEntry, metric, metricKey) {
       fields[k] = v === undefined ? null : v;
       if (fields[k] != null) anyPresent = true;
     }
+    // B8: uptime given as seconds (uptime_s) → derive {d,h} for the {d}{h} format.
+    // Single conversion point; the renderer stays generic (shows metric.display).
+    if (metricKey === 'uptime' && fields.s != null && fields.d == null && fields.h == null) {
+      const s = num(fields.s);
+      if (s != null) { fields.d = Math.floor(s / 86400); fields.h = Math.floor((s % 86400) / 3600); anyPresent = true; }
+    }
     let value = null;
     let level = null;
     // ratio metrics {v,max}: derive pct + level

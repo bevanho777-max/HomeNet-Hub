@@ -29,7 +29,7 @@ targets:
       disk_bytes: { v: "$.disk.used_g", max: "$.disk.total_g" }
       loadavg:    { m1: "$.load[0]", m5: "$.load[1]", m15: "$.load[2]" }
       net:        { rx: "$.net.rx", tx: "$.net.tx" }
-      uptime:     { d: "$.uptime.days", h: "$.uptime.hours" }
+      uptime:     { s: "$.uptime_s" }   # protocol field: seconds → {d}d {h}h in normalize
 
   # ── GPU node 1 ──
   - id: gpu1

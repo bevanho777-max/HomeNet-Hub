@@ -71,6 +71,8 @@ function fillMetric(raw, id, key, entry, tpl) {
       setPath(raw, entry.m1, Math.round(base * 100) / 100);
       setPath(raw, entry.m5, Math.round(base * 90) / 100);
       setPath(raw, entry.m15, Math.round(base * 80) / 100);
+    } else if ('s' in entry) {
+      setPath(raw, entry.s, 15 * 86400 + new Date().getHours() * 3600); // ~15d Xh uptime_s (protocol field)
     } else if ('d' in entry && 'h' in entry) {
       setPath(raw, entry.d, 12);
       setPath(raw, entry.h, new Date().getHours());

@@ -37,8 +37,17 @@ function mountCards(containerId, cards) {
       if (c.accent) el.style.setProperty('--accent', c.accent);
       const body = el.querySelector('.card-body');
       if (body) updateBodyKeepRings(body, c.body);
-      const tagEl = el.querySelector('h2 .tag');
-      if (tagEl) tagEl.innerHTML = c.tag || '';
+      // shell-persist: create the .tag span if it wasn't there at first mount
+      // (a card that mounted tagless while offline can later gain a header_right,
+      //  e.g. uptime), update it when present, remove it when the tag goes empty.
+      const h2 = el.querySelector('h2');
+      let tagEl = h2 && h2.querySelector('.tag');
+      if (c.tag) {
+        if (!tagEl && h2) { tagEl = document.createElement('span'); tagEl.className = 'tag'; h2.appendChild(tagEl); }
+        if (tagEl) tagEl.innerHTML = c.tag;
+      } else if (tagEl) {
+        tagEl.remove();
+      }
     }
     el.classList.toggle('clickable', !!c.clickable);
     el.classList.toggle('stale', !!c.stale);
