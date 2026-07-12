@@ -125,6 +125,8 @@ agent 对任何响应都不做分支处理,唯一职责是"采集→推送→睡
 
 配置经环境变量注入:`HUB_URL`、`AGENT_ID`、`PUSH_TOKEN`、`NET_IFACE`(可选,默认取默认路由网卡)。**脚本内不出现任何 HTTPS_PROXY/HTTP_PROXY 设置**;curl 加 `--noproxy '*'`,确保局域网推送不被宿主机代理环境劫持。
 
+> 注:AMD GPU 采集实际实现为 **amdgpu sysfs**(`/sys/class/drm/*/device/`),非 `rocm-smi`;sysfs 拿不到型号名,型号名经 `GPU_NAMES` 环境变量注入(逗号分隔,按 `idx` 对应)。
+
 ### 5.2 Windows(`agents/homenet-agent.ps1`)
 
 - 文件编码 **UTF-8 with BOM**,兼容 PowerShell 5.1 / 中文版 Server 2022(GBK)。
