@@ -161,6 +161,9 @@ html, body {
 .stack-offline-status { text-align: center; color: var(--muted2); font-size: 12px; letter-spacing: 0.5px; }
 .stack:not(.is-row) .stack-item-offline .kv { display: none; }
 
+/* Stack: align section title->first KV gap with regular cards (was 45px vs 33px) */
+.stack .stack-item h2 { margin-bottom: 0; }
+
 /* Stack: KV boxes always single-file (both row and column mode) */
 .stack .stack-item .kv {
   display: grid;
