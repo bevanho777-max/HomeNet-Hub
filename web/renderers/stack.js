@@ -14,9 +14,29 @@ export function renderStack(gc, resolve, metrics) {
     items: gc.items,
     labels: gc.labels,
   };
+  const label = (k) => metrics?.[k]?.label || k;
   const inners = (gc.children || []).map((childId) => {
     const { target, snap } = resolve(childId);
     if (!target) return '';
+    const accentAttr = target.color ? ` style="--accent:${esc(target.color)}"` : '';
+    const title = esc(target.name || target.id);
+
+    // Offline child: keep a FULL equal slot (so a row stack stays N clean columns —
+    // never collapses to a single line). Header kept (name + badge, greyed via CSS);
+    // body = a centered offline status + the items skeleton showing "—". Column mode
+    // hides the skeleton via CSS to stay compact.
+    if (!snap || snap.online === false) {
+      const skel = (gc.items || []).map((k) =>
+        `<div class="item"><span class="label">${esc(label(k))}</span><span class="value">—</span></div>`).join('');
+      const err = snap?.error ? ` (${esc(snap.error)})` : '';
+      const badge = esc(target.badge || 'offline');
+      return `<div class="stack-item stack-item-offline"${accentAttr}>`
+        + `<h2>${title}<span class="tag">${badge}</span></h2>`
+        + `<div class="stack-offline"><div class="stack-offline-status">Offline${err}</div>`
+        + (skel ? `<div class="kv">${skel}</div>` : '') + '</div>'
+        + '</div>';
+    }
+
     const m = renderService(childCfg, target, snap, metrics); // { title, tag, body, accent }
     // m.tag may be HTML (e.g. a colored status span) — matches mountCards' contract.
     return `<div class="stack-item"${m.accent ? ` style="--accent:${esc(m.accent)}"` : ''}>`

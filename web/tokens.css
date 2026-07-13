@@ -153,6 +153,13 @@ html, body {
 .stack-item h2 .tag { margin-left: auto; font-size: 11px; color: var(--muted2); font-weight: 500; letter-spacing: 0.5px; }
 .stack-div { flex: 0 0 auto; height: 1px; width: auto; margin: var(--s3) 0; background: linear-gradient(90deg, transparent, var(--hair), transparent); }
 .stack.is-row .stack-div { width: 1px; height: auto; align-self: stretch; margin: 0 var(--s3); background: linear-gradient(180deg, transparent, var(--hair), transparent); }
+/* B12-row: offline child keeps a full equal slot (row); greyed to signal offline.
+   Column mode hides the skeleton to stay compact. */
+.stack-item { display: flex; flex-direction: column; } /* let the offline body fill the row height */
+.stack-item-offline { filter: grayscale(0.65) opacity(0.72); } /* identity color → desaturated/grey */
+.stack-offline { flex: 1; display: flex; flex-direction: column; justify-content: center; gap: var(--s3); }
+.stack-offline-status { text-align: center; color: var(--muted2); font-size: 12px; letter-spacing: 0.5px; }
+.stack:not(.is-row) .stack-item-offline .kv { display: none; } /* column: compact (status only) */
 h2:empty { display: none; } /* 堆叠卡外框无标题时不留空行 */
 
 /* ---------- 环形仪表 ---------- */
