@@ -159,7 +159,13 @@ html, body {
 .stack-item-offline { filter: grayscale(0.65) opacity(0.72); } /* identity color → desaturated/grey */
 .stack-offline { flex: 1; display: flex; flex-direction: column; justify-content: center; gap: var(--s3); }
 .stack-offline-status { text-align: center; color: var(--muted2); font-size: 12px; letter-spacing: 0.5px; }
-.stack:not(.is-row) .stack-item-offline .kv { display: none; } /* column: compact (status only) */
+.stack:not(.is-row) .stack-item-offline .kv { display: none; }
+
+/* Column-mode stack: KV boxes single-file */
+.stack:not(.is-row) .stack-item .kv {
+  display: grid;
+  grid-template-columns: 1fr;
+} /* column: compact (status only) */
 h2:empty { display: none; } /* 堆叠卡外框无标题时不留空行 */
 
 /* ---------- 环形仪表 ---------- */
