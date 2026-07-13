@@ -274,20 +274,28 @@ export function crossValidate({ metrics, targets, layout }) {
   const errors = [];
   const metricKeys = new Set(Object.keys(metrics?.metrics || {}));
   const targetIds = new Set((targets?.targets || []).map((t) => t.id));
+  // A layout item/ring may reference a key defined in ITS target's `map` even
+  // without a metrics.yaml template — normalize renders it by shape ({v,max}
+  // bytes-pair, {rx,tx} net, string text…). Keys in neither the registry nor the
+  // target map are still rejected (keeps typo detection).
+  const mapKeysByTarget = new Map((targets?.targets || []).map((t) => [t.id, new Set(Object.keys(t.map || {}))]));
 
   const refTarget = (id, where) => {
     if (id && !targetIds.has(id)) errors.push(`${where}: unknown target id "${id}"`);
   };
-  const refMetric = (key, where) => {
-    if (key && !metricKeys.has(key)) errors.push(`${where}: unknown metric "${key}"`);
+  const refMetric = (key, where, targetId) => {
+    if (!key) return;
+    if (metricKeys.has(key)) return;
+    if (targetId && mapKeysByTarget.get(targetId)?.has(key)) return;
+    errors.push(`${where}: unknown metric "${key}"`);
   };
 
   for (const c of layout?.grid || []) {
     refTarget(c.target, `layout.grid[type=${c.type}]`);
-    (c.rings || []).forEach((m) => refMetric(m, `layout.grid[${c.target}].rings`));
+    (c.rings || []).forEach((m) => refMetric(m, `layout.grid[${c.target}].rings`, c.target));
     // only string items are metric keys (machine/service); info items are
     // {label,value} objects and are not metric references.
-    (c.items || []).forEach((m) => { if (typeof m === 'string') refMetric(m, `layout.grid[${c.target}].items`); });
+    (c.items || []).forEach((m) => { if (typeof m === 'string') refMetric(m, `layout.grid[${c.target}].items`, c.target); });
     (c.children || []).forEach((id) => refTarget(id, `layout.grid[type=stack].children`)); // B12
   }
   for (const id of layout?.status_bar?.targets || []) refTarget(id, 'layout.status_bar');

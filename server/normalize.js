@@ -108,7 +108,10 @@ function normMetric(raw, mapEntry, metric, metricKey) {
     } else if (!anyPresent) {
       level = 'cool';
     }
-    const format = metric?.format || Object.keys(mapEntry).map((k) => `{${k}}`).join(' ');
+    // Template-less metrics get a shape-inferred default: a {v,max} pair renders
+    // like disk_bytes ("used/total G"); anything else joins its subfields.
+    const format = metric?.format
+      || (('v' in mapEntry && 'max' in mapEntry) ? '{v}/{max}G' : Object.keys(mapEntry).map((k) => `{${k}}`).join(' '));
     const display = anyPresent ? applyFormat(format, fields, metricKey) : '—';
     return { value, level, display };
   }
