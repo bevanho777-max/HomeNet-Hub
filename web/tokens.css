@@ -161,8 +161,8 @@ html, body {
 .stack-offline-status { text-align: center; color: var(--muted2); font-size: 12px; letter-spacing: 0.5px; }
 .stack:not(.is-row) .stack-item-offline .kv { display: none; }
 
-/* Column-mode stack: KV boxes single-file */
-.stack:not(.is-row) .stack-item .kv {
+/* Stack: KV boxes always single-file (both row and column mode) */
+.stack .stack-item .kv {
   display: grid;
   grid-template-columns: 1fr;
 } /* column: compact (status only) */
