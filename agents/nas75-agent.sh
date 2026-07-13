@@ -1,0 +1,166 @@
+#!/usr/bin/env bash
+# HomeNet Hub push agent for Synology NAS (id: nas75) -- protocol v1, see docs/AGENT_PROTOCOL.md
+# Zero-dependency: bash + coreutils/busybox + /proc + /sys. No GPU, no root required
+# (smartctl / disk temperature are intentionally skipped). ASCII-only comments on
+# purpose (agents/ convention: survive cross-system copy without newline damage).
+#
+# Collected: cpu.pct (/proc/stat delta), cpu.load (/proc/loadavg), mem (/proc/meminfo),
+#   uptime_s (/proc/uptime), net rx/tx bps (default-route iface, /sys/class/net delta),
+#   extra.volumes[] (every /volume*, df -kP), extra.raid (from /proc/mdstat).
+#
+# ----------------------------------------------------------------------------------
+# DEPLOYMENT (Synology DSM has no systemd -- self-daemon + cron keep-alive):
+#   1) Put this script at e.g. /volume1/scripts/nas75-agent.sh ; chmod +x it.
+#   2) Provide config via env. Easiest: a wrapper the cron line sources, or inline env.
+#   3) DSM > Control Panel > Task Scheduler:
+#        - Boot-up triggered task (root or admin) running:
+#             HUB_URL=http://<hub>:3100 PUSH_TOKEN=<token> /volume1/scripts/nas75-agent.sh
+#        - A "Scheduled Task" repeating every 1 minute running the SAME line.
+#      The pidfile check below makes the minute-task a no-op while the loop is alive,
+#      and a relaunch if it ever died. (Equivalently, a crontab line:
+#        * * * * * HUB_URL=http://<hub>:3100 PUSH_TOKEN=<token> /volume1/scripts/nas75-agent.sh )
+# ----------------------------------------------------------------------------------
+
+set -u
+
+# ---------- config (env-injected) ----------
+HUB_URL="${HUB_URL:?need HUB_URL, e.g. http://192.168.x.x:3100}"
+PUSH_TOKEN="${PUSH_TOKEN:?need PUSH_TOKEN}"
+AGENT_ID="${AGENT_ID:-nas75}"
+INTERVAL="${INTERVAL:-2}"                 # push interval seconds (same as other agents)
+NET_IFACE="${NET_IFACE:-}"                # main NIC; default = default-route interface
+PIDFILE="${PIDFILE:-/tmp/nas75-agent.pid}"
+
+URL="${HUB_URL%/}/api/push/${AGENT_ID}"
+
+# ---------- self-daemon: exit if an instance is already running (cron keep-alive) ----------
+if [ -f "$PIDFILE" ]; then
+  oldpid=$(cat "$PIDFILE" 2>/dev/null || echo "")
+  if [ -n "$oldpid" ] && kill -0 "$oldpid" 2>/dev/null; then
+    exit 0                                 # already running -> this launch is a no-op
+  fi
+fi
+echo "$$" > "$PIDFILE" 2>/dev/null || true
+trap 'rm -f "$PIDFILE" 2>/dev/null' EXIT INT TERM
+
+# ---------- NIC discovery ----------
+if [ -z "$NET_IFACE" ]; then
+  NET_IFACE=$(ip route show default 2>/dev/null \
+    | awk '{for(i=1;i<NF;i++) if($i=="dev"){print $(i+1); exit}}')
+fi
+
+# ---------- collectors (empty string on failure -> field omitted) ----------
+read_cpu_snap() {  # prints: idle total
+  awk '/^cpu /{idle=$5+$6; t=0; for(i=2;i<=NF;i++)t+=$i; print idle, t}' /proc/stat 2>/dev/null
+}
+
+load_json() {
+  awk '{printf "\"load\":[%s,%s,%s]", $1, $2, $3}' /proc/loadavg 2>/dev/null
+}
+
+uptime_json() {
+  awk '{printf "\"uptime_s\":%d,", $1}' /proc/uptime 2>/dev/null
+}
+
+mem_json() {
+  awk '/^MemTotal:/{t=$2}/^MemAvailable:/{a=$2}
+       END{if(t>0) printf "\"mem\":{\"used_gb\":%.1f,\"total_gb\":%.1f},", (t-a)/1048576, t/1048576}' \
+       /proc/meminfo 2>/dev/null
+}
+
+# extra.volumes[] : every /volume* mount, GB used/total via df -kP (POSIX, single line)
+volumes_json() {
+  local out="" v name line total used frag
+  for v in /volume*; do
+    [ -d "$v" ] || continue
+    line=$(df -kP "$v" 2>/dev/null | awk 'NR==2 && $2>0 {print $3, $2}')  # used_k total_k
+    [ -z "$line" ] && continue
+    used=${line% *}; total=${line#* }
+    name=$(basename "$v")
+    frag=$(awk -v n="$name" -v u="$used" -v t="$total" 'BEGIN{
+      printf "{\"name\":\"%s\",\"used_gb\":%.0f,\"total_gb\":%.0f}", n, u/1048576, t/1048576}')
+    out="$out${out:+,}$frag"
+  done
+  printf '"volumes":[%s]' "$out"
+}
+
+# extra.raid : summary from /proc/mdstat (clean / degraded / resync / none)
+raid_json() {
+  local content arrays status detail
+  [ -r /proc/mdstat ] || { printf '"raid":{"status":"none","detail":"no mdstat"}'; return 0; }
+  content=$(cat /proc/mdstat 2>/dev/null)
+  arrays=$(printf '%s\n' "$content" | grep -c '^md')
+  if [ "$arrays" -eq 0 ]; then
+    printf '"raid":{"status":"none","detail":"no md arrays"}'; return 0
+  fi
+  if printf '%s\n' "$content" | grep -qE 'recovery|resync|reshape|check'; then
+    status="resync"
+  elif printf '%s\n' "$content" | grep -oE '\[[U_]+\]' | grep -q '_'; then
+    status="degraded"
+  else
+    status="clean"
+  fi
+  detail=$(printf '%s\n' "$content" | grep -oE '\[[U_]+\]' | tr '\n' ' ' | sed 's/ *$//')
+  printf '"raid":{"status":"%s","detail":"%s arrays %s"}' "$status" "$arrays" "$detail"
+}
+
+# ---------- delta state init ----------
+prev_cpu="$(read_cpu_snap)"
+prev_rx=0; prev_tx=0
+NET_OK=0
+if [ -n "$NET_IFACE" ] && [ -r "/sys/class/net/$NET_IFACE/statistics/rx_bytes" ]; then
+  NET_OK=1
+  prev_rx=$(cat "/sys/class/net/$NET_IFACE/statistics/rx_bytes")
+  prev_tx=$(cat "/sys/class/net/$NET_IFACE/statistics/tx_bytes")
+fi
+prev_ts=$(date +%s)
+
+echo "[nas75-agent] id=$AGENT_ID hub=$URL iface=${NET_IFACE:-none}" >&2
+
+# ---------- main loop ----------
+while :; do
+  sleep "$INTERVAL"
+  now=$(date +%s)
+  elapsed=$((now - prev_ts)); [ "$elapsed" -lt 1 ] && elapsed=1
+
+  # cpu: /proc/stat delta over one interval
+  cpu_json=""
+  cur_cpu="$(read_cpu_snap)"
+  if [ -n "$cur_cpu" ] && [ -n "$prev_cpu" ]; then
+    cpu_json=$(awk -v p="$prev_cpu" -v c="$cur_cpu" 'BEGIN{
+      split(p,a," "); split(c,b," ");
+      dt=b[2]-a[2]; di=b[1]-a[1];
+      if(dt>0){ pct=(dt-di)/dt*100; if(pct<0)pct=0; if(pct>100)pct=100;
+        printf "\"cpu\":{\"pct\":%.1f,LOAD},", pct }
+    }')
+    ld=$(load_json)
+    if [ -n "$ld" ]; then cpu_json="${cpu_json/LOAD/$ld}"; else cpu_json="${cpu_json/,LOAD/}"; fi
+  fi
+  prev_cpu="$cur_cpu"
+
+  # net: counter delta / interval
+  net_json=""
+  if [ "$NET_OK" = "1" ]; then
+    rx=$(cat "/sys/class/net/$NET_IFACE/statistics/rx_bytes" 2>/dev/null || echo "")
+    tx=$(cat "/sys/class/net/$NET_IFACE/statistics/tx_bytes" 2>/dev/null || echo "")
+    if [ -n "$rx" ] && [ -n "$tx" ]; then
+      rbps=$(( (rx - prev_rx) / elapsed )); [ "$rbps" -lt 0 ] && rbps=0
+      tbps=$(( (tx - prev_tx) / elapsed )); [ "$tbps" -lt 0 ] && tbps=0
+      net_json="\"net\":{\"rx_bps\":$rbps,\"tx_bps\":$tbps},"
+      prev_rx=$rx; prev_tx=$tx
+    fi
+  fi
+  prev_ts=$now
+
+  # gpus is required by the protocol -> always [] on a NAS. NAS-specific data (volumes,
+  # raid) goes under extra, per AGENT_PROTOCOL section 4.4.
+  payload=$(printf '{"v":1,"id":"%s","ts":%d,"os":"linux",%s%s%s%s"gpus":[],"extra":{%s,%s}}' \
+    "$AGENT_ID" "$now" \
+    "$(uptime_json)" "$cpu_json" "$(mem_json)" "$net_json" \
+    "$(volumes_json)" "$(raid_json)")
+
+  curl -sf -m 1 --noproxy '*' \
+    -H "X-Push-Token: $PUSH_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "$payload" "$URL" -o /dev/null 2>/dev/null || true
+done
