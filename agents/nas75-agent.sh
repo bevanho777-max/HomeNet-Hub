@@ -126,6 +126,38 @@ raid_json() {
   printf '"raid":{"status":"%s","detail":"%s data arrays %s"}' "$status" "$data_n" "$detail"
 }
 
+# extra.cpu_temp_c : CPU temperature in whole degrees C. Probe hwmon first, taking the
+# max temp*_input of a coretemp/k10temp chip (the CPU package sensor); if no such chip
+# exists, fall back to the hottest thermal_zone. Sysfs values are milli-degrees C.
+# Omit the field when nothing is found. Cheap read -> no last-known-good cache.
+# ash/busybox-safe: no arrays, POSIX test/arithmetic, unmatched globs filtered by -r.
+cpu_temp_json() {
+  local best="" hw name f v
+  # source 1: hwmon coretemp/k10temp (CPU package) -> max temp*_input
+  for hw in /sys/class/hwmon/hwmon*; do
+    [ -d "$hw" ] || continue
+    name=""; [ -r "$hw/name" ] && name=$(cat "$hw/name" 2>/dev/null)
+    case "$name" in coretemp|k10temp) : ;; *) continue ;; esac
+    for f in "$hw"/temp*_input; do
+      [ -r "$f" ] || continue
+      v=$(cat "$f" 2>/dev/null)
+      case "$v" in ''|*[!0-9]*) continue ;; esac
+      { [ -z "$best" ] || [ "$v" -gt "$best" ]; } && best=$v
+    done
+  done
+  # source 2: hottest thermal_zone (only if no CPU hwmon sensor matched)
+  if [ -z "$best" ]; then
+    for f in /sys/class/thermal/thermal_zone*/temp; do
+      [ -r "$f" ] || continue
+      v=$(cat "$f" 2>/dev/null)
+      case "$v" in ''|*[!0-9]*) continue ;; esac
+      { [ -z "$best" ] || [ "$v" -gt "$best" ]; } && best=$v
+    done
+  fi
+  [ -n "$best" ] || return 0
+  printf '"cpu_temp_c":%d' $(( (best + 500) / 1000 ))   # milli-C -> rounded integer C
+}
+
 # ---------- last-known-good picker (df / mdstat can fail for a single cycle) ----------
 # Prefer this cycle's value; else reuse the cached one while within CACHE_TTL; else
 # empty (field omitted). The cache variables themselves are updated by the main loop.
@@ -205,10 +237,14 @@ while :; do
   raid_out=$(cache_pick "$raid_fresh" "$raid_cache" "$raid_cache_ts" "$now")
   [ -n "$raid_fresh" ] && { raid_cache=$raid_fresh; raid_cache_ts=$now; }
 
+  # cpu temperature: cheap sysfs read, collected fresh (no cache)
+  temp_out=$(cpu_temp_json)
+
   # extra (§4.4): join only the non-empty NAS-specific fragments
   extra=""
   [ -n "$vol_out" ] && extra="$vol_out"
   [ -n "$raid_out" ] && extra="$extra${extra:+,}$raid_out"
+  [ -n "$temp_out" ] && extra="$extra${extra:+,}$temp_out"
 
   # gpus is required by the protocol -> always [] on a NAS.
   payload=$(printf '{"v":1,"id":"%s","ts":%d,"os":"linux",%s%s%s%s%s"gpus":[],"extra":{%s}}' \
