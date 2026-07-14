@@ -68,10 +68,16 @@ function fmtScalar(value, metric) {
 }
 
 // Substitute {placeholders} in a metric.format string with formatted subfields.
-function applyFormat(format, fields, metricKey) {
+// Optional metric.`divide`: scale every numeric field by it and keep 1 decimal
+// (e.g. GB→TB via divide:1024, format "{v}/{max}T"). Display-only — ratio/threshold
+// still use raw v/max (see normMetric) — and takes precedence over the metricKey
+// formatting below.
+function applyFormat(format, fields, metricKey, divide) {
+  const div = Number(divide) || 0;
   return format.replace(/\{(\w+)\}/g, (_, k) => {
     const raw = fields[k];
     if (raw == null) return '—';
+    if (div > 0) { const n = num(raw); return n == null ? '—' : (n / div).toFixed(1); }
     if (metricKey === 'net') return fmtNet(raw);
     if (metricKey === 'loadavg') { const n = num(raw); return n == null ? '—' : n.toFixed(2); }
     if (metricKey.endsWith('_bytes')) { const n = num(raw); return n == null ? '—' : n.toFixed(1); }
@@ -112,7 +118,7 @@ function normMetric(raw, mapEntry, metric, metricKey) {
     // like disk_bytes ("used/total G"); anything else joins its subfields.
     const format = metric?.format
       || (('v' in mapEntry && 'max' in mapEntry) ? '{v}/{max}G' : Object.keys(mapEntry).map((k) => `{${k}}`).join(' '));
-    const display = anyPresent ? applyFormat(format, fields, metricKey) : '—';
+    const display = anyPresent ? applyFormat(format, fields, metricKey, metric?.divide) : '—';
     return { value, level, display };
   }
 
