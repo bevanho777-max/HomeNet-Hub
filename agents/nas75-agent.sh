@@ -84,24 +84,44 @@ volumes_json() {
   printf '"volumes":[%s]' "$out"
 }
 
-# extra.raid : summary from /proc/mdstat (clean / degraded / resync / none)
+# Standard top-level disk{used_gb,total_gb} = aggregate of ALL /volume* (same shape
+# as other agents' disk field), alongside the per-volume breakdown in extra.volumes.
+disk_json() {
+  local v line used total su=0 st=0
+  for v in /volume*; do
+    [ -d "$v" ] || continue
+    line=$(df -kP "$v" 2>/dev/null | awk 'NR==2 && $2>0 {print $3, $2}')  # used_k total_k
+    [ -z "$line" ] && continue
+    used=${line% *}; total=${line#* }
+    su=$((su + used)); st=$((st + total))
+  done
+  [ "$st" -gt 0 ] || return 0
+  awk -v u="$su" -v t="$st" 'BEGIN{printf "\"disk\":{\"used_gb\":%.0f,\"total_gb\":%.0f},", u/1048576, t/1048576}'
+}
+
+# extra.raid : health summary from /proc/mdstat (clean / degraded / resync / none).
+# Only DATA arrays (md2 and up) count toward "degraded": DSM's md0/md1 are the
+# system + swap RAID1 that span ALL disk slots and legitimately show "_" in their
+# [x/y] bitmap when the bays aren't fully populated -- that is NOT a fault.
+# resync/recovery/reshape/check on any array is reported as "resync".
 raid_json() {
-  local content arrays status detail
+  local content parsed status data_n detail
   [ -r /proc/mdstat ] || { printf '"raid":{"status":"none","detail":"no mdstat"}'; return 0; }
   content=$(cat /proc/mdstat 2>/dev/null)
-  arrays=$(printf '%s\n' "$content" | grep -c '^md')
-  if [ "$arrays" -eq 0 ]; then
-    printf '"raid":{"status":"none","detail":"no md arrays"}'; return 0
-  fi
-  if printf '%s\n' "$content" | grep -qE 'recovery|resync|reshape|check'; then
-    status="resync"
-  elif printf '%s\n' "$content" | grep -oE '\[[U_]+\]' | grep -q '_'; then
-    status="degraded"
-  else
-    status="clean"
-  fi
-  detail=$(printf '%s\n' "$content" | grep -oE '\[[U_]+\]' | tr '\n' ' ' | sed 's/ *$//')
-  printf '"raid":{"status":"%s","detail":"%s arrays %s"}' "$status" "$arrays" "$detail"
+  parsed=$(printf '%s\n' "$content" | awk '
+    /^md[0-9]+[ \t]*:/ { n=$1; sub(/^md/,"",n); num=n+0; name=$1 }
+    match($0, /\[[U_]+\]/) {
+      bm=substr($0,RSTART,RLENGTH)
+      if (num>=2) { data++; det=det (det?" ":"") name":"bm; if (bm ~ /_/) deg=1 }
+    }
+    /recovery|resync|reshape|check/ { sync=1 }
+    END {
+      st = sync ? "resync" : (deg ? "degraded" : (data>0 ? "clean" : "none"))
+      printf "%s|%d|%s", st, data+0, det
+    }')
+  status=${parsed%%|*}; parsed=${parsed#*|}
+  data_n=${parsed%%|*}; detail=${parsed#*|}
+  printf '"raid":{"status":"%s","detail":"%s data arrays %s"}' "$status" "$data_n" "$detail"
 }
 
 # ---------- delta state init ----------
@@ -154,9 +174,9 @@ while :; do
 
   # gpus is required by the protocol -> always [] on a NAS. NAS-specific data (volumes,
   # raid) goes under extra, per AGENT_PROTOCOL section 4.4.
-  payload=$(printf '{"v":1,"id":"%s","ts":%d,"os":"linux",%s%s%s%s"gpus":[],"extra":{%s,%s}}' \
+  payload=$(printf '{"v":1,"id":"%s","ts":%d,"os":"linux",%s%s%s%s%s"gpus":[],"extra":{%s,%s}}' \
     "$AGENT_ID" "$now" \
-    "$(uptime_json)" "$cpu_json" "$(mem_json)" "$net_json" \
+    "$(uptime_json)" "$cpu_json" "$(mem_json)" "$(disk_json)" "$net_json" \
     "$(volumes_json)" "$(raid_json)")
 
   curl -sf -m 1 --noproxy '*' \
