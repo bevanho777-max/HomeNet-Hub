@@ -125,7 +125,10 @@ function normMetric(raw, mapEntry, metric, metricKey) {
   // scalar (string JSONPath)
   const rawVal = jp(raw, mapEntry);
   if (typeof rawVal === 'string') {
-    return { value: rawVal, level: null, display: rawVal };
+    // Optional metric.level_map colors a text value (e.g. raid "clean"->ok,
+    // "degraded"->danger). Unmapped values / no map stay neutral (null).
+    const level = metric?.level_map?.[rawVal] ?? null;
+    return { value: rawVal, level, display: rawVal };
   }
   const value = rawVal === undefined ? null : num(rawVal);
   const level = computeLevel(value, metric);
