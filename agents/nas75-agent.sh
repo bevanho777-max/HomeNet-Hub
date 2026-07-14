@@ -81,6 +81,7 @@ volumes_json() {
       printf "{\"name\":\"%s\",\"used_gb\":%.0f,\"total_gb\":%.0f}", n, u/1048576, t/1048576}')
     out="$out${out:+,}$frag"
   done
+  [ -n "$out" ] || return 0            # every df failed this cycle -> signal miss (loop reuses cache)
   printf '"volumes":[%s]' "$out"
 }
 
@@ -106,8 +107,9 @@ disk_json() {
 # resync/recovery/reshape/check on any array is reported as "resync".
 raid_json() {
   local content parsed status data_n detail
-  [ -r /proc/mdstat ] || { printf '"raid":{"status":"none","detail":"no mdstat"}'; return 0; }
+  [ -r /proc/mdstat ] || return 0                 # unreadable this cycle -> miss (loop reuses cache)
   content=$(cat /proc/mdstat 2>/dev/null)
+  [ -n "$content" ] || return 0                   # empty read -> miss
   parsed=$(printf '%s\n' "$content" | awk '
     /^md[0-9]+[ \t]*:/ { n=$1; sub(/^md/,"",n); num=n+0; name=$1 }
     match($0, /\[[U_]+\]/) {
@@ -124,6 +126,15 @@ raid_json() {
   printf '"raid":{"status":"%s","detail":"%s data arrays %s"}' "$status" "$data_n" "$detail"
 }
 
+# ---------- last-known-good picker (df / mdstat can fail for a single cycle) ----------
+# Prefer this cycle's value; else reuse the cached one while within CACHE_TTL; else
+# empty (field omitted). The cache variables themselves are updated by the main loop.
+cache_pick() {
+  local fresh="$1" cache="$2" cts="$3" now="$4"
+  if [ -n "$fresh" ]; then printf '%s' "$fresh"; return 0; fi
+  if [ -n "$cache" ] && [ $((now - cts)) -le "$CACHE_TTL" ]; then printf '%s' "$cache"; fi
+}
+
 # ---------- delta state init ----------
 prev_cpu="$(read_cpu_snap)"
 prev_rx=0; prev_tx=0
@@ -134,6 +145,12 @@ if [ -n "$NET_IFACE" ] && [ -r "/sys/class/net/$NET_IFACE/statistics/rx_bytes" ]
   prev_tx=$(cat "/sys/class/net/$NET_IFACE/statistics/tx_bytes")
 fi
 prev_ts=$(date +%s)
+
+# last-known-good cache for df/mdstat-based fields (disk, extra.volumes, extra.raid)
+CACHE_TTL="${CACHE_TTL:-60}"          # max seconds to reuse a stale value before omitting
+disk_cache=""; disk_cache_ts=0
+vol_cache="";  vol_cache_ts=0
+raid_cache=""; raid_cache_ts=0
 
 echo "[nas75-agent] id=$AGENT_ID hub=$URL iface=${NET_IFACE:-none}" >&2
 
@@ -172,12 +189,32 @@ while :; do
   fi
   prev_ts=$now
 
-  # gpus is required by the protocol -> always [] on a NAS. NAS-specific data (volumes,
-  # raid) goes under extra, per AGENT_PROTOCOL section 4.4.
-  payload=$(printf '{"v":1,"id":"%s","ts":%d,"os":"linux",%s%s%s%s%s"gpus":[],"extra":{%s,%s}}' \
+  # disk / volumes / raid come from df + /proc/mdstat, which can fail for a single
+  # cycle on a busy NAS and would otherwise drop the whole field. Take this cycle's
+  # value if present, else reuse the last good one (up to CACHE_TTL). cpu/mem/net read
+  # /proc directly and are collected fresh every cycle.
+  disk_fresh=$(disk_json)
+  disk_out=$(cache_pick "$disk_fresh" "$disk_cache" "$disk_cache_ts" "$now")
+  [ -n "$disk_fresh" ] && { disk_cache=$disk_fresh; disk_cache_ts=$now; }
+
+  vol_fresh=$(volumes_json)
+  vol_out=$(cache_pick "$vol_fresh" "$vol_cache" "$vol_cache_ts" "$now")
+  [ -n "$vol_fresh" ] && { vol_cache=$vol_fresh; vol_cache_ts=$now; }
+
+  raid_fresh=$(raid_json)
+  raid_out=$(cache_pick "$raid_fresh" "$raid_cache" "$raid_cache_ts" "$now")
+  [ -n "$raid_fresh" ] && { raid_cache=$raid_fresh; raid_cache_ts=$now; }
+
+  # extra (§4.4): join only the non-empty NAS-specific fragments
+  extra=""
+  [ -n "$vol_out" ] && extra="$vol_out"
+  [ -n "$raid_out" ] && extra="$extra${extra:+,}$raid_out"
+
+  # gpus is required by the protocol -> always [] on a NAS.
+  payload=$(printf '{"v":1,"id":"%s","ts":%d,"os":"linux",%s%s%s%s%s"gpus":[],"extra":{%s}}' \
     "$AGENT_ID" "$now" \
-    "$(uptime_json)" "$cpu_json" "$(mem_json)" "$(disk_json)" "$net_json" \
-    "$(volumes_json)" "$(raid_json)")
+    "$(uptime_json)" "$cpu_json" "$(mem_json)" "$disk_out" "$net_json" \
+    "$extra")
 
   curl -sf -m 1 --noproxy '*' \
     -H "X-Push-Token: $PUSH_TOKEN" \
