@@ -30,6 +30,7 @@ export class Scheduler {
     this.timers = [];
     this.pushTargets = new Map();   // id -> target (for token validation + sweep)
     this._totals = new Map();       // B4: id -> { at, rows } cumulative all-time cache
+    this._inflight = new Set();     // target ids currently being polled
     this._sweep = null;
   }
 
@@ -49,7 +50,13 @@ export class Scheduler {
         continue;
       }
       const interval = parseDuration(target.source?.interval, type === 'http' ? 1500 : type === 'demo' ? 2000 : 8000);
-      const tick = () => this._poll(target, metrics);
+      const tick = () => {
+        if (this._inflight.has(target.id)) return;
+        this._inflight.add(target.id);
+        Promise.resolve(this._poll(target, metrics))
+          .catch(() => {})
+          .finally(() => this._inflight.delete(target.id));
+      };
       tick(); // immediate first sample
       this.timers.push(setInterval(tick, interval));
     }
