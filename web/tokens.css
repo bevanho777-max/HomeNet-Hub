@@ -280,6 +280,12 @@ h2:empty { display: none; } /* 堆叠卡外框无标题时不留空行 */
 .hostSel { align-self: flex-start; background: var(--glass2); color: var(--text); border: 1px solid var(--hair); border-radius: 9px; padding: 7px 13px; font-size: 13px; font-weight: 600; outline: none; color-scheme: dark; }
 .hostSel option { background: #0c1322; color: var(--text); }
 .histCanvas { width: 100%; display: block; }
+/* B17: load failure overlays the canvas instead of silently blanking the pane */
+.histWrap { position: relative; }
+.histErr { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--s2); background: rgba(2,4,9,0.66); border-radius: 9px; font-size: 12px; color: var(--muted); text-align: center; padding: var(--s2); }
+.histErr[hidden] { display: none; }
+.histErr button { background: var(--glass2); color: var(--text); border: 1px solid var(--hair); border-radius: 7px; padding: 5px 14px; font-size: 12px; font-weight: 500; cursor: pointer; }
+.histErr button:hover { border-color: var(--text); }
 .legend { display: flex; flex-wrap: wrap; gap: var(--s4); font-size: 11.5px; color: var(--muted); }
 .legend .lg { display: inline-flex; align-items: center; gap: 6px; }
 .legend .sw { width: 12px; height: 3px; border-radius: 2px; }

@@ -2,6 +2,7 @@
 // Serves /api/* + the static config-driven frontend. Config is hot-reloaded
 // (chokidar) and drives the collector scheduler. SQLite holds the timeseries.
 import Fastify from 'fastify';
+import fastifyCompress from '@fastify/compress';
 import fastifyStatic from '@fastify/static';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -54,6 +55,16 @@ function tokenTarget() {
 
 // ── server ──────────────────────────────────────────────────────────
 const app = Fastify({ logger: { level: process.env.LOG_LEVEL || 'warn' } });
+
+// B17: gzip. /api/history is ~3.4 MB at range=24h and this shape of JSON (repeated
+// numeric samples) compresses ~10x. The reverse proxy in front of us is Lucky on the
+// side-router and does not compress, so the encoding is negotiated here instead.
+// Registered before any route so its onSend hook covers /api/* and the static files.
+await app.register(fastifyCompress, {
+  global: true,
+  threshold: 1024,                    // below this the CPU is not worth the bytes
+  encodings: ['gzip', 'deflate'],     // no brotli: slower, and gzip already gives ~10x
+});
 
 app.get('/healthz', async () => ({ ok: true, service: 'homenet-hub', ts: Date.now(), config: config.health() }));
 

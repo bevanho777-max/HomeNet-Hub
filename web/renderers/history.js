@@ -84,22 +84,43 @@ function drawMulti(canvas, series, legendEl) {
   }
 }
 
+// B17: a failed/aborted load used to fall through to an empty chart, which is
+// indistinguishable from "no data". Show the reason on the pane instead, and let a
+// click retry just that pane.
+function paneError(idx, msg) {
+  const err = document.querySelector(`.histErr[data-pane="${idx}"]`);
+  if (!err) return;
+  err.innerHTML = `<span class="histErrMsg">${esc(msg)}</span><button type="button">重试</button>`;
+  err.hidden = false;
+}
+
+function paneErrorClear(idx) {
+  const err = document.querySelector(`.histErr[data-pane="${idx}"]`);
+  if (err) { err.hidden = true; err.innerHTML = ''; }
+}
+
 async function loadPane(idx) {
   const p = panes[idx];
   const canvas = document.querySelector(`.histCanvas[data-pane="${idx}"]`);
   const legend = document.querySelector(`.legend[data-pane="${idx}"]`);
   if (!canvas || !p?.target) return;
+  // B15: AbortController timeout so a stalled fetch can't wedge the pane.
+  const ctrl = new AbortController();
+  let timedOut = false;
+  const timer = setTimeout(() => { timedOut = true; ctrl.abort(); }, 5000);
   try {
-    // B15: AbortController timeout so a stalled fetch can't wedge the pane.
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 5000);
-    let j;
-    try {
-      const r = await fetch(`/api/history?target=${encodeURIComponent(p.target)}&range=${curRange}`, { cache: 'no-store', signal: ctrl.signal });
-      j = await r.json();
-    } finally { clearTimeout(timer); }
+    const r = await fetch(`/api/history?target=${encodeURIComponent(p.target)}&range=${curRange}`, { cache: 'no-store', signal: ctrl.signal });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const j = await r.json();
+    paneErrorClear(idx);
     drawMulti(canvas, j.series || {}, legend);
-  } catch { drawMulti(canvas, {}, legend); }
+  } catch (e) {
+    // Keep whatever is already drawn — a stale chart plus a visible notice beats
+    // silently wiping the pane to blank.
+    paneError(idx, timedOut
+      ? `加载超时（${curRange} 数据量较大）`
+      : `加载失败：${e?.message || e}`);
+  } finally { clearTimeout(timer); }
 }
 
 function loadAll() { panes.forEach((p) => loadPane(p.idx)); }
@@ -128,9 +149,20 @@ export function initHistory(config) {
     split.innerHTML = panes.map((p) => `
       <div class="hist-pane">
         <select class="hostSel" data-pane="${p.idx}"></select>
-        <canvas class="histCanvas" data-pane="${p.idx}" height="240"></canvas>
+        <div class="histWrap">
+          <canvas class="histCanvas" data-pane="${p.idx}" height="240"></canvas>
+          <div class="histErr" data-pane="${p.idx}" hidden></div>
+        </div>
         <div class="legend" data-pane="${p.idx}"></div>
       </div>`).join('');
+
+    // one delegated handler: any 重试 button reloads just its own pane
+    split.addEventListener('click', (e) => {
+      const btn = e.target.closest('.histErr button');
+      if (!btn) return;
+      const idx = Number(btn.parentElement.dataset.pane);
+      if (Number.isInteger(idx)) { paneErrorClear(idx); loadPane(idx); }
+    });
   }
 
   // range buttons
