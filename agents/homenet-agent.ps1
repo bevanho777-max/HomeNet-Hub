@@ -10,6 +10,8 @@ $PushToken = "REPLACE_WITH_PUSH_TOKEN"
 $Interval  = 2
 $StateFile = "C:\Users\mingc\claude-window.json"
 $ClaudeRefreshLoops = 15
+$NetIface  = ""         # pin the NIC by adapter name; empty = auto-detect default route
+$NetRetryLoops = 15     # while no NIC is available, re-probe every N loops (~30s at 2s)
 $DumpPayload = $false   # set $true to write each payload to last-payload.json for debugging
 
 $ErrorActionPreference = "SilentlyContinue"
@@ -22,24 +24,54 @@ $ci  = [System.Globalization.CultureInfo]::InvariantCulture
 function N1([double]$v) { $v.ToString("0.0", $ci) }
 function N0([double]$v) { [math]::Round($v).ToString($ci) }
 
-# ---------------- startup probes ----------------
+# ---------------- NIC discovery (startup + runtime self-heal) ----------------
+# $NetIface pins the adapter and is never rewritten at runtime; empty means every probe
+# re-reads the default route, so an agent started before the network is up recovers by
+# itself instead of omitting net.* for the whole process lifetime.
+$netPinned = -not [string]::IsNullOrWhiteSpace($NetIface)
 $netName = $null
-$route = Get-NetRoute -DestinationPrefix "0.0.0.0/0" | Sort-Object RouteMetric | Select-Object -First 1
-if ($route) {
-  $ad = Get-NetAdapter -InterfaceIndex $route.InterfaceIndex
-  if ($ad) { $netName = $ad.Name }
-}
 $prevRx = 0; $prevTx = 0
-if ($netName) {
-  $st = Get-NetAdapterStatistics -Name $netName
-  if ($st) { $prevRx = [int64]$st.ReceivedBytes; $prevTx = [int64]$st.SentBytes }
+$netLog = $false        # stay quiet until the startup banner is printed
+
+function Get-DefaultNetName {
+  if ($script:netPinned) { return $NetIface }
+  $route = Get-NetRoute -DestinationPrefix "0.0.0.0/0" | Sort-Object RouteMetric | Select-Object -First 1
+  if (-not $route) { return $null }
+  $ad = Get-NetAdapter -InterfaceIndex $route.InterfaceIndex
+  if ($ad) { return $ad.Name }
+  return $null
 }
+
+# (Re)establish the counter baseline. Sets $netName/$prevRx/$prevTx; logs one line
+# whenever the adapter changes or drops out, so a runtime flip is never silent.
+function Update-NetProbe {
+  $old = $script:netName
+  $cand = Get-DefaultNetName
+  $script:netName = $null
+  if ($cand) {
+    $st = Get-NetAdapterStatistics -Name $cand
+    if ($st) {
+      $script:netName = $cand
+      $script:prevRx = [int64]$st.ReceivedBytes
+      $script:prevTx = [int64]$st.SentBytes
+    }
+  }
+  if ($script:netLog -and $script:netName -ne $old) {
+    $from = if ($old) { $old } else { "none" }
+    $to   = if ($script:netName) { $script:netName } else { "none" }
+    Write-Host "[homenet-agent] net: $from -> $to"
+  }
+}
+
+Update-NetProbe
+$netRetry = 0
 $prevTs = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
 
 $hasNvidia  = [bool](Get-Command nvidia-smi -ErrorAction SilentlyContinue)
 $hasCcusage = [bool](Get-Command ccusage -ErrorAction SilentlyContinue)
 
 Write-Host "[homenet-agent] id=$AgentId hub=$Url iface=$netName nvidia=$hasNvidia ccusage=$hasCcusage"
+$netLog = $true         # from here on, log every NIC state change
 
 # ---------------- collectors (return empty string on failure) ----------------
 function Get-CpuJson {
@@ -122,6 +154,7 @@ while ($true) {
   $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
   $elapsed = $now - $prevTs; if ($elapsed -lt 1) { $elapsed = 1 }
 
+  # Re-probe in place when the counters vanish; retry on a slow tick while no NIC is up.
   $netJson = ""
   if ($netName) {
     $st = Get-NetAdapterStatistics -Name $netName
@@ -131,6 +164,14 @@ while ($true) {
       $tbps = [int64](($tx - $prevTx) / $elapsed); if ($tbps -lt 0) { $tbps = 0 }
       $netJson = ('"net":{{"rx_bps":{0},"tx_bps":{1}}},' -f $rbps, $tbps)
       $prevRx = $rx; $prevTx = $tx
+    } else {
+      Update-NetProbe        # adapter gone / unreadable -> re-probe now
+    }
+  } else {
+    $netRetry++
+    if ($netRetry -ge $NetRetryLoops) {
+      $netRetry = 0
+      Update-NetProbe        # this loop only rebuilds the baseline
     }
   }
   $prevTs = $now

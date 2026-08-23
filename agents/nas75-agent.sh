@@ -43,11 +43,37 @@ fi
 echo "$$" > "$PIDFILE" 2>/dev/null || true
 trap 'rm -f "$PIDFILE" 2>/dev/null' EXIT INT TERM
 
-# ---------- NIC discovery ----------
-if [ -z "$NET_IFACE" ]; then
-  NET_IFACE=$(ip route show default 2>/dev/null \
-    | awk '{for(i=1;i<NF;i++) if($i=="dev"){print $(i+1); exit}}')
-fi
+# ---------- NIC discovery (startup + runtime self-heal) ----------
+# An explicit NET_IFACE pins the adapter and is never rewritten at runtime; otherwise
+# every probe re-reads the default route, so an agent started before the network is
+# up recovers by itself instead of omitting net.* forever.
+NET_PINNED=0
+[ -n "$NET_IFACE" ] && NET_PINNED=1
+
+net_detect_iface() {  # prints the default-route interface name, empty on failure
+  ip route show default 2>/dev/null \
+    | awk '{for(i=1;i<NF;i++) if($i=="dev"){print $(i+1); exit}}'
+}
+
+# (Re)establish the counter baseline: on success set NET_OK=1 and reset prev_rx/prev_tx,
+# on failure set NET_OK=0. Logs one line whenever the state or interface name changes
+# (only after the startup banner) so a runtime flip is never silent.
+net_probe() {
+  local cand old_ok="$NET_OK" old_iface="$NET_IFACE"
+  if [ "$NET_PINNED" = "1" ]; then cand="$NET_IFACE"; else cand="$(net_detect_iface)"; fi
+  if [ -n "$cand" ] && [ -r "/sys/class/net/$cand/statistics/rx_bytes" ]; then
+    NET_IFACE="$cand"
+    prev_rx=$(cat "/sys/class/net/$cand/statistics/rx_bytes" 2>/dev/null || echo 0)
+    prev_tx=$(cat "/sys/class/net/$cand/statistics/tx_bytes" 2>/dev/null || echo 0)
+    NET_OK=1
+  else
+    [ "$NET_PINNED" = "1" ] || NET_IFACE="$cand"
+    NET_OK=0
+  fi
+  if [ "$NET_LOG" = "1" ] && { [ "$NET_OK" != "$old_ok" ] || [ "$NET_IFACE" != "$old_iface" ]; }; then
+    echo "[nas75-agent] net: ${old_iface:-none} -> ${NET_IFACE:-none} (ok=$NET_OK)" >&2
+  fi
+}
 
 # ---------- collectors (empty string on failure -> field omitted) ----------
 read_cpu_snap() {  # prints: idle total
@@ -171,11 +197,10 @@ cache_pick() {
 prev_cpu="$(read_cpu_snap)"
 prev_rx=0; prev_tx=0
 NET_OK=0
-if [ -n "$NET_IFACE" ] && [ -r "/sys/class/net/$NET_IFACE/statistics/rx_bytes" ]; then
-  NET_OK=1
-  prev_rx=$(cat "/sys/class/net/$NET_IFACE/statistics/rx_bytes")
-  prev_tx=$(cat "/sys/class/net/$NET_IFACE/statistics/tx_bytes")
-fi
+NET_LOG=0                                  # stay quiet until the startup banner
+net_probe
+NET_RETRY_TICKS="${NET_RETRY_TICKS:-15}"   # while NET_OK=0, re-probe every N ticks (~30s at 2s)
+net_retry=0
 prev_ts=$(date +%s)
 
 # last-known-good cache for df/mdstat-based fields (disk, extra.volumes, extra.raid)
@@ -185,6 +210,7 @@ vol_cache="";  vol_cache_ts=0
 raid_cache=""; raid_cache_ts=0
 
 echo "[nas75-agent] id=$AGENT_ID hub=$URL iface=${NET_IFACE:-none}" >&2
+NET_LOG=1                                  # from here on, log every NIC state change
 
 # ---------- main loop ----------
 while :; do
@@ -207,7 +233,8 @@ while :; do
   fi
   prev_cpu="$cur_cpu"
 
-  # net: counter delta / interval
+  # net: counter delta / interval. Re-probe in place when the counters vanish, and
+  # retry on a slow tick while the NIC is still unavailable.
   net_json=""
   if [ "$NET_OK" = "1" ]; then
     rx=$(cat "/sys/class/net/$NET_IFACE/statistics/rx_bytes" 2>/dev/null || echo "")
@@ -217,6 +244,14 @@ while :; do
       tbps=$(( (tx - prev_tx) / elapsed )); [ "$tbps" -lt 0 ] && tbps=0
       net_json="\"net\":{\"rx_bps\":$rbps,\"tx_bps\":$tbps},"
       prev_rx=$rx; prev_tx=$tx
+    else
+      net_probe                            # NIC gone / unreadable -> re-probe now
+    fi
+  else
+    net_retry=$((net_retry + 1))
+    if [ "$net_retry" -ge "$NET_RETRY_TICKS" ]; then
+      net_retry=0
+      net_probe                            # this tick only rebuilds the baseline
     fi
   fi
   prev_ts=$now

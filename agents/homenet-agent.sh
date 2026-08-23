@@ -15,11 +15,35 @@ GPU_NAMES="${GPU_NAMES:-}"         # 可选:逗号分隔卡名,按 idx 对应(AM
 
 URL="${HUB_URL%/}/api/push/${AGENT_ID}"
 
-# ---------- 网卡探测 ----------
-if [ -z "$NET_IFACE" ]; then
-  NET_IFACE=$(ip route show default 2>/dev/null \
-    | awk '{for(i=1;i<NF;i++) if($i=="dev"){print $(i+1); exit}}')
-fi
+# ---------- 网卡探测(启动 + 运行期自愈) ----------
+# 用户显式给了 NET_IFACE 就固定用它,运行期不再改写;否则每次探测都重新取默认路由
+# 网卡 —— 覆盖"agent 早于网络就绪启动"导致 net 字段永久缺失的情况。
+NET_PINNED=0
+[ -n "$NET_IFACE" ] && NET_PINNED=1
+
+net_detect_iface() {  # 打印默认路由网卡名,取不到则为空
+  ip route show default 2>/dev/null \
+    | awk '{for(i=1;i<NF;i++) if($i=="dev"){print $(i+1); exit}}'
+}
+
+# (重新)建立计数器基线:成功置 NET_OK=1 并重置 prev_rx/prev_tx,失败置 0。
+# 状态或网卡名变化时记一行日志(启动横幅之后才开),不再静默失败。
+net_probe() {
+  local cand old_ok="$NET_OK" old_iface="$NET_IFACE"
+  if [ "$NET_PINNED" = "1" ]; then cand="$NET_IFACE"; else cand="$(net_detect_iface)"; fi
+  if [ -n "$cand" ] && [ -r "/sys/class/net/$cand/statistics/rx_bytes" ]; then
+    NET_IFACE="$cand"
+    prev_rx=$(cat "/sys/class/net/$cand/statistics/rx_bytes" 2>/dev/null || echo 0)
+    prev_tx=$(cat "/sys/class/net/$cand/statistics/tx_bytes" 2>/dev/null || echo 0)
+    NET_OK=1
+  else
+    [ "$NET_PINNED" = "1" ] || NET_IFACE="$cand"
+    NET_OK=0
+  fi
+  if [ "$NET_LOG" = "1" ] && { [ "$NET_OK" != "$old_ok" ] || [ "$NET_IFACE" != "$old_iface" ]; }; then
+    echo "[homenet-agent] net: ${old_iface:-none} -> ${NET_IFACE:-none} (ok=$NET_OK)" >&2
+  fi
+}
 
 # ---------- GPU 探测(启动一次) ----------
 GPU_MODE="none"
@@ -103,14 +127,14 @@ gpus_json() {  # 输出完整 "gpus":[...] 片段(必填,无卡为 [])
 prev_cpu="$(read_cpu_snap)"
 prev_rx=0; prev_tx=0
 NET_OK=0
-if [ -n "$NET_IFACE" ] && [ -r "/sys/class/net/$NET_IFACE/statistics/rx_bytes" ]; then
-  NET_OK=1
-  prev_rx=$(cat "/sys/class/net/$NET_IFACE/statistics/rx_bytes")
-  prev_tx=$(cat "/sys/class/net/$NET_IFACE/statistics/tx_bytes")
-fi
+NET_LOG=0                                  # 启动横幅之前不打网卡状态日志
+net_probe
+NET_RETRY_TICKS="${NET_RETRY_TICKS:-15}"   # NET_OK=0 时每 N 拍重探(默认 2s/拍 -> 约 30s)
+net_retry=0
 prev_ts=$(date +%s)
 
 echo "[homenet-agent] id=$AGENT_ID hub=$URL iface=${NET_IFACE:-none} gpu=$GPU_MODE cards=${#AMD_CARDS[@]}" >&2
+NET_LOG=1                                  # 之后网卡状态每次变化都记一行
 
 # ---------- 主循环 ----------
 while :; do
@@ -133,7 +157,7 @@ while :; do
   fi
   prev_cpu="$cur_cpu"
 
-  # net:计数器差 / 周期
+  # net:计数器差 / 周期。读不到就地重探,未就绪则按 NET_RETRY_TICKS 定期重试
   net_json=""
   if [ "$NET_OK" = "1" ]; then
     rx=$(cat "/sys/class/net/$NET_IFACE/statistics/rx_bytes" 2>/dev/null || echo "")
@@ -143,6 +167,14 @@ while :; do
       tbps=$(( (tx - prev_tx) / elapsed )); [ "$tbps" -lt 0 ] && tbps=0
       net_json="\"net\":{\"rx_bps\":$rbps,\"tx_bps\":$tbps},"
       prev_rx=$rx; prev_tx=$tx
+    else
+      net_probe                            # 网卡消失/不可读 -> 立即重探
+    fi
+  else
+    net_retry=$((net_retry + 1))
+    if [ "$net_retry" -ge "$NET_RETRY_TICKS" ]; then
+      net_retry=0
+      net_probe                            # 本拍只建基线,下一拍起恢复出数
     fi
   fi
   prev_ts=$now
