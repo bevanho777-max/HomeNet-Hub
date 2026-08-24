@@ -8,6 +8,11 @@ import { dirname } from 'node:path';
 
 const DOWNSAMPLE_SEC = 5;
 const RETENTION_DAYS = Number(process.env.RETENTION_DAYS || 30);
+// B19: read-side downsampling. A pane is a few hundred pixels wide, so returning one
+// point per stored sample is pure waste (24h was ~14.5k points per metric). Bucket the
+// window into this many slots and return each bucket's min and max, which keeps every
+// spike — a plain "every Nth sample" would drop them.
+const MAX_BUCKETS = 250;
 
 export class Tsdb {
   constructor(dbPath) {
@@ -30,9 +35,35 @@ export class Tsdb {
     this._qOne = this.db.prepare(
       'SELECT ts, value FROM metrics WHERE target = ? AND metric = ? AND ts >= ? ORDER BY ts ASC'
     );
-    this._qMetrics = this.db.prepare(
-      'SELECT DISTINCT metric FROM metrics WHERE target = ?'
-    );
+    // B19: the index is (target, metric, ts), so `DISTINCT metric WHERE target=?` has
+    // no way to skip to each metric's first row — it scanned every row the target ever
+    // wrote (2.9M rows / ~250ms) just to name 7 metrics. This recursive form is the
+    // classic loose index scan: one seek per distinct value, ~0.3ms.
+    this._qMetrics = this.db.prepare(`
+      WITH RECURSIVE m(x) AS (
+        SELECT MIN(metric) FROM metrics WHERE target = :t
+        UNION ALL
+        SELECT (SELECT MIN(metric) FROM metrics WHERE target = :t AND metric > m.x)
+          FROM m WHERE m.x IS NOT NULL
+      )
+      SELECT x AS metric FROM m WHERE x IS NOT NULL
+    `);
+    // Per bucket: the min and the max, each with the timestamp it actually occurred at.
+    // Relies on SQLite's documented bare-column rule — with min()/max() as the only
+    // aggregate, bare columns come from the matching row — so tmin/tmax are real
+    // sample times, not bucket edges, and the two points can be emitted in true order.
+    this._qBucket = this.db.prepare(`
+      SELECT a.tmin, a.vmin, x.tmax, x.vmax FROM
+        (SELECT CAST(ts / :w AS INTEGER) AS b, ts AS tmin, MIN(value) AS vmin
+           FROM metrics WHERE target = :t AND metric = :m AND ts >= :s
+           GROUP BY CAST(ts / :w AS INTEGER)) a
+        JOIN
+        (SELECT CAST(ts / :w AS INTEGER) AS b, ts AS tmax, MAX(value) AS vmax
+           FROM metrics WHERE target = :t AND metric = :m AND ts >= :s
+           GROUP BY CAST(ts / :w AS INTEGER)) x
+        ON a.b = x.b
+      ORDER BY a.b ASC
+    `);
     this._lastWrite = new Map(); // "target|metric" -> ts(sec)
   }
 
@@ -53,16 +84,34 @@ export class Tsdb {
     return keep.length;
   }
 
-  // Single series: [{ts, value}] (ts in seconds).
+  // Bucket width for the requested window, or 0 when the window is already coarse
+  // enough that bucketing would not drop a single point.
+  _bucketWidth(sinceSec) {
+    const span = Math.max(1, Math.floor(Date.now() / 1000) - sinceSec);
+    const w = Math.ceil(span / MAX_BUCKETS);
+    return w > DOWNSAMPLE_SEC ? w : 0;
+  }
+
+  // Single series: [{ts, value}] (ts in seconds), downsampled to <=2*MAX_BUCKETS points.
   history(target, metric, sinceSec) {
-    return this._qOne.all(target, metric, sinceSec);
+    const w = this._bucketWidth(sinceSec);
+    if (!w) return this._qOne.all(target, metric, sinceSec);
+    const out = [];
+    for (const r of this._qBucket.all({ w, t: target, m: metric, s: sinceSec })) {
+      // Flat bucket: one point is enough. Otherwise emit both extremes, earliest first,
+      // so the series stays monotonic in ts and the spike keeps its real position.
+      if (r.vmin === r.vmax) { out.push({ ts: r.tmin, value: r.vmin }); continue; }
+      if (r.tmin <= r.tmax) out.push({ ts: r.tmin, value: r.vmin }, { ts: r.tmax, value: r.vmax });
+      else                  out.push({ ts: r.tmax, value: r.vmax }, { ts: r.tmin, value: r.vmin });
+    }
+    return out;
   }
 
   // All sampled metrics for a target: { metric: [{ts,value}] }.
   historyTarget(target, sinceSec) {
-    const metrics = this._qMetrics.all(target).map((r) => r.metric);
+    const metrics = this._qMetrics.all({ t: target }).map((r) => r.metric);
     const out = {};
-    for (const m of metrics) out[m] = this._qOne.all(target, m, sinceSec);
+    for (const m of metrics) out[m] = this.history(target, m, sinceSec);
     return out;
   }
 
