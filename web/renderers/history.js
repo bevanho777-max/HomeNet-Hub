@@ -99,31 +99,50 @@ function paneErrorClear(idx) {
   if (err) { err.hidden = true; err.innerHTML = ''; }
 }
 
-async function loadPane(idx) {
+// B18: one in-flight request per pane. /api/history is served by synchronous
+// better-sqlite3 queries, so concurrent requests do not overlap — they serialize on
+// the event loop at ~0.3s each. Left unbounded, a periodic refresh landing on top of
+// an unfinished one snowballs until every request blows the 5s budget. Automatic
+// reloads are dropped while a pane is busy; user-initiated ones pass force and
+// supersede the request in flight (a range/target switch makes it stale anyway).
+const inflight = new Map();   // pane idx -> AbortController
+
+async function loadPane(idx, { force = false } = {}) {
   const p = panes[idx];
   const canvas = document.querySelector(`.histCanvas[data-pane="${idx}"]`);
   const legend = document.querySelector(`.legend[data-pane="${idx}"]`);
   if (!canvas || !p?.target) return;
+  const running = inflight.get(idx);
+  if (running) {
+    if (!force) return;
+    running.abort();
+  }
   // B15: AbortController timeout so a stalled fetch can't wedge the pane.
   const ctrl = new AbortController();
+  inflight.set(idx, ctrl);
   let timedOut = false;
   const timer = setTimeout(() => { timedOut = true; ctrl.abort(); }, 5000);
   try {
     const r = await fetch(`/api/history?target=${encodeURIComponent(p.target)}&range=${curRange}`, { cache: 'no-store', signal: ctrl.signal });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const j = await r.json();
+    if (inflight.get(idx) !== ctrl) return;   // superseded: newer request owns the pane
     paneErrorClear(idx);
     drawMulti(canvas, j.series || {}, legend);
   } catch (e) {
+    if (inflight.get(idx) !== ctrl) return;   // aborted by a newer request, not a failure
     // Keep whatever is already drawn — a stale chart plus a visible notice beats
     // silently wiping the pane to blank.
     paneError(idx, timedOut
       ? `加载超时（${curRange} 数据量较大）`
       : `加载失败：${e?.message || e}`);
-  } finally { clearTimeout(timer); }
+  } finally {
+    clearTimeout(timer);
+    if (inflight.get(idx) === ctrl) inflight.delete(idx);
+  }
 }
 
-function loadAll() { panes.forEach((p) => loadPane(p.idx)); }
+function loadAll(opts) { panes.forEach((p) => loadPane(p.idx, opts)); }
 
 // B15: called by app.js on foreground-restore to refresh panes immediately.
 export function historyRefresh() { loadAll(); }
@@ -156,13 +175,16 @@ export function initHistory(config) {
         <div class="legend" data-pane="${p.idx}"></div>
       </div>`).join('');
 
-    // one delegated handler: any 重试 button reloads just its own pane
-    split.addEventListener('click', (e) => {
+    // one delegated handler: any 重试 button reloads just its own pane. Stashed the
+    // same way as the resize listener so a re-init swaps it instead of stacking.
+    if (initHistory._onRetry) split.removeEventListener('click', initHistory._onRetry);
+    initHistory._onRetry = (e) => {
       const btn = e.target.closest('.histErr button');
       if (!btn) return;
       const idx = Number(btn.parentElement.dataset.pane);
-      if (Number.isInteger(idx)) { paneErrorClear(idx); loadPane(idx); }
-    });
+      if (Number.isInteger(idx)) { paneErrorClear(idx); loadPane(idx, { force: true }); }
+    };
+    split.addEventListener('click', initHistory._onRetry);
   }
 
   // range buttons
@@ -173,7 +195,7 @@ export function initHistory(config) {
     const b = e.target.closest('button'); if (!b) return;
     curRange = b.dataset.r;
     [...rb.children].forEach((x) => x.classList.toggle('active', x === b));
-    loadAll();
+    loadAll({ force: true });   // the in-flight responses are for the old range
   };
 
   // host selects
@@ -181,11 +203,22 @@ export function initHistory(config) {
     const idx = Number(sel.dataset.pane);
     sel.innerHTML = selectable.map((id) => `<option value="${esc(id)}">${esc(names[id])}</option>`).join('');
     if (panes[idx]?.target) sel.value = panes[idx].target;
-    sel.onchange = () => { if (panes[idx]) { panes[idx].target = sel.value; loadPane(idx); } };
+    sel.onchange = () => { if (panes[idx]) { panes[idx].target = sel.value; loadPane(idx, { force: true }); } };
   });
 
-  window.addEventListener('resize', loadAll);
+  // B18: a window drag fires resize dozens of times, and each one used to kick off
+  // one request per pane. Coalesce into a single reload once the drag settles.
+  // Listener + timer are stashed on initHistory so a re-init replaces them instead
+  // of stacking another copy.
+  if (initHistory._onResize) window.removeEventListener('resize', initHistory._onResize);
+  clearTimeout(initHistory._resizeT);
+  initHistory._onResize = () => {
+    clearTimeout(initHistory._resizeT);
+    initHistory._resizeT = setTimeout(() => loadAll(), 250);
+  };
+  window.addEventListener('resize', initHistory._onResize);
+
   loadAll();
   clearInterval(initHistory._t);
-  initHistory._t = setInterval(loadAll, 10000);
+  initHistory._t = setInterval(() => loadAll(), 10000);
 }
