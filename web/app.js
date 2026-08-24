@@ -72,6 +72,12 @@ function updateBodyKeepRings(body, newHTML) {
       if (mC) or.style.setProperty('--c', mC[1].trim());
       const ob = or.querySelector('b'), nb = nr.querySelector('b');
       if (ob && nb && ob.textContent !== nb.textContent) ob.textContent = nb.textContent;
+      // 环下的标签是 .ring 的兄弟节点(同在 .ring-wrap 内),不在上面几行的同步范围里。
+      // 只改 metrics.yaml 的 label 时环数不变,会走这条保留分支 —— 不同步它的话,标签会
+      // 一直停在首次挂载时的文案(改了 rings 指标却仍显示旧名),只有硬刷才更新。
+      const ol = or.parentElement?.querySelector('.ring-label');
+      const nl = nr.parentElement?.querySelector('.ring-label');
+      if (ol && nl && ol.textContent !== nl.textContent) ol.textContent = nl.textContent;
     });
     const oldBox = body.querySelector('.rings');
     const newBox = tmp.querySelector('.rings');
