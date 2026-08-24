@@ -44,9 +44,20 @@ export function ring(label, m) {
 }
 
 // Key/value item; ratio metrics (have numeric value) get a status class.
+// B20: a metric normalized with `part_thresholds` arrives with `parts` — each
+// subfield already carries its own level, so render them as separately colored
+// spans instead of tinting the whole value one color.
 export function kvItem(label, m) {
   const cls = lvClass(m.level);
-  return `<div class="item"><span class="label">${esc(label)}</span><span class="value ${cls}">${esc(m.display)}</span></div>`;
+  const body = m.parts
+    ? `<span class="value parts">${m.parts.map((p) => `<i class="${lvClass(p.level)}">${esc(p.display)}`
+        + `${p.label ? `<sup>${esc(p.label)}</sup>` : ''}</i>`).join('')}</span>`
+    : `<span class="value ${cls}">${esc(m.display)}</span>`;
+  // Border tint only for the states that need attention (for a parts metric that is
+  // the worst part). ok/cool keep the neutral frame, so a healthy card looks exactly
+  // as it did before and a warm drive is the only thing that lights up.
+  const edge = (m.level === 'warn' || m.level === 'danger') ? ` ${cls}` : '';
+  return `<div class="item${edge}"><span class="label">${esc(label)}</span>${body}</div>`;
 }
 
 // Card model consumed by mountCards (matches the .24 shell-persist contract).

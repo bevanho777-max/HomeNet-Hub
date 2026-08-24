@@ -219,6 +219,12 @@ h2:empty { display: none; } /* 堆叠卡外框无标题时不留空行 */
 .kv .item:hover { border-color: var(--hair2); }
 .kv .item .label { font-size: 10.5px; color: var(--muted2); letter-spacing: 0.6px; text-transform: uppercase; opacity: 0.7; }
 .kv .item .value { font-size: 15.5px; font-weight: 500; letter-spacing: 0.2px; }
+/* B20: parts metric — one span per subfield, each colored by its own level. */
+.kv .item .value.parts { display: flex; flex-wrap: wrap; gap: 0 9px; }
+.kv .item .value.parts i { font-style: normal; }
+/* Part label (e.g. the DSM bay number): a tag, not data -- small and always the muted
+   grey, never the value's status color, so it cannot be mistaken for a reading. */
+.kv .item .value.parts sup { font-size: 0.58em; font-weight: 400; color: var(--muted2); opacity: 0.75; margin-left: 1px; vertical-align: super; line-height: 0; }
 /* ===== 键值区小块描边跟数据状态变色(v1:240-243 逐字，只设 border-color)===== */
 .kv .item.lv-danger { border-color: color-mix(in srgb, var(--red) 45%, transparent); }
 .kv .item.lv-warn   { border-color: color-mix(in srgb, var(--yellow) 42%, transparent); }

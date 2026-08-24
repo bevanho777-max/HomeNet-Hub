@@ -119,6 +119,32 @@ function normMetric(raw, mapEntry, metric, metricKey) {
     const format = metric?.format
       || (('v' in mapEntry && 'max' in mapEntry) ? '{v}/{max}G' : Object.keys(mapEntry).map((k) => `{${k}}`).join(' '));
     const display = anyPresent ? applyFormat(format, fields, metricKey, metric?.divide) : '—';
+    // B20: `part_thresholds` colors each subfield on its own instead of giving the
+    // whole cell one status — e.g. one temperature per disk in a single KV cell, so a
+    // hot drive stands out next to cold ones. Additive: a metric without the field
+    // returns exactly the same shape as before, so every existing card is unaffected.
+    if (metric?.part_thresholds) {
+      const parts = [];
+      for (const k of Object.keys(mapEntry)) {
+        if (k.endsWith('_label')) continue;   // a sibling naming another part, not a part
+        const n = num(fields[k]);
+        if (n == null) continue;
+        const part = { display: fmtScalar(n, metric), level: computeLevel(n, { thresholds: metric.part_thresholds }) };
+        // Optional `<key>_label` sibling in the map names the part (e.g. the DSM bay a
+        // disk sits in). Rendered as a superscript tag, so it stays a label and never
+        // takes the value's status color.
+        const lbl = jp(raw, mapEntry[`${k}_label`]);
+        if (lbl != null && lbl !== '') part.label = String(lbl);
+        parts.push(part);
+      }
+      if (parts.length) {
+        // The cell's own level is the worst part, so the item border still summarises
+        // the group at a glance while each number keeps its individual color.
+        const RANK = { ok: 1, warn: 2, danger: 3 };
+        const worst = parts.reduce((a, p) => ((RANK[p.level] || 0) > (RANK[a] || 0) ? p.level : a), null);
+        return { value, level: worst ?? level, display, parts };
+      }
+    }
     return { value, level, display };
   }
 

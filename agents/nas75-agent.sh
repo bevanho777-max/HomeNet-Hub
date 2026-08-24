@@ -30,6 +30,9 @@ AGENT_ID="${AGENT_ID:-nas75}"
 INTERVAL="${INTERVAL:-2}"                 # push interval seconds (same as other agents)
 NET_IFACE="${NET_IFACE:-}"                # main NIC; default = default-route interface
 PIDFILE="${PIDFILE:-/tmp/nas75-agent.pid}"
+SYNODISK="${SYNODISK:-/usr/syno/bin/synodisk}"   # DSM disk enumerator (no root needed)
+DISKS_INTERVAL="${DISKS_INTERVAL:-60}"    # seconds between synodisk refreshes
+DISKS_STALE="${DISKS_STALE:-300}"         # drop the cached disk list after this long
 
 URL="${HUB_URL%/}/api/push/${AGENT_ID}"
 
@@ -160,36 +163,50 @@ raid_json() {
   printf '"raid":{"status":"%s","detail":"%s data arrays %s"}' "$status" "$data_n" "$detail"
 }
 
-# extra.cpu_temp_c : CPU temperature in whole degrees C. Probe hwmon first, taking the
-# max temp*_input of a coretemp/k10temp chip (the CPU package sensor); if no such chip
-# exists, fall back to the hottest thermal_zone. Sysfs values are milli-degrees C.
-# Omit the field when nothing is found. Cheap read -> no last-known-good cache.
-# ash/busybox-safe: no arrays, POSIX test/arithmetic, unmatched globs filtered by -r.
-cpu_temp_json() {
-  local best="" hw name f v
-  # source 1: hwmon coretemp/k10temp (CPU package) -> max temp*_input
-  for hw in /sys/class/hwmon/hwmon*; do
-    [ -d "$hw" ] || continue
-    name=""; [ -r "$hw/name" ] && name=$(cat "$hw/name" 2>/dev/null)
-    case "$name" in coretemp|k10temp) : ;; *) continue ;; esac
-    for f in "$hw"/temp*_input; do
-      [ -r "$f" ] || continue
-      v=$(cat "$f" 2>/dev/null)
-      case "$v" in ''|*[!0-9]*) continue ;; esac
-      { [ -z "$best" ] || [ "$v" -gt "$best" ]; } && best=$v
-    done
-  done
-  # source 2: hottest thermal_zone (only if no CPU hwmon sensor matched)
-  if [ -z "$best" ]; then
-    for f in /sys/class/thermal/thermal_zone*/temp; do
-      [ -r "$f" ] || continue
-      v=$(cat "$f" 2>/dev/null)
-      case "$v" in ''|*[!0-9]*) continue ;; esac
-      { [ -z "$best" ] || [ "$v" -gt "$best" ]; } && best=$v
-    done
-  fi
-  [ -n "$best" ] || return 0
-  printf '"cpu_temp_c":%d' $(( (best + 500) / 1000 ))   # milli-C -> rounded integer C
+# extra.disks[] : one entry per internal + cache disk, read from `synodisk --enum`.
+# That is the same source DSM Storage Manager uses: one uniform block per disk carrying
+# path / model / temperature, and it needs no root. smartctl was rejected on purpose --
+# the temperature attribute differs per drive family (194 on consumer SATA, 190 on the
+# enterprise Ultrastars here, a composite field on NVMe) and every call needs root.
+#
+# Entries are grouped HDD first, then SSD/NVMe, because the two groups have different
+# safe temperature ranges and the dashboard addresses them as two separate cells by
+# array index. Rotational flag from sysfs decides the group (nvme is always SSD).
+#
+# disk_label is what DSM Storage Manager calls the drive, so a hot number on the
+# dashboard maps straight onto a bay in the UI: /dev/sataN is bay N-1 (sata2 = disk 1),
+# and the M.2 NVMe is "M". Derived here rather than in config so pulling a drive cannot
+# leave the dashboard labelling the remaining ones wrong.
+# ash/busybox-safe: no arrays, POSIX test/arithmetic.
+disks_json() {
+  [ -x "$SYNODISK" ] || return 0
+  local hdd="" ssd="" id path model temp dev rot kind label entry
+  # One awk pass over both enum outputs -> "id|path|model|temp" lines. The DSM output
+  # really does spell it "Tempeture", and it is the last line of each disk block.
+  while IFS='|' read -r id path model temp; do
+    [ -n "$path" ] || continue
+    case "$temp" in ''|*[!0-9]*) continue ;; esac   # missing / -1 -> skip this disk
+    dev=${path#/dev/}
+    rot=1
+    [ -r "/sys/block/$dev/queue/rotational" ] && rot=$(cat "/sys/block/$dev/queue/rotational" 2>/dev/null)
+    case "$dev" in nvme*) rot=0 ;; esac
+    if [ "$rot" = "0" ]; then kind=ssd; else kind=hdd; fi
+    case "$dev" in
+      nvme*)  label="M" ;;                        # the single M.2 slot
+      sata[0-9]*) label=$(( ${dev#sata} - 1 )) ;; # sata2 -> disk 1, sata3 -> disk 2, ...
+      *)      label="?" ;;
+    esac
+    entry=$(printf '{"dev":"%s","label":"%s","model":"%s","type":"%s","temp_c":%s}' \
+      "$dev" "$label" "$model" "$kind" "$temp")
+    if [ "$kind" = "ssd" ]; then ssd="$ssd${ssd:+,}$entry"; else hdd="$hdd${hdd:+,}$entry"; fi
+  done <<-EOD
+	$( { "$SYNODISK" --enum -t internal; "$SYNODISK" --enum -t cache; } 2>/dev/null | awk '
+	    /Disk path:/  { p=$NF }
+	    /Disk model:/ { sub(/^[^:]*: */,""); gsub(/[ \t]+$/,""); gsub(/[ \t][ \t]+/," "); m=$0 }
+	    /Tempeture:/  { printf "%s|%s|%s|%s\n", ++n, p, m, $(NF-1) }' )
+	EOD
+  [ -n "$hdd$ssd" ] || return 0
+  printf '"disks":[%s]' "$hdd${hdd:+${ssd:+,}}$ssd"
 }
 
 # ---------- last-known-good picker (df / mdstat can fail for a single cycle) ----------
@@ -216,6 +233,7 @@ CACHE_TTL="${CACHE_TTL:-60}"          # max seconds to reuse a stale value befor
 disk_cache=""; disk_cache_ts=0
 vol_cache="";  vol_cache_ts=0
 raid_cache=""; raid_cache_ts=0
+disks_cache=""; disks_cache_ts=0
 
 echo "[nas75-agent] id=$AGENT_ID hub=$URL iface=${NET_IFACE:-none}" >&2
 NET_LOG=1                                  # from here on, log every NIC state change
@@ -280,14 +298,22 @@ while :; do
   raid_out=$(cache_pick "$raid_fresh" "$raid_cache" "$raid_cache_ts" "$now")
   [ -n "$raid_fresh" ] && { raid_cache=$raid_fresh; raid_cache_ts=$now; }
 
-  # cpu temperature: cheap sysfs read, collected fresh (no cache)
-  temp_out=$(cpu_temp_json)
+  # disks: synodisk forks a process (~20ms for both enums), so refresh it on a slow
+  # interval and reuse in between rather than paying that on every 2s push. A cache
+  # older than DISKS_STALE is dropped so a persistently failing synodisk omits the
+  # field instead of pinning stale temperatures on the dashboard forever.
+  if [ $((now - disks_cache_ts)) -ge "$DISKS_INTERVAL" ]; then
+    disks_fresh=$(disks_json)
+    [ -n "$disks_fresh" ] && { disks_cache=$disks_fresh; disks_cache_ts=$now; }
+  fi
+  disks_out=$disks_cache
+  [ -n "$disks_out" ] && [ $((now - disks_cache_ts)) -gt "$DISKS_STALE" ] && disks_out=""
 
   # extra (§4.4): join only the non-empty NAS-specific fragments
   extra=""
   [ -n "$vol_out" ] && extra="$vol_out"
   [ -n "$raid_out" ] && extra="$extra${extra:+,}$raid_out"
-  [ -n "$temp_out" ] && extra="$extra${extra:+,}$temp_out"
+  [ -n "$disks_out" ] && extra="$extra${extra:+,}$disks_out"
 
   # gpus is required by the protocol -> always [] on a NAS.
   payload=$(printf '{"v":1,"id":"%s","ts":%d,"os":"linux",%s%s%s%s%s"gpus":[],"extra":{%s}}' \
