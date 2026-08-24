@@ -121,20 +121,28 @@ async function loadPane(idx, { force = false } = {}) {
   const ctrl = new AbortController();
   inflight.set(idx, ctrl);
   let timedOut = false;
-  const timer = setTimeout(() => { timedOut = true; ctrl.abort(); }, 5000);
+  const timer = setTimeout(() => { timedOut = true; ctrl.abort(); }, 10000);
   try {
     const r = await fetch(`/api/history?target=${encodeURIComponent(p.target)}&range=${curRange}`, { cache: 'no-store', signal: ctrl.signal });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const j = await r.json();
     if (inflight.get(idx) !== ctrl) return;   // superseded: newer request owns the pane
+    // B19: clear the overlay only once the chart is actually on screen. Clearing first
+    // meant a throw inside drawMulti left the pane showing a complete-looking chart
+    // under a "load failed" overlay, and reported a render bug as a network one.
+    try {
+      drawMulti(canvas, j.series || {}, legend);
+    } catch (e) {
+      paneError(idx, `渲染失败：${e?.message || e}`);
+      return;
+    }
     paneErrorClear(idx);
-    drawMulti(canvas, j.series || {}, legend);
   } catch (e) {
     if (inflight.get(idx) !== ctrl) return;   // aborted by a newer request, not a failure
     // Keep whatever is already drawn — a stale chart plus a visible notice beats
     // silently wiping the pane to blank.
     paneError(idx, timedOut
-      ? `加载超时（${curRange} 数据量较大）`
+      ? `加载超时（${curRange}）`
       : `加载失败：${e?.message || e}`);
   } finally {
     clearTimeout(timer);
