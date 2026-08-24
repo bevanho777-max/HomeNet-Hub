@@ -13,6 +13,14 @@ INTERVAL="${INTERVAL:-2}"          # 推送间隔秒
 NET_IFACE="${NET_IFACE:-}"         # 主网卡,缺省取默认路由网卡
 GPU_NAMES="${GPU_NAMES:-}"         # 可选:逗号分隔卡名,按 idx 对应(AMD sysfs 拿不到型号名)
 
+# litellm 采集(仅网关机启用):不设 LITELLM_PG_DSN 就整段跳过,其余机器行为完全不变。
+# DSN 走 homenet_ro 只读账号;psql 在 litellm-db 容器内执行,故主机名用 localhost。
+LITELLM_PG_DSN="${LITELLM_PG_DSN:-}"
+LITELLM_CONTAINER="${LITELLM_CONTAINER:-litellm}"
+LITELLM_DB_CONTAINER="${LITELLM_DB_CONTAINER:-litellm-db}"
+LITELLM_TTL="${LITELLM_TTL:-45}"        # 真正采集的间隔秒(远大于 INTERVAL,不拖慢推送)
+LITELLM_STALE="${LITELLM_STALE:-180}"   # 缓存超过此秒数即丢弃,字段整体省略
+
 URL="${HUB_URL%/}/api/push/${AGENT_ID}"
 
 # ---------- 网卡探测(启动 + 运行期自愈) ----------
@@ -86,6 +94,68 @@ uptime_json() {
   awk '{printf "\"uptime_s\":%d,", $1}' /proc/uptime 2>/dev/null
 }
 
+# ---------- litellm 采集(仅网关机;整段受 LITELLM_PG_DSN 开关保护) ----------
+# 口径固定:当日窗口 + 排除 litellm 自身的后端健康探测(api_key=litellm-internal-health-check)
+# + 只算解析出模型的行(model<>''),滤掉鉴权失败噪声。绝不做全时段累计——历史有失败风暴。
+# 请求量按 model(实际部署名)拆,不按 model_group:27b 与 35b 溢出节点共用同一个 group。
+llm_sql() {
+  cat <<'SQL'
+WITH t AS (
+  SELECT * FROM "LiteLLM_DailyUserSpend"
+  WHERE date = to_char(now(),'YYYY-MM-DD')
+    AND api_key <> 'litellm-internal-health-check'
+), llm AS (
+  SELECT * FROM t WHERE COALESCE(model,'') <> ''
+)
+SELECT 'S|'||COALESCE(ROUND(100.0*SUM(cache_read_input_tokens)/NULLIF(SUM(prompt_tokens),0),1)::text,'')
+        ||'|'||COALESCE(ROUND(100.0*SUM(successful_requests)/NULLIF(SUM(api_requests),0),1)::text,'')
+        ||'|'||COALESCE(SUM(api_requests)::text,'0')
+FROM llm
+UNION ALL
+SELECT 'M|'||tag||'|'||reqs::text FROM (
+  SELECT CASE WHEN model LIKE '%qwen3.8-27b%' THEN '27b'
+              WHEN model LIKE '%qwen3.6-35b%' THEN '35b'
+              WHEN model LIKE '%mxbai-embed%' THEN 'emb'
+              ELSE 'other' END AS tag,
+         SUM(api_requests) AS reqs
+  FROM llm GROUP BY 1
+) x;
+SQL
+}
+
+llm_isnum() { case "$1" in ''|*[!0-9.]*) return 1;; *) return 0;; esac; }
+
+# 输出 extra.litellm 的 JSON 片段(不含外层花括号),失败输出空串 → 字段整体省略。
+llm_collect() {
+  local raw stats logs ch sp rt r5 m1 m2 m3 out=""
+  [ -n "$LITELLM_PG_DSN" ] || return 0      # 未启用则整段跳过(主循环也有守卫,这里保证函数自洽)
+  raw=$(llm_sql | timeout 6 docker exec -i "$LITELLM_DB_CONTAINER" \
+          psql "$LITELLM_PG_DSN" -tAq 2>/dev/null) || raw=""
+  stats=$(printf '%s\n' "$raw" | grep '^S|' | head -1)
+  if [ -n "$stats" ]; then
+    ch=$(printf '%s' "$stats" | cut -d'|' -f2)
+    sp=$(printf '%s' "$stats" | cut -d'|' -f3)
+    rt=$(printf '%s' "$stats" | cut -d'|' -f4)
+    llm_isnum "$ch" && out="$out\"cache_hit_pct\":$ch,"
+    llm_isnum "$sp" && out="$out\"success_pct\":$sp,"
+    llm_isnum "$rt" && out="$out\"reqs_today\":$rt,"
+    # 三个槽位固定顺序 27b/35b/emb,当日无该模型请求记 0(而非缺失),避免卡片小格错位
+    m1=$(printf '%s\n' "$raw" | awk -F'|' '$1=="M" && $2=="27b"{print $3; exit}')
+    m2=$(printf '%s\n' "$raw" | awk -F'|' '$1=="M" && $2=="35b"{print $3; exit}')
+    m3=$(printf '%s\n' "$raw" | awk -F'|' '$1=="M" && $2=="emb"{print $3; exit}')
+    llm_isnum "$m1" || m1=0; llm_isnum "$m2" || m2=0; llm_isnum "$m3" || m3=0
+    out="$out\"by_model\":{\"m1\":$m1,\"m1_label\":\"27b\",\"m2\":$m2,\"m2_label\":\"35b\",\"m3\":$m3,\"m3_label\":\"emb\"},"
+  fi
+  # 近 5 分钟入站 LLM 请求:走访问日志,天然不含 litellm→后端的健康探测(那些不是入站 HTTP)。
+  # 日志为空是常态(流量稀疏),要与"取不到日志"区分:前者记 0,后者省略字段。
+  if logs=$(timeout 5 docker logs --since 5m "$LITELLM_CONTAINER" 2>/dev/null); then
+    r5=$(printf '%s\n' "$logs" \
+      | grep -cE '"POST /v1/(chat/completions|embeddings|responses|completions)[^"]*" [0-9]{3}' || true)
+    llm_isnum "$r5" && out="$out\"reqs_5m\":$r5,"
+  fi
+  [ -n "$out" ] && printf '"litellm":{%s}' "${out%,}"
+}
+
 gpus_json() {  # 输出完整 "gpus":[...] 片段(必填,无卡为 [])
   local out="" i=0 d util vu vt hw tmp pw name frag
   case "$GPU_MODE" in
@@ -133,7 +203,11 @@ NET_RETRY_TICKS="${NET_RETRY_TICKS:-15}"   # NET_OK=0 时每 N 拍重探(默认 
 net_retry=0
 prev_ts=$(date +%s)
 
-echo "[homenet-agent] id=$AGENT_ID hub=$URL iface=${NET_IFACE:-none} gpu=$GPU_MODE cards=${#AMD_CARDS[@]}" >&2
+# litellm 采集的 last-known-good 缓存:真正采集每 LITELLM_TTL 秒一次,其余拍复用上次结果。
+# 推送用 curl -m 1,采集绝不能跟在它的预算里,所以这里跟 nas75 agent 的 DISKS_INTERVAL 同构。
+llm_cache=""; llm_cache_ts=0
+
+echo "[homenet-agent] id=$AGENT_ID hub=$URL iface=${NET_IFACE:-none} gpu=$GPU_MODE cards=${#AMD_CARDS[@]} litellm=$([ -n "$LITELLM_PG_DSN" ] && echo on || echo off)" >&2
 NET_LOG=1                                  # 之后网卡状态每次变化都记一行
 
 # ---------- 主循环 ----------
@@ -179,9 +253,22 @@ while :; do
   fi
   prev_ts=$now
 
-  payload=$(printf '{"v":1,"id":"%s","ts":%d,"os":"linux",%s%s%s%s%s%s,"extra":{}}' \
+  # litellm:每 LITELLM_TTL 秒才真采一次(PG ~160ms + docker logs ~70ms),其余拍走缓存。
+  # 缓存超过 LITELLM_STALE 未刷新就整体丢弃,宁可小格显示 "—" 也不展示陈旧数字。
+  llm_extra=""
+  if [ -n "$LITELLM_PG_DSN" ]; then
+    if [ $((now - llm_cache_ts)) -ge "$LITELLM_TTL" ]; then
+      llm_fresh=$(llm_collect)
+      [ -n "$llm_fresh" ] && { llm_cache=$llm_fresh; llm_cache_ts=$now; }
+    fi
+    llm_extra="$llm_cache"
+    [ -n "$llm_extra" ] && [ $((now - llm_cache_ts)) -gt "$LITELLM_STALE" ] && llm_extra=""
+  fi
+
+  payload=$(printf '{"v":1,"id":"%s","ts":%d,"os":"linux",%s%s%s%s%s%s,"extra":{%s}}' \
     "$AGENT_ID" "$now" \
-    "$(uptime_json)" "$cpu_json" "$(mem_json)" "$(disk_json)" "$net_json" "$(gpus_json)")
+    "$(uptime_json)" "$cpu_json" "$(mem_json)" "$(disk_json)" "$net_json" "$(gpus_json)" \
+    "$llm_extra")
 
   curl -sf -m 1 --noproxy '*' \
     -H "X-Push-Token: $PUSH_TOKEN" \
