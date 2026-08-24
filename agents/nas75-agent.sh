@@ -41,7 +41,15 @@ if [ -f "$PIDFILE" ]; then
   fi
 fi
 echo "$$" > "$PIDFILE" 2>/dev/null || true
-trap 'rm -f "$PIDFILE" 2>/dev/null' EXIT INT TERM
+# Clean the pidfile on any exit. INT/TERM must exit explicitly: a handler that only
+# cleans up lets bash resume the main loop afterwards, so the agent would ignore
+# SIGTERM entirely and could only be stopped with kill -9 (leaving the pidfile behind,
+# since kill -9 runs no trap). Exiting here re-triggers the EXIT trap, which does the
+# actual removal. Note the loop's `sleep` is a foreground child, so the signal is
+# handled after it returns -- up to INTERVAL seconds late.
+trap 'rm -f "$PIDFILE" 2>/dev/null' EXIT
+trap 'exit 143' TERM        # 128 + 15
+trap 'exit 130' INT         # 128 + 2
 
 # ---------- NIC discovery (startup + runtime self-heal) ----------
 # An explicit NET_IFACE pins the adapter and is never rewritten at runtime; otherwise
