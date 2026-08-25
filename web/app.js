@@ -274,9 +274,65 @@ function applyConfig(first) {
 }
 
 // ── clock ──
+// 双时区。用 IANA 时区名交给 Intl 处理夏令时(美西 8 月 PDT 与 1 月 PST 差一小时,
+// 这里不做任何偏移硬编码)。formatToParts 一次调用同时拿到显示串和当地小时,
+// 昼夜判定不再多格式化一遍。
+const CLOCK_ZONES = [
+  { key: 'CN', tz: 'Asia/Shanghai' },
+  { key: 'US', tz: 'America/Los_Angeles' },
+];
+const _clockFmt = new Map();   // tz  -> Intl.DateTimeFormat(只构造一次)
+const _clockEls = new Map();   // key -> { row, icon, time }
+
+function clockFmt(tz) {
+  let f = _clockFmt.get(tz);
+  if (!f) {
+    f = new Intl.DateTimeFormat('sv-SE', {
+      timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+    });
+    _clockFmt.set(tz, f);
+  }
+  return f;
+}
+
+function clockEls(key) {
+  let e = _clockEls.get(key);
+  if (!e || !e.row.isConnected) {
+    const row = document.querySelector(`.tzrow[data-z="${key}"]`);
+    if (!row) return null;
+    e = { row, icon: row.querySelector('.tzicon'), time: row.querySelector('.tztime') };
+    _clockEls.set(key, e);
+  }
+  return e;
+}
+
 function tickClock() {
-  const el = $('#clock');
-  if (el && CONFIG?.header?.clock !== false) el.textContent = new Date().toLocaleTimeString('zh-CN');
+  const box = $('#clock');
+  if (!box) return;
+  const on = CONFIG?.header?.clock !== false;
+  box.hidden = !on;
+  if (!on) return;
+  const now = new Date();
+  for (const z of CLOCK_ZONES) {
+    const e = clockEls(z.key);
+    if (!e) continue;
+    const parts = clockFmt(z.tz).formatToParts(now);
+    const g = (t) => parts.find((x) => x.type === t)?.value || '';
+    const text = `${g('year')}-${g('month')}-${g('day')} ${g('hour')}:${g('minute')}:${g('second')}`;
+    // 每秒只动这一处文本;整块 DOM 不重建。
+    if (e.time.textContent !== text) e.time.textContent = text;
+    // 图标与冷暖 class 只在昼夜翻转的那一秒改,平时不碰。
+    const day = Number(g('hour')) >= 6 && Number(g('hour')) < 18;
+    // 判据用"目标 class 是否已在"而不是"day class 与 day 是否相等" —— 后者在首次渲染
+    // 且当地正处夜晚时会误判为无需变更,导致 night class 永远加不上(HTML 初始两个 class 都没有)。
+    const want = day ? 'day' : 'night';
+    if (!e.row.classList.contains(want)) {
+      e.row.classList.toggle('day', day);
+      e.row.classList.toggle('night', !day);
+      e.icon.textContent = day ? '\u2600\ufe0f' : '\uD83C\uDF19';
+    }
+  }
 }
 
 // ── token detail modal ──

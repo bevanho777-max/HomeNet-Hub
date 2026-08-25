@@ -71,16 +71,30 @@ html, body {
 }
 
 /* ---------- 顶栏 ---------- */
-.topbar { display: flex; align-items: center; justify-content: space-between; gap: var(--s3); padding: var(--s5) var(--s6) var(--s3); }
+.topbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+          gap: var(--s3); row-gap: var(--s2); padding: var(--s5) var(--s6) var(--s3); }
 .brand { display: flex; align-items: center; gap: var(--s3); }
 .brand .logo { color: var(--cyan); font-size: 18px; filter: drop-shadow(0 0 8px rgba(79,227,208,0.6)); }
 .brand h1 { font-size: 17px; font-weight: 600; margin: 0; letter-spacing: 1px; }
-.meta { display: flex; align-items: center; gap: var(--s4); font-size: 12px; color: var(--muted); }
+/* gap 用 --s6:Online 与右侧时钟之间要留出明显空档 */
+.meta { display: flex; align-items: center; gap: var(--s6); font-size: 12px; color: var(--muted); }
 .conn { display: inline-flex; align-items: center; gap: var(--s2); }
 .conn::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--muted2); }
 .conn.ok::before { background: var(--green); box-shadow: 0 0 10px var(--green); animation: breathe 2.6s ease-in-out infinite; }
 .conn.warn::before { background: var(--yellow); box-shadow: 0 0 10px var(--yellow); animation: breathe 2.6s ease-in-out infinite; } /* B15: reconnecting */
 .conn.bad::before { background: var(--red); box-shadow: 0 0 10px var(--red); }
+
+/* ---------- 双时区时钟(右上) ---------- */
+/* 两行左对齐,让 ☀️/🌙 在竖直方向对齐成一列;整块相对 ● Online 垂直居中。 */
+.clock { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; line-height: 1.35; }
+.tzrow { display: inline-flex; align-items: center; gap: var(--s2); }
+/* 时间等宽:否则秒数变化时字宽抖动,整行会左右跳。 */
+.tztime { font-variant-numeric: tabular-nums; }
+/* 图标保持 emoji 本身的彩色(彩色 emoji 不受 CSS color 影响),冷暖色只作用于文字。 */
+.tzicon { font-style: normal; line-height: 1; }
+.tzname { font-weight: 600; letter-spacing: 0.5px; min-width: 1.7em; }
+.tzrow.day   .tzname, .tzrow.day   .tztime { color: var(--yellow); }
+.tzrow.night .tzname, .tzrow.night .tztime { color: var(--blue); }
 
 /* ---------- 服务健康条 ---------- */
 .chips { display: flex; flex-wrap: wrap; gap: var(--s2); padding: 0 var(--s6) var(--s2); }
