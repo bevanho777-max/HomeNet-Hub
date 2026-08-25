@@ -13,10 +13,12 @@
       <span id="conn" class="conn"></span>
       <!-- 双时区时钟:id 留在外层容器上,header.clock 显隐开关逻辑不变。
            每行结构固定,tickClock 只改 .tztime 的文本与 .tzrow 的昼夜 class。
-           图标用单色文本符号(非 emoji),这样冷暖色才受 CSS 控制。 -->
+           太阳用单色文本符号,月亮用内联 SVG(两圆布尔差挖出饱满月牙,缺口朝左上,
+           fill=currentColor 跟随行的冷暖色)。两个图标常驻 DOM,靠 day/night
+           class 切换显隐 —— 昼夜翻转时 JS 只改 class,不写图标内容。 -->
       <div id="clock" class="clock">
-        <span class="tzrow" data-z="CN"><i class="tzicon">☀︎</i><b class="tzname">CN</b><span class="tztime">—</span></span>
-        <span class="tzrow" data-z="US"><i class="tzicon">☾</i><b class="tzname">US</b><span class="tztime">—</span></span>
+        <span class="tzrow" data-z="CN"><i class="tzicon"><span class="ic-sun">☀︎</span><svg class="ic-moon" viewBox="0 0 16 16" aria-hidden="true"><mask id="moon-cn"><circle cx="8" cy="8" r="7" fill="#fff"/><circle cx="4" cy="6" r="6.2" fill="#000"/></mask><circle cx="8" cy="8" r="7" fill="currentColor" mask="url(#moon-cn)"/></svg></i><b class="tzname">CN</b><span class="tztime">—</span></span>
+        <span class="tzrow" data-z="US"><i class="tzicon"><span class="ic-sun">☀︎</span><svg class="ic-moon" viewBox="0 0 16 16" aria-hidden="true"><mask id="moon-us"><circle cx="8" cy="8" r="7" fill="#fff"/><circle cx="4" cy="6" r="6.2" fill="#000"/></mask><circle cx="8" cy="8" r="7" fill="currentColor" mask="url(#moon-us)"/></svg></i><b class="tzname">US</b><span class="tztime">—</span></span>
       </div>
     </div>
   </header>

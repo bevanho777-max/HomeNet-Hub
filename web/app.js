@@ -301,7 +301,7 @@ function clockEls(key) {
   if (!e || !e.row.isConnected) {
     const row = document.querySelector(`.tzrow[data-z="${key}"]`);
     if (!row) return null;
-    e = { row, icon: row.querySelector('.tzicon'), time: row.querySelector('.tztime') };
+    e = { row, time: row.querySelector('.tztime') };
     _clockEls.set(key, e);
   }
   return e;
@@ -328,11 +328,10 @@ function tickClock() {
     // 且当地正处夜晚时会误判为无需变更,导致 night class 永远加不上(HTML 初始两个 class 都没有)。
     const want = day ? 'day' : 'night';
     if (!e.row.classList.contains(want)) {
+      // 两个图标常驻 DOM,由 CSS 按 day/night 切显隐,所以这里只切 class,
+      // 不再写图标内容 —— 月亮是内联 SVG,textContent 写不了。
       e.row.classList.toggle('day', day);
       e.row.classList.toggle('night', !day);
-      // 文本字型(非 emoji):☀ 带 U+FE0E 强制文本呈现,☾ 本身就没有 emoji 变体。
-      // 彩色 emoji 会无视 CSS color,换成单色符号后冷暖色才能落到图标上。
-      e.icon.textContent = day ? '\u2600\ufe0e' : '\u263e';
     }
   }
 }

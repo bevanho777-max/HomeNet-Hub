@@ -97,9 +97,20 @@ html, body {
   font-style: normal; line-height: 1;
   font-family: "Segoe UI Symbol", "Segoe UI", "Apple Symbols", var(--font);
   font-variant-emoji: text;
-  font-size: 13px; width: 1.1em; text-align: center;
-  text-shadow: 0 0 7px currentColor;   /* 细笔画符号在暗底上发虚,加一层同色辉光提亮 */
+  font-size: 13px; width: 1.15em; height: 1em;
+  display: inline-flex; align-items: center; justify-content: center;
 }
+/* 太阳:文本字形,细笔画在暗底发虚,补一层同色辉光。 */
+.tzicon .ic-sun { text-shadow: 0 0 7px currentColor; }
+/* 月亮:内联 SVG,两圆布尔差(大圆 r7 挖去偏左上的 r6.2)得到饱满月牙,缺口朝左上,
+   与 emoji 月亮同向。fill=currentColor 所以跟着 .tzrow 的冷色走。
+   0.88em 是与 ☀ 字形对齐后的视觉配重:SVG 会铺满 em 盒,而字形只占其中约七成,
+   直接给 1em 月亮会明显比太阳胖一圈。 */
+.tzicon .ic-moon { width: 0.88em; height: auto; display: block; filter: drop-shadow(0 0 5px currentColor); }
+/* 两个图标常驻 DOM,按昼夜切显隐 —— JS 只需切 class,不写图标内容。 */
+.tzicon .ic-sun, .tzicon .ic-moon { display: none; }
+.tzrow.day   .ic-sun  { display: block; }
+.tzrow.night .ic-moon { display: block; }
 .tzname { font-weight: 600; letter-spacing: 0.5px; min-width: 1.7em; }
 /* 整行统一上色:图标/标签/时间都继承,冷暖一眼可分。 */
 .tzrow.day   { color: var(--yellow); }
