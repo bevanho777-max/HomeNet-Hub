@@ -95,49 +95,43 @@ uptime_json() {
 }
 
 # ---------- litellm 采集(仅网关机;整段受 LITELLM_PG_DSN 开关保护) ----------
-# 口径:从 LiteLLM_SpendLogs 明细按 **北京自然日** 重算,不用 DailyUserSpend 的 date 列 ——
-# 那个列是 litellm 硬编码 UTC 写的(startTime=_ensure_datetime_utc 后取日期串),只有天粒度,
-# 切不出北京的一天(北京一天横跨两个 UTC 桶)。
+# 读 LiteLLM_DailyUserSpend 预聚合表(SpendLogs 明细未启用)。
+#
+# 取桶方式:按 **北京当前日期** 去匹配 date 列,而不是容器的 UTC 日期。
+# date 列是 litellm 硬编码 UTC 写的、且只有天粒度,这一点改不了;能选的只是读哪个桶。
+# 取北京日期的效果:归零落在北京 00:00(而非 08:00),且北京 08:00-24:00 整个白天
+# 显示值与取 UTC 桶完全一致 —— 差异只发生在北京 00:00-08:00。
+#
+# 无法解决的局限:北京 00:00-08:00 的请求写在 UTC 前一天的桶里,永远不会出现在
+# "今天"的数里。该时段目标桶尚未创建,SUM 返回 NULL —— 这里刻意不 COALESCE 成 0,
+# 让字段整体省略、卡片显示 "—"(无数据),而不是谎报成 0 个请求。
+#
 # 保留原有两个过滤:排除 litellm 自身的后端探活(api_key=litellm-internal-health-check),
-# 只算解析出模型的行(model<>'')。四个指标共用同一个基集,成功率的分母就是 reqs_today。
+# 只算解析出模型的行(model<>''),滤掉鉴权失败噪声。
+# 成功率分母用 api_requests:该表满足 api_requests = successful + failed(全表 465 行
+# 无一例外),分母本就含失败数,不需要额外修正。
 # 请求量按 model(实际部署名)拆,不按 model_group:27b 与 35b 溢出节点共用同一个 group。
 llm_sql() {
   cat <<'SQL'
-WITH win AS (
-  -- "北京今天"的起点,换算成与 startTime 同构的 naive UTC 时间戳。
-  -- 换算必须放在常量侧:写成 "startTime" AT TIME ZONE ... >= ... 会让列被函数包住,
-  -- startTime 上的索引失效退化为全表扫(实测 15 万行 133ms vs 走索引 10ms)。
-  SELECT ((date_trunc('day', now() AT TIME ZONE 'Asia/Shanghai')
-           AT TIME ZONE 'Asia/Shanghai') AT TIME ZONE 'UTC') AS from_utc
-), t AS (
-  SELECT s.status, s.model, s.prompt_tokens,
-         -- 上游模型的 prompt 前缀缓存命中量。Anthropic 走顶层字段,OpenAI 兼容后端
-         -- (我们这两台 vLLM)走 prompt_tokens_details.cached_tokens,取法与 litellm
-         -- 自己聚合 cache_read_input_tokens 时一致。
-         COALESCE((s.metadata->'usage_object'->>'cache_read_input_tokens')::bigint,
-                  (s.metadata->'usage_object'->'prompt_tokens_details'->>'cached_tokens')::bigint,
-                  0) AS cache_read
-  FROM "LiteLLM_SpendLogs" s, win
-  WHERE s."startTime" >= win.from_utc
-    AND s.api_key <> 'litellm-internal-health-check'   -- litellm 自身的后端探活
-    AND COALESCE(s.model,'') <> ''                     -- 鉴权失败等噪声,无解析出的模型
+WITH t AS (
+  SELECT * FROM "LiteLLM_DailyUserSpend"
+  WHERE date = to_char(now() AT TIME ZONE 'Asia/Shanghai','YYYY-MM-DD')
+    AND api_key <> 'litellm-internal-health-check'
+), llm AS (
+  SELECT * FROM t WHERE COALESCE(model,'') <> ''
 )
--- E 行:明细表整体是否有数据。用来区分"今天还没有流量"(应显示 0)和
--- "spend logs 没开、表是空的"(应显示 —),后者不能报成 0。
-SELECT 'E|'||CASE WHEN EXISTS(SELECT 1 FROM "LiteLLM_SpendLogs") THEN '1' ELSE '0' END
+SELECT 'S|'||COALESCE(ROUND(100.0*SUM(cache_read_input_tokens)/NULLIF(SUM(prompt_tokens),0),1)::text,'')
+        ||'|'||COALESCE(ROUND(100.0*SUM(successful_requests)/NULLIF(SUM(api_requests),0),1)::text,'')
+        ||'|'||COALESCE(SUM(api_requests)::text,'')
+FROM llm
 UNION ALL
-SELECT 'S|'||COALESCE(ROUND(100.0*SUM(cache_read)/NULLIF(SUM(prompt_tokens),0),1)::text,'')
-        ||'|'||COALESCE(ROUND(100.0*COUNT(*) FILTER (WHERE status='success')/NULLIF(COUNT(*),0),1)::text,'')
-        ||'|'||COUNT(*)::text
-FROM t
-UNION ALL
-SELECT 'M|'||tag||'|'||n::text FROM (
+SELECT 'M|'||tag||'|'||reqs::text FROM (
   SELECT CASE WHEN model LIKE '%qwen3.8-27b%' THEN '27b'
               WHEN model LIKE '%qwen3.6-35b%' THEN '35b'
               WHEN model LIKE '%mxbai-embed%' THEN 'emb'
               ELSE 'other' END AS tag,
-         COUNT(*) AS n
-  FROM t GROUP BY 1
+         SUM(api_requests) AS reqs
+  FROM llm GROUP BY 1
 ) x;
 SQL
 }
@@ -150,11 +144,6 @@ llm_collect() {
   [ -n "$LITELLM_PG_DSN" ] || return 0      # 未启用则整段跳过(主循环也有守卫,这里保证函数自洽)
   raw=$(llm_sql | timeout 6 docker exec -i "$LITELLM_DB_CONTAINER" \
           psql "$LITELLM_PG_DSN" -tAq 2>/dev/null) || raw=""
-  # spend logs 没开时明细表是空的:PG 那四个指标一律省略,让卡片显示 "—",
-  # 否则会把"功能没开"误报成"今天 0 个请求"。reqs_5m 走 docker 日志,与此无关,照常采。
-  case "$(printf '%s\n' "$raw" | grep '^E|' | head -1)" in
-    'E|0') raw='' ;;
-  esac
   stats=$(printf '%s\n' "$raw" | grep '^S|' | head -1)
   if [ -n "$stats" ]; then
     ch=$(printf '%s' "$stats" | cut -d'|' -f2)
@@ -163,12 +152,15 @@ llm_collect() {
     llm_isnum "$ch" && out="$out\"cache_hit_pct\":$ch,"
     llm_isnum "$sp" && out="$out\"success_pct\":$sp,"
     llm_isnum "$rt" && out="$out\"reqs_today\":$rt,"
-    # 三个槽位固定顺序 27b/35b/emb,当日无该模型请求记 0(而非缺失),避免卡片小格错位
-    m1=$(printf '%s\n' "$raw" | awk -F'|' '$1=="M" && $2=="27b"{print $3; exit}')
-    m2=$(printf '%s\n' "$raw" | awk -F'|' '$1=="M" && $2=="35b"{print $3; exit}')
-    m3=$(printf '%s\n' "$raw" | awk -F'|' '$1=="M" && $2=="emb"{print $3; exit}')
-    llm_isnum "$m1" || m1=0; llm_isnum "$m2" || m2=0; llm_isnum "$m3" || m3=0
-    out="$out\"by_model\":{\"m1\":$m1,\"m1_label\":\"27b\",\"m2\":$m2,\"m2_label\":\"35b\",\"m3\":$m3,\"m3_label\":\"emb\"},"
+    # 三个槽位固定顺序 27b/35b/emb。桶内没有该模型的请求记 0(而非缺失),避免小格错位;
+    # 但整个桶都不存在时(北京 00:00-08:00)连同 reqs_today 一起省略,不报成 0 0 0。
+    if llm_isnum "$rt"; then
+      m1=$(printf '%s\n' "$raw" | awk -F'|' '$1=="M" && $2=="27b"{print $3; exit}')
+      m2=$(printf '%s\n' "$raw" | awk -F'|' '$1=="M" && $2=="35b"{print $3; exit}')
+      m3=$(printf '%s\n' "$raw" | awk -F'|' '$1=="M" && $2=="emb"{print $3; exit}')
+      llm_isnum "$m1" || m1=0; llm_isnum "$m2" || m2=0; llm_isnum "$m3" || m3=0
+      out="$out\"by_model\":{\"m1\":$m1,\"m1_label\":\"27b\",\"m2\":$m2,\"m2_label\":\"35b\",\"m3\":$m3,\"m3_label\":\"emb\"},"
+    fi
   fi
   # 近 5 分钟入站 LLM 请求:走访问日志,天然不含 litellm→后端的健康探测(那些不是入站 HTTP)。
   # 日志为空是常态(流量稀疏),要与"取不到日志"区分:前者记 0,后者省略字段。
