@@ -85,16 +85,25 @@ html, body {
 .conn.bad::before { background: var(--red); box-shadow: 0 0 10px var(--red); }
 
 /* ---------- 双时区时钟(右上) ---------- */
-/* 两行左对齐,让 ☀️/🌙 在竖直方向对齐成一列;整块相对 ● Online 垂直居中。 */
+/* 两行左对齐,让 ☀/☾ 在竖直方向对齐成一列;整块相对 ● Online 垂直居中。 */
 .clock { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; line-height: 1.35; }
 .tzrow { display: inline-flex; align-items: center; gap: var(--s2); }
 /* 时间等宽:否则秒数变化时字宽抖动,整行会左右跳。 */
 .tztime { font-variant-numeric: tabular-nums; }
-/* 图标保持 emoji 本身的彩色(彩色 emoji 不受 CSS color 影响),冷暖色只作用于文字。 */
-.tzicon { font-style: normal; line-height: 1; }
+/* 图标用单色文本符号(☀ U+2600+FE0E / ☾ U+263E),不是彩色 emoji —— 彩色 emoji 由字体
+   自带调色板绘制,会无视 CSS color。字体栈把 Segoe UI Symbol 提到最前,避免 Windows 回退
+   到 Segoe UI Emoji 又变回彩色;font-variant-emoji 是新浏览器上的第二道保险。 */
+.tzicon {
+  font-style: normal; line-height: 1;
+  font-family: "Segoe UI Symbol", "Segoe UI", "Apple Symbols", var(--font);
+  font-variant-emoji: text;
+  font-size: 13px; width: 1.1em; text-align: center;
+  text-shadow: 0 0 7px currentColor;   /* 细笔画符号在暗底上发虚,加一层同色辉光提亮 */
+}
 .tzname { font-weight: 600; letter-spacing: 0.5px; min-width: 1.7em; }
-.tzrow.day   .tzname, .tzrow.day   .tztime { color: var(--yellow); }
-.tzrow.night .tzname, .tzrow.night .tztime { color: var(--blue); }
+/* 整行统一上色:图标/标签/时间都继承,冷暖一眼可分。 */
+.tzrow.day   { color: var(--yellow); }
+.tzrow.night { color: var(--blue); }
 
 /* ---------- 服务健康条 ---------- */
 .chips { display: flex; flex-wrap: wrap; gap: var(--s2); padding: 0 var(--s6) var(--s2); }

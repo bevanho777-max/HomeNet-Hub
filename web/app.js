@@ -330,7 +330,9 @@ function tickClock() {
     if (!e.row.classList.contains(want)) {
       e.row.classList.toggle('day', day);
       e.row.classList.toggle('night', !day);
-      e.icon.textContent = day ? '\u2600\ufe0f' : '\uD83C\uDF19';
+      // 文本字型(非 emoji):☀ 带 U+FE0E 强制文本呈现,☾ 本身就没有 emoji 变体。
+      // 彩色 emoji 会无视 CSS color,换成单色符号后冷暖色才能落到图标上。
+      e.icon.textContent = day ? '\u2600\ufe0e' : '\u263e';
     }
   }
 }

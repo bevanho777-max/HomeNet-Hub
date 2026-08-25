@@ -12,10 +12,11 @@
     <div class="meta">
       <span id="conn" class="conn"></span>
       <!-- 双时区时钟:id 留在外层容器上,header.clock 显隐开关逻辑不变。
-           每行结构固定,tickClock 只改 .tztime 的文本与 .tzrow 的昼夜 class。 -->
+           每行结构固定,tickClock 只改 .tztime 的文本与 .tzrow 的昼夜 class。
+           图标用单色文本符号(非 emoji),这样冷暖色才受 CSS 控制。 -->
       <div id="clock" class="clock">
-        <span class="tzrow" data-z="CN"><i class="tzicon">☀️</i><b class="tzname">CN</b><span class="tztime">—</span></span>
-        <span class="tzrow" data-z="US"><i class="tzicon">🌙</i><b class="tzname">US</b><span class="tztime">—</span></span>
+        <span class="tzrow" data-z="CN"><i class="tzicon">☀︎</i><b class="tzname">CN</b><span class="tztime">—</span></span>
+        <span class="tzrow" data-z="US"><i class="tzicon">☾</i><b class="tzname">US</b><span class="tztime">—</span></span>
       </div>
     </div>
   </header>
