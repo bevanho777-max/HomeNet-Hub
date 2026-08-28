@@ -57,6 +57,23 @@
     </div>
   </div>
 
+  <!-- machine detail modal (§6): same shell as the token modal, History's chart inside -->
+  <div class="modal-mask" id="machineModal">
+    <div class="modal">
+      <div class="modal-head">
+        <h2 id="machineModalTitle"></h2>
+        <button class="modal-close" id="machineModalClose"></button>
+      </div>
+      <div class="ranges" id="machineModalRanges"></div>
+      <div class="histWrap" style="margin-top:16px">
+        <canvas id="machineModalCanvas" height="300" style="width:100%;display:block"></canvas>
+        <div class="histErr" id="machineModalErr" hidden></div>
+      </div>
+      <div class="legend" id="machineModalLegend" style="margin-top:12px"></div>
+      <div class="note" id="machineModalNote" hidden></div>
+    </div>
+  </div>
+
   <script type="module" src="/app.js"></script>
 </body>
 </html>

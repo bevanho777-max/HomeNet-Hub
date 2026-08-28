@@ -177,11 +177,33 @@ export function normalize(raw, target, metricTemplates) {
 }
 
 // Scalar metric values worth persisting to the timeseries (rings + history).
-export function samplableRows(targetId, normalized) {
+// B23: a `part_thresholds` metric has no scalar of its own (its value is null), so a
+// cell like nas75's seven drive temperatures never reached the timeseries at all and
+// could not be charted. `sample_parts` in metrics.yaml opts one into a derived scalar
+// -- "max" records the hottest member as `<metric>_max`, which is the right summary
+// for a threshold group: if the worst part is safe, all of them are. Opt-in, because
+// the reduction is only meaningful for comparable parts (it would be nonsense for the
+// gateway's per-model request counts), and a metric without the field behaves exactly
+// as before.
+const PART_REDUCERS = {
+  max: (xs) => Math.max(...xs),
+  min: (xs) => Math.min(...xs),
+  avg: (xs) => xs.reduce((a, b) => a + b, 0) / xs.length,
+  sum: (xs) => xs.reduce((a, b) => a + b, 0),
+};
+
+export function samplableRows(targetId, normalized, metricTemplates) {
   const rows = [];
   for (const [metric, m] of Object.entries(normalized.metrics || {})) {
     if (typeof m.value === 'number' && Number.isFinite(m.value)) {
       rows.push([targetId, metric, m.value]);
+    }
+    const how = metricTemplates?.[metric]?.sample_parts;
+    const reduce = how && PART_REDUCERS[how];
+    if (reduce && Array.isArray(m.parts) && m.parts.length) {
+      // parts carry formatted display strings, so read the number back off them.
+      const xs = m.parts.map((p) => Number(p.display)).filter((n) => Number.isFinite(n));
+      if (xs.length) rows.push([targetId, `${metric}_${how}`, reduce(xs)]);
     }
   }
   return rows;

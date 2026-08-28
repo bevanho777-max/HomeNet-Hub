@@ -16,7 +16,7 @@ export function renderToken(gridCard, target, snap) {
 
   if (!tk || !tk.columns?.length) {
     return card({
-      key: target.id, title, tag, accent, clickable: gridCard.clickable === 'detail',
+      key: target.id, title, tag, accent, kind: 'token', clickable: gridCard.clickable === 'detail',
       body: `<div class="note">No usage data${snap?.error ? ` (${esc(snap.error)})` : ''}</div>`,
     });
   }
@@ -58,5 +58,5 @@ export function renderToken(gridCard, target, snap) {
     + (sparkHtml ? `<div class="spark">${sparkHtml}</div>` : '')
     + note;
 
-  return card({ key: target.id, title, tag, body, accent, clickable: gridCard.clickable === 'detail' });
+  return card({ key: target.id, title, tag, body, accent, kind: 'token', clickable: gridCard.clickable === 'detail' });
 }

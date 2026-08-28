@@ -61,6 +61,8 @@ export function kvItem(label, m) {
 }
 
 // Card model consumed by mountCards (matches the .24 shell-persist contract).
-export function card({ key, title, tag = '', body, accent = '', clickable = false, stale = false }) {
-  return { key, title, tag, body, accent, clickable, stale };
+// B23: `kind` lets mountCards route a click to the right modal without re-deriving
+// the card's type from the layout — the renderer already knows what it built.
+export function card({ key, title, tag = '', body, accent = '', clickable = false, stale = false, kind = '' }) {
+  return { key, title, tag, body, accent, clickable, stale, kind };
 }

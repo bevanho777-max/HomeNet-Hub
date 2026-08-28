@@ -8,6 +8,7 @@ import { renderService } from './renderers/service.js';
 import { renderStack } from './renderers/stack.js';
 import { renderInfo } from './renderers/info.js';
 import { initHistory, historyRefresh } from './renderers/history.js';
+import { initMachineDetail, openMachineModal, closeMachineModal, bindMachineModal } from './renderers/machine_detail.js';
 import { esc, statusLevel } from './renderers/common.js';
 
 const FAST_MS = 1500;     // snapshot poll (machine/GPU rhythm)
@@ -52,9 +53,20 @@ function mountCards(containerId, cards) {
     }
     el.classList.toggle('clickable', !!c.clickable);
     el.classList.toggle('stale', !!c.stale);
-    el.onclick = c.clickable ? () => openTokenModal(c.key) : null;
+    // B23: dispatch by card type. Every clickable card used to open the token modal,
+    // which was fine while the token card was the only one; a machine card needs its
+    // own. `onclick` (not addEventListener) so a re-render replaces the handler
+    // instead of stacking a new one on the persisted shell.
+    el.onclick = c.clickable ? () => openCardModal(c) : null;
   }
   container.querySelectorAll('.card').forEach((el) => { if (!seen.has(el.dataset.key)) el.remove(); });
+}
+
+// B23: which modal a card opens. `kind` comes from the renderer via card(), so the
+// routing lives with the card definition rather than being re-derived from the layout.
+function openCardModal(c) {
+  if (c.kind === 'machine') openMachineModal(c.key, `${c.title} Detail`);
+  else openTokenModal(c.key);
 }
 
 function updateBodyKeepRings(body, newHTML) {
@@ -208,6 +220,9 @@ async function snapTick() {
     const r = await fetchT('/api/snapshot', { cache: 'no-store' });
     if (!r.ok) throw new Error('http ' + r.status);
     lastSnap = await r.json();
+    // B23: the detail modal picks its default lines from the host's live role (GPU box
+    // / gateway / NAS), which is the same signal autoColor() reads below.
+    window.__lastSnap = lastSnap;
     failStreak = 0;
     setConn('ok');
     render();
@@ -268,7 +283,9 @@ function applyConfig(first) {
   $('#historyTitle').textContent = CONFIG.layout?.history?.title || '';
   $('#rawTitle').textContent = txt('raw_title', 'Raw JSON');
   $('#tokenModalClose').textContent = txt('modal_close', 'Close');
+  $('#machineModalClose').textContent = txt('modal_close', 'Close');
   initHistory(CONFIG);
+  initMachineDetail(CONFIG);
   render();
   if (first) console.log('[hub] config loaded etag=', CONFIG_ETAG);
 }
@@ -417,6 +434,13 @@ function drawTokenChart(series) {
 // ── boot ──
 $('#tokenModalClose').onclick = closeTokenModal;
 $('#tokenModal').onclick = (e) => { if (e.target.id === 'tokenModal') closeTokenModal(); };
+bindMachineModal();
+// Esc closes whichever modal is open — the token one had no keyboard exit either.
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  closeMachineModal();
+  closeTokenModal();
+});
 
 // B15 §4: relax the snapshot cadence on touch / narrow devices to save battery
 // (desktop unchanged). Evaluated as optional — a mild 2× relaxation only.

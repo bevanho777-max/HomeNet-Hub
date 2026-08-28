@@ -121,7 +121,7 @@ export class Scheduler {
       if (raw == null) throw new Error(`unsupported source type: ${type}`);
       const norm = normalize(raw, target, metrics);
       snapshot.update(target.id, { online: true, metrics: norm.metrics });
-      const rows = samplableRows(target.id, norm);
+      const rows = samplableRows(target.id, norm, metrics);
       if (rows.length) tsdb.record(rows);
     } catch (e) {
       snapshot.update(target.id, { online: false, error: String(e?.message || e) });
@@ -135,7 +135,7 @@ export class Scheduler {
     const norm = normalize(body || {}, target, metrics);
     // §7.5 原样保留原始 body.extra 到快照(缺省则 update 内部沿用上次)
     this.ctx.snapshot.update(target.id, { online: true, metrics: norm.metrics, extra: body.extra });
-    const rows = samplableRows(target.id, norm);
+    const rows = samplableRows(target.id, norm, metrics);
     if (rows.length) this.ctx.tsdb.record(rows);
   }
 

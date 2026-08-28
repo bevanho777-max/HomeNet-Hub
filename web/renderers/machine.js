@@ -6,9 +6,11 @@ export function renderMachine(gridCard, target, snap, metrics) {
   const accent = target.color || '';
 
   if (!snap || snap.online === false) {
+    // Still clickable while offline: the host has no live values but its history is
+    // exactly what you want to look at when it stops reporting.
     return card({
       key: target.id, title, tag: target.badge || '', accent,
-      stale: true,
+      stale: true, kind: 'machine', clickable: gridCard.clickable === 'detail',
       body: `<div class="note">Host offline / no data${snap?.error ? ` (${esc(snap.error)})` : ''}</div>`,
     });
   }
@@ -29,5 +31,8 @@ export function renderMachine(gridCard, target, snap, metrics) {
   }
 
   const body = `<div class="rings">${rings}</div>${items ? `<div class="kv">${items}</div>` : ''}`;
-  return card({ key: target.id, title, tag, body, accent, stale: snap.stale });
+  return card({
+    key: target.id, title, tag, body, accent, stale: snap.stale,
+    kind: 'machine', clickable: gridCard.clickable === 'detail',
+  });
 }
