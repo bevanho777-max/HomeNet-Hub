@@ -26,7 +26,21 @@ export class Tsdb {
         metric TEXT    NOT NULL,
         value  REAL    NOT NULL
       );
-      CREATE INDEX IF NOT EXISTS idx_target_metric_ts ON metrics(target, metric, ts);
+      -- B21: covering index. (target, metric, ts) located the rows fine, but "value"
+      -- was not in it, so every matched row still cost a table lookup to fetch it --
+      -- 418k lookups for a single metric at range=30d. That, not the scan, is what
+      -- made a 30d pane take seconds. Trailing "value" lets the bucket queries read
+      -- straight off the index (EXPLAIN now says COVERING INDEX) and never touch the
+      -- table. Built here in the constructor, which runs before the scheduler starts
+      -- and before we listen, so the ~25s first build cannot contend with a writer:
+      -- handlePush() calls record() with no try/catch, and a SQLITE_BUSY from a
+      -- concurrent build would surface as a 500 on /api/push and drop that sample.
+      CREATE INDEX IF NOT EXISTS idx_target_metric_ts_value ON metrics(target, metric, ts, value);
+      -- (target, metric, ts) is a strict prefix of the index above, so it can serve
+      -- nothing the covering one cannot. Dropping it frees ~455MB and one B-tree
+      -- update per INSERT. Ordered after the CREATE so there is never a window with
+      -- neither index present.
+      DROP INDEX IF EXISTS idx_target_metric_ts;
     `);
     this._ins = this.db.prepare('INSERT INTO metrics (ts, target, metric, value) VALUES (?, ?, ?, ?)');
     this._insMany = this.db.transaction((ts, rows) => {
