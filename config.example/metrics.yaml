@@ -8,6 +8,14 @@
 #   otherwise                -> level "ok"     (green)
 #   value === null           -> display "—", level "cool" (NEVER rendered as 0%)
 #   higher_is_better: true   -> threshold comparison is inverted.
+#
+# B23 (machine detail modal): two optional per-metric fields reach the frontend
+# verbatim and only matter inside that chart —
+#   axis:  "L" | "R"   which y-axis the line uses. Left is the renderer's fixed
+#                      0..100 scale (percentages and {v,max} ratios); anything
+#                      carrying its own unit (°C, W, counts) belongs on the
+#                      auto-scaling right axis. Defaults are built in per key.
+#   color: "#rrggbb"   line colour; falls back to a built-in palette.
 
 metrics:
   cpu:         { label: "CPU",     unit: "%",  thresholds: { warn: 70, danger: 90 } }
@@ -25,6 +33,58 @@ metrics:
   uptime:      { label: "Uptime",  format: "{d}d {h}h" }
   latency:     { label: "Latency", unit: "ms", thresholds: { warn: 800, danger: 2500 } }
   token_speed: { label: "t/s",     higher_is_better: true }
+
+  # ── NAS example (B20): volumes, RAID state, per-disk temperatures ──
+  # `divide: 1024` renders a G-valued pair as T; the ratio fed to the ring and to
+  # the timeseries is unaffected.
+  vol1_bytes:  { label: "Vol 1",   unit: "T",  format: "{v}/{max}T", divide: 1024, thresholds: { warn: 75, danger: 90 } }
+  vol2_bytes:  { label: "Vol 2",   unit: "T",  format: "{v}/{max}T", divide: 1024, thresholds: { warn: 75, danger: 90 } }
+  nas_disk_bytes: { label: "Disk", unit: "T",  format: "{v}/{max}T", divide: 1024, thresholds: { warn: 75, danger: 90 } }
+  # level_map turns a string status into a card colour without any thresholds.
+  raid:        { label: "RAID", level_map: { clean: ok, degraded: danger, resync: warn } }
+
+  # One cell per disk group. `part_thresholds` colours each disk on its own, so a
+  # hot drive stands out next to cold ones; the two tiers exist because the safe
+  # range differs (mechanical drives are rated 55-60C, SSD/NVMe up to ~70C).
+  # Pick your own numbers from your drives' datasheets.
+  #
+  # `sample_parts` is the opt-in reduction that lets a parts metric enter the
+  # timeseries at all: a composite has no scalar `value`, so nothing was ever
+  # recorded for it. "max" stores the hottest member as <metric>_max — the right
+  # summary for a threshold group (if the worst part is safe, all of them are),
+  # and one series instead of one per disk. min/avg/sum are also accepted. Only
+  # enable it where the parts are comparable: a max over per-model request counts
+  # would be meaningless, which is why reqs_by_model below leaves it off.
+  disks_hdd:
+    sample_parts: max
+    label: "HDD Temp °C"           # unit lives in the label; the cells hold bare numbers
+    part_thresholds: { warn: 45, danger: 55 }
+    format: "{d1} {d2} {d3} {d4}"
+  disks_ssd:
+    sample_parts: max
+    label: "SSD Temp °C"
+    part_thresholds: { warn: 55, danger: 65 }
+    format: "{d1} {d2}"
+  # The derived scalars sample_parts writes. Declaring them is what gives the
+  # detail-modal line its label, unit and colour — the reduction happens either way.
+  disks_hdd_max: { label: "HDD Max Temp", unit: "°C", thresholds: { warn: 45, danger: 55 } }
+  disks_ssd_max: { label: "SSD Max Temp", unit: "°C", thresholds: { warn: 55, danger: 65 } }
+
+  # ── LLM gateway example (B22): litellm counters pushed in under extra.litellm.* ──
+  # Hit/success rates are "higher is better", so the threshold direction inverts:
+  # yellow below warn, red below danger. With no traffic the query yields NULL ->
+  # value=null -> the ring shows "—" and is never drawn as 0%.
+  cache_hit:   { label: "Cache",   unit: "%", higher_is_better: true, thresholds: { warn: 60, danger: 30 } }
+  success:     { label: "Success", unit: "%", higher_is_better: true, thresholds: { warn: 95, danger: 80 } }
+  reqs_today:  { label: "Requests" }
+  reqs_5m:     { label: "Last 5m" }
+  # Today's requests split per model. Borrows the parts renderer for its
+  # superscript labels, but request counts have no natural threshold: an empty
+  # `part_thresholds` keeps every segment "ok" (equal-width segments, no colouring).
+  reqs_by_model:
+    label: "By Model"
+    part_thresholds: {}
+    format: "{m1} {m2} {m3}"
 
   # service-card scalar fields (no thresholds, shown verbatim)
   status:      { label: "Status" }

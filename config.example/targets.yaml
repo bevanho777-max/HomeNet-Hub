@@ -198,6 +198,80 @@ targets:
     map:
       token_speed: "$.token_speed"
 
+  # http_push: the machine pushes its own report to the Hub (no inbound access
+  # needed). `token_env` names the .env variable holding that target's shared
+  # secret (sent as X-Push-Token); `stale_after_s` is how long a silent host stays
+  # "online" before the card greys out. Payload shape: docs/AGENT_PROTOCOL.md.
+  #
+  # B20: NAS with per-disk temperatures. The agent emits extra.disks[] HDD-first
+  # then SSD/NVMe, so the indices below are stable groups rather than raw
+  # enumeration order — re-check them after adding or pulling a drive. Each
+  # `<key>_label` pairs with its `<key>` and supplies the superscript naming the
+  # bay the reading came from, so a swap cannot silently mislabel a cell.
+  - id: nas_real_example
+    name: "NAS (real http_push)"
+    color: auto
+    badge: "NAS"
+    enabled: false
+    source:
+      type: http_push
+      token_env: PUSH_TOKEN_NAS       # ← value lives in .env, one var per push target
+      stale_after_s: 15
+    map:
+      cpu:            "$.cpu.pct"
+      uptime:         { s: "$.uptime_s" }
+      mem_bytes:      { v: "$.mem.used_gb", max: "$.mem.total_gb" }
+      net:            { rx: "$.net.rx_bps", tx: "$.net.tx_bps" }
+      nas_disk_bytes: { v: "$.disk.used_gb", max: "$.disk.total_gb" }
+      vol1_bytes:     { v: "$.extra.volumes[0].used_gb", max: "$.extra.volumes[0].total_gb" }
+      vol2_bytes:     { v: "$.extra.volumes[1].used_gb", max: "$.extra.volumes[1].total_gb" }
+      raid:           "$.extra.raid.status"
+      disks_hdd:                        # mechanical drives, in bay order
+        d1: "$.extra.disks[0].temp_c"
+        d1_label: "$.extra.disks[0].label"
+        d2: "$.extra.disks[1].temp_c"
+        d2_label: "$.extra.disks[1].label"
+        d3: "$.extra.disks[2].temp_c"
+        d3_label: "$.extra.disks[2].label"
+        d4: "$.extra.disks[3].temp_c"
+        d4_label: "$.extra.disks[3].label"
+      disks_ssd:                        # SATA SSD + M.2 NVMe
+        d1: "$.extra.disks[4].temp_c"
+        d1_label: "$.extra.disks[4].label"
+        d2: "$.extra.disks[5].temp_c"
+        d2_label: "$.extra.disks[5].label"
+
+  # B22: LLM gateway. One card = one target, so gateway counters ride in on the
+  # host's own push payload under extra.litellm.* (the agent queries the gateway's
+  # DB with a read-only account and caches the result) rather than opening a second
+  # sql target that could not share the card.
+  - id: gateway_litellm_example
+    name: "Gateway (real http_push + litellm)"
+    color: auto
+    enabled: false
+    source:
+      type: http_push
+      token_env: PUSH_TOKEN_GATEWAY
+      stale_after_s: 10
+    map:
+      cpu:        "$.cpu.pct"
+      uptime:     { s: "$.uptime_s" }
+      mem_bytes:  { v: "$.mem.used_gb",  max: "$.mem.total_gb" }
+      disk_bytes: { v: "$.disk.used_gb", max: "$.disk.total_gb" }
+      net:        { rx: "$.net.rx_bps",  tx: "$.net.tx_bps" }
+      loadavg:    { m1: "$.cpu.load[0]", m5: "$.cpu.load[1]", m15: "$.cpu.load[2]" }
+      cache_hit:  "$.extra.litellm.cache_hit_pct"
+      success:    "$.extra.litellm.success_pct"
+      reqs_today: "$.extra.litellm.reqs_today"
+      reqs_5m:    "$.extra.litellm.reqs_5m"
+      reqs_by_model:                    # counts + the superscript label for each
+        m1:       "$.extra.litellm.by_model.m1"
+        m1_label: "$.extra.litellm.by_model.m1_label"
+        m2:       "$.extra.litellm.by_model.m2"
+        m2_label: "$.extra.litellm.by_model.m2_label"
+        m3:       "$.extra.litellm.by_model.m3"
+        m3_label: "$.extra.litellm.by_model.m3_label"
+
   # http: OpenClaw self-reported stats — PHASE-2 contract (authoritative real source).
   #   阶段2 以 OpenClaw 自报为唯一真源,替换 v1 过渡源(:3099/api/dashboard)。
   #   Endpoint:  GET /stats  →  { "procs": <int>, "sessions": <int>, "skills": <int> }

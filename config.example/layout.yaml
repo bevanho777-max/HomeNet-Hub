@@ -28,23 +28,31 @@ grid:
   # row 1 — four machine cards
   - target: gateway
     type: machine
+    # B23: click a machine card -> that host's multi-metric history modal (24h/7d/30d).
+    # Same values the rings show, plotted over time; omit the key to keep the card inert.
+    # Lines are picked per role from what /api/history actually has, so a host without
+    # GPU quietly falls back to cpu/mem/disk instead of drawing empty axes.
+    clickable: detail
     rings: [cpu, mem_pct, disk_pct]
     items: [mem_bytes, disk_bytes, loadavg, net]
     header_right: uptime
 
   - target: gpu1
     type: machine
+    clickable: detail
     rings: [gpu, vram_pct, cpu]
     items: [vram_bytes, mem_bytes, gpu_temp, gpu_power, disk_bytes, net]
     header_right: [badge, uptime]     # B13: combined "GPU Node │ 15d Xh"
 
   - target: gpu2
     type: machine
+    clickable: detail
     rings: [gpu, vram_pct, cpu]
     items: [vram_bytes, mem_bytes, gpu_temp, gpu_power, disk_bytes, net]
 
   - target: gpu3
     type: machine
+    clickable: detail
     rings: [gpu, vram_pct, cpu]
     items: [vram_bytes, mem_bytes, gpu_temp, gpu_power, disk_bytes, net]
 
@@ -78,6 +86,28 @@ grid:
     children: [inference, inference2]
     header_right: badge
     items: [status, latency, model, role]
+
+  # B20/B22 card shapes for the two real-backend examples in targets.yaml (both
+  # ship disabled there, so these stay commented — uncomment both sides together).
+  #
+  # NAS: one cell per disk group; each disk is coloured on its own by
+  # `part_thresholds`, and `sample_parts: max` in metrics.yaml puts the hottest
+  # drive of each group into the timeseries as disks_hdd_max / disks_ssd_max.
+  # - target: nas_real_example
+  #   type: machine
+  #   clickable: detail
+  #   rings: [cpu, mem_bytes, vol1_bytes]
+  #   items: [disks_hdd, disks_ssd, mem_bytes, nas_disk_bytes, raid, net]
+  #   header_right: [badge, uptime]
+  #
+  # LLM gateway: hit/success rates are higher_is_better rings, request counts are
+  # plain cells (reqs_by_model borrows the parts renderer for its superscripts).
+  # - target: gateway_litellm_example
+  #   type: machine
+  #   clickable: detail
+  #   rings: [cpu, cache_hit, success]
+  #   items: [mem_bytes, disk_bytes, reqs_today, reqs_5m, reqs_by_model, net]
+  #   header_right: uptime
 
   # §12-step4: generic info card — pure label/value list, no target needed.
   # Add any "info box" by adding a type:info card here; no code changes.
