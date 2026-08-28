@@ -37,7 +37,26 @@ config.on('change', (next) => {
 // keep running on a bad edit — previous good config stays live (§2)
 config.on('invalid', (e) => console.warn(`[config] rejected reload, keeping previous (${e.errors.length} error(s))`));
 
-// timeseries retention sweep
+// B22: fold aged-out raw samples into the 5-minute tier, then sweep the aggregate
+// tier's own retention. Raw rows are now dropped only by the rollup, inside the same
+// transaction that writes their bucket, so cleanup() no longer touches that table.
+// Ticks every minute: in steady state there is at most one 5-minute bucket to move
+// (the watermark cannot outrun the clock), and while draining the initial backfill
+// rollup() yields the event loop between chunks so collection keeps its cadence.
+function rollupTick() {
+  tsdb.rollup()
+    .then((r) => {
+      if (r.buckets) {
+        console.log(`[tsdb:rollup] +${r.buckets} bucket(s), -${r.removed} raw row(s)`
+          + `${r.done ? '' : ' (backfill continuing)'}`);
+      }
+    })
+    .catch((e) => console.error(`[tsdb:rollup] ${e?.message || e}`));
+}
+rollupTick();
+setInterval(rollupTick, 60 * 1000);
+
+// aggregate-tier retention sweep
 tsdb.cleanup();
 setInterval(() => tsdb.cleanup(), 3600 * 1000);
 
