@@ -51,9 +51,15 @@ async function netKbps() {
     const now = Date.now();
     if (!_prevNet) { _prevNet = { rx, tx, now }; return { rx: null, tx: null }; }
     const dt = (now - _prevNet.now) / 1000 || 1;
+    // BYTES/sec, matching normalize.js's fmtNet contract ("input is BYTES/sec,
+    // §4.2 rx_bps/tx_bps") and what every push agent reports. This used to return
+    // kbps (*8/1000), which fmtNet would have rendered ~8x high with a B/K/M suffix
+    // that was simply wrong. Nothing maps this field today — no target uses
+    // sysreport_local — so the bug was dormant and this change is unobservable; it is
+    // fixed now so the first config that does map it is not the one that finds out.
     const out = {
-      rx: Math.max(0, ((rx - _prevNet.rx) * 8) / 1000 / dt), // kbps
-      tx: Math.max(0, ((tx - _prevNet.tx) * 8) / 1000 / dt),
+      rx: Math.max(0, (rx - _prevNet.rx) / dt), // bytes/sec
+      tx: Math.max(0, (tx - _prevNet.tx) / dt),
     };
     _prevNet = { rx, tx, now };
     return out;
