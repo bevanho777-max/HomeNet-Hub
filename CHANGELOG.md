@@ -14,6 +14,70 @@ need `git pull` alone. Each entry below is tagged accordingly.
 
 ---
 
+## v2.3 — 2026-09-01
+
+**Add a machine by typing its IP.** Point the panel at a private IPv4 address and it
+probes what is there — open ports, HTTP banners, TLS certificates, node_exporter — then
+offers the capabilities those findings support. Pick some, and they become real targets
+and cards, persisted in the database rather than in the read-only YAML. Four collectors
+landed to serve them (tcp, tls, prometheus, plus discovery itself), and a capability
+catalog is the one place that decides how a finding turns into something monitored.
+
+> **输入一个 IP 就能加一台机器。** 给面板一个私网 IPv4 地址,它去探这台机器上有什么 ——
+> 开放端口、HTTP 指纹、TLS 证书、node_exporter —— 然后列出这些发现能支撑的能力。勾选,
+> 它们就变成真正的 target 和卡片,持久化在数据库里而不是只读挂载的 YAML 里。为此新增了
+> 四个采集器(tcp / tls / prometheus,以及发现本身),并用一份能力目录作为"发现如何变成
+> 被监控的东西"的唯一真源。
+
+**Deploying this release:** everything below is `server/`+`web/`, so it needs
+`docker compose up -d --build` on the host. Nothing new in `config/` and no new env —
+runtime-added targets live in `data/homenet.db`, which the compose file already mounts
+read-write.
+
+> **本次部署方式:** 以下全部是 `server/`+`web/` 改动,要在宿主机上
+> `docker compose up -d --build` 才生效。`config/` 无新增必填项,也不需要任何新 env ——
+> 运行时新增的目标存在 `data/homenet.db` 里,compose 早已把它挂成可写。
+
+### Discovery → add → see (发现→加→看见)
+
+| Commit | Change | Rebuild |
+|---|---|---|
+| `3ebd37c` | read-only surface discovery — `GET /api/discover?host=`: bounded TCP port sweep, unauthenticated HTTP fingerprint (status / Server / `<title>`), TLS expiry, node_exporter detection; `server/net_guard.js` centralises the private-IPv4 rule and refuses link-local `169.254.0.0/16` | **yes** (server) |
+| `25aa031` | runtime user store + effective-config layer — `user_targets` / `user_cards` in the existing SQLite file, merged onto the file config behind the same validate/crossValidate gate. With an empty store the effective config **is** the file config object, so an untouched install is byte-identical | **yes** (server) |
+| `3d9078b` | `POST/GET/DELETE /api/user_targets` + capability catalog. The client sends `{host, capability, name?}` and nothing else: a target's `source` is what the scheduler executes, so it is built server-side from constants | **yes** (server) |
+| `5f71da0` | catalog becomes the single source of truth (discovery's suggestions are generated from it, so a preview **is** what gets stored); tcp + tls collectors land | **yes** (server) |
+| `39be889` | "＋ 添加目标" panel — discover, pick, add, and an added-list with delete. Pending capabilities stay visible and greyed with the reason | **yes** (web) |
+| `56f2adf` | `config.example`: tcp/tls source shapes, and `interval`'s h/d units | no (config example) |
+
+### Machine metrics without credentials (零凭据的机器指标)
+
+| Commit | Change | Rebuild |
+|---|---|---|
+| `cb6aae9` | prometheus collector — one `/metrics` scrape becomes a standard machine card (CPU ring, memory, disk, network, uptime). The four `node_cpu/mem/disk/net` ideas collapse into ONE `node_metrics` capability: four targets would have scraped the same endpoint four times for one host's numbers | **yes** (server) |
+
+### Fixes (修复)
+
+| Commit | Change | Rebuild |
+|---|---|---|
+| `016e7d3` | **exec**: `sysreport_local`'s `net` returned kbps while `normalize.js` documents that field as bytes/sec — an ~8x error with the wrong unit suffix. Dormant (no target maps it), fixed before the first one does | **yes** (server) |
+| `3ebd37c` `5f71da0` | private-IPv4 guard now refuses a leading-zero octet: `010.0.0.1` passed the old `\d{1,3}` check as 10.x while the resolver reads the leading zero as octal and dials 8.0.0.1. `exec.js` shares the guard instead of carrying its own copy | **yes** (server) |
+
+### Config surface added this release
+
+- `targets[].source.type`: `tcp` / `tls` (each requires `host` + `port`), `prometheus`
+  (requires `url`)
+- `interval` / `timeout` accept `h` and `d` (`"1h"` previously parsed as one **second**)
+- no new env; no new required field in `config/`
+
+### Notes
+
+- Runtime-added targets are stored as the same object shape the YAML uses, so the
+  scheduler, normalize, `publicConfig` and the whole frontend needed no changes.
+- First boot on an existing database creates two empty tables (`user_targets`,
+  `user_cards`). Rolling back to an earlier image leaves them in place, unread.
+
+---
+
 ## v2.2 — 2026-09-01
 
 **Deeper views, cheaper history.** Machine cards now open their own multi-metric history
