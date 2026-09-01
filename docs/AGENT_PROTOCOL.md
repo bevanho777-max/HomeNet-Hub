@@ -172,6 +172,24 @@ AGENT_ID=m26
 PUSH_TOKEN=<长随机串>
 ```
 
+网关机(采集 `extra.litellm.*`)在上面三行之外还要加:
+
+```
+LITELLM_PG_DSN=<只读账号 DSN>          # 不设则整段 litellm 采集跳过,其余字段不受影响
+LITELLM_DB_CONTAINER=litellm-db        # psql 在这个容器里执行(默认值,可省)
+LITELLM_CONTAINERS=litellm litellm-agent   # 空格分隔;reqs_5m 把每个容器的访问日志累加
+```
+
+`LITELLM_CONTAINERS` 是 **reqs_5m 专用**的:该指标数的是入站 HTTP 访问日志,而每个
+litellm 进程只记自己收到的请求 —— 网关跑了第二个实例(比如另开一个端口挂另一个模型)
+就必须一并列出,否则没列的那些流量会被静默漏掉,而卡上看起来只是个偏小的正常数字。
+任一容器的日志取不到时 reqs_5m 整个字段省略(卡上显示"—"),不报只含一部分的数。
+未设时回落到旧的单容器变量 `LITELLM_CONTAINER`(默认 `litellm`),单实例的机器不用改。
+
+`cache_hit` / `success` / `reqs_today` / `reqs_by_model` **不需要**这份容器名单:它们查
+的是 `LiteLLM_DailyUserSpend` 预聚合表,多个实例共用同一个库同一张表,记账本来就都在
+里面(按 model 分行),查询也没有按模型或实例过滤。
+
 > 若某机器只有普通用户权限(无 sudo),等价降级为 user service:`~/.config/systemd/user/` + `loginctl enable-linger <user>`(.25 待确认 linger 的事项与此同款)。
 
 ### 6.2 Windows — Task Scheduler 拉起常驻脚本

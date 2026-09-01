@@ -245,6 +245,20 @@ targets:
   # host's own push payload under extra.litellm.* (the agent queries the gateway's
   # DB with a read-only account and caches the result) rather than opening a second
   # sql target that could not share the card.
+  #
+  # B24: the agent-side env that fills these fields (in /etc/homenet-agent.env on the
+  # gateway host, NOT this repo's .env):
+  #   LITELLM_PG_DSN         read-only DSN; unset disables the whole extra.litellm block
+  #   LITELLM_DB_CONTAINER   Postgres container psql runs inside (default: litellm-db)
+  #   LITELLM_CONTAINERS     space-separated list of gateway containers whose access
+  #                          logs feed reqs_5m; every one of them is summed. Run more
+  #                          than one gateway process (e.g. a second port serving a
+  #                          different model) and all of them must be listed here or
+  #                          reqs_5m silently reports only the instances that are.
+  #                          Falls back to the older single-container LITELLM_CONTAINER
+  #                          (default: litellm). The DB-backed fields above need no such
+  #                          list -- they read one shared table that already holds every
+  #                          instance's accounting.
   - id: gateway_litellm_example
     name: "Gateway (real http_push + litellm)"
     color: auto
