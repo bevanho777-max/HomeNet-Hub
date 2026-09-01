@@ -51,7 +51,10 @@ function readYamlOptional(name) {
 }
 
 // Apply targets.defaults onto each target's source where unset.
-function applyDefaults(targets) {
+// Exported so the effective-config layer can put runtime-added targets through the
+// SAME defaults the file ones get — a user target that skipped them would poll on a
+// different interval than an identical YAML one.
+export function applyDefaults(targets) {
   const defaults = targets.defaults || {};
   for (const t of targets.targets || []) {
     t.enabled = t.enabled !== false; // default enabled:true
@@ -102,7 +105,7 @@ export function loadConfig() {
   }
 
   const merged = { metrics: metrics.doc, targets: targets.doc, layout: layout.doc, theme: theme.doc };
-  const etag = '"' + createHash('sha1').update(JSON.stringify(merged)).digest('hex').slice(0, 16) + '"';
+  const etag = computeEtag(merged);
 
   return {
     ...merged,
@@ -110,6 +113,16 @@ export function loadConfig() {
     sources: { metrics: metrics.path, targets: targets.path, layout: layout.path, theme: theme.path },
     usingFallback: metrics.fallback || targets.fallback || layout.fallback || theme.fallback,
   };
+}
+
+/**
+ * The etag recipe, in one place. The effective-config layer recomputes it over the
+ * merged document, and a drift between the two recipes would show as a frontend that
+ * never notices a change — or one that reloads forever.
+ * @param {{metrics:object,targets:object,layout:object,theme:object}} merged
+ */
+export function computeEtag(merged) {
+  return '"' + createHash('sha1').update(JSON.stringify(merged)).digest('hex').slice(0, 16) + '"';
 }
 
 /**

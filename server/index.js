@@ -8,6 +8,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { ConfigStore } from './config/watch.js';
+import { publicConfig } from './config/loader.js';
 import { Snapshot } from './store/snapshot.js';
 import { Tsdb, RANGE_SEC } from './store/sqlite.js';
 import { Scheduler } from './collectors/index.js';
@@ -15,6 +16,8 @@ import { collectSql, clearQueryCache } from './collectors/sql.js';
 import { demoTokenRows } from './collectors/demo.js';
 import { pivotTokens, TOKEN_RANGE_DAYS } from './token_detail.js';
 import { discoverTarget } from './collectors/discovery.js';
+import { UserStore } from './store/user_store.js';
+import { EffectiveStore } from './config/effective.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..');
@@ -29,12 +32,42 @@ config.start(); // fatal if initial config is invalid
 const snapshot = new Snapshot();
 const tsdb = new Tsdb(join(DATA_DIR, 'homenet.db'));
 const scheduler = new Scheduler({ snapshot, tsdb, env: process.env });
-scheduler.apply(config.get());
 
-config.on('change', (next) => {
+// Slice 2: runtime-added targets/cards live in the same db file and are merged onto
+// the file config here. Everything downstream (scheduler, publicConfig, frontend)
+// reads `effective.get()`, not the raw file config — that is the ONLY read-point
+// change this slice makes. With an empty user store buildEffective returns the file
+// object itself, so the two are the same reference and the etag is untouched.
+const userStore = new UserStore(join(DATA_DIR, 'homenet.db'));
+const effective = new EffectiveStore({ userStore });
+effective.rebuild(config.get());
+
+// One place where a new effective config takes effect, whatever produced it: a YAML
+// hot-reload, or a user-data write. Previously this body lived inline in the config
+// 'change' handler and a user write would have had to duplicate it.
+function applyEffective(next, why) {
   clearQueryCache();
   scheduler.apply(next);
+  console.log(`[effective] applied etag=${next.etag} (${why})`);
+}
+
+applyEffective(effective.get(), 'boot');
+
+config.on('change', (next) => {
+  const r = effective.rebuild(next);
+  // A refused rebuild means the FILE edit is fine but the user rows no longer fit it
+  // (a deleted metric, a renamed target). effective keeps the previous good document,
+  // so the panel stays up on the last thing that validated.
+  if (r.ok && !r.changed) return;
+  applyEffective(effective.get(), r.ok ? 'config reload' : 'config reload (user rows refused)');
 });
+
+/** Rebuild + apply after a user-data write. Returns the rebuild result. */
+function refreshUserData(why) {
+  const r = effective.rebuild(config.get());
+  if (r.ok && r.changed) applyEffective(effective.get(), why);
+  return r;
+}
 // keep running on a bad edit — previous good config stays live (§2)
 config.on('invalid', (e) => console.warn(`[config] rejected reload, keeping previous (${e.errors.length} error(s))`));
 
@@ -64,7 +97,7 @@ setInterval(() => tsdb.cleanup(), 3600 * 1000);
 // resolve the token target (for /api/token_detail) via the layout token card,
 // falling back to the first sql target. Works for both sql and demo sources.
 function tokenTarget() {
-  const cfg = config.get();
+  const cfg = effective.get();
   const card = (cfg.layout?.grid || []).find((c) => c.type === 'token');
   if (card?.target) {
     const t = (cfg.targets.targets || []).find((x) => x.id === card.target);
@@ -86,10 +119,13 @@ await app.register(fastifyCompress, {
   encodings: ['gzip', 'deflate'],     // no brotli: slower, and gzip already gives ~10x
 });
 
-app.get('/healthz', async () => ({ ok: true, service: 'homenet-hub', ts: Date.now(), config: config.health() }));
+app.get('/healthz', async () => ({
+  ok: true, service: 'homenet-hub', ts: Date.now(),
+  config: config.health(), effective: effective.health(),
+}));
 
 app.get('/api/config', async (req, reply) => {
-  const pub = config.getPublic();
+  const pub = publicConfig(effective.get());
   reply.header('ETag', pub.etag);
   reply.header('Cache-Control', 'no-cache');
   if (req.headers['if-none-match'] === pub.etag) return reply.code(304).send();
@@ -97,7 +133,7 @@ app.get('/api/config', async (req, reply) => {
 });
 
 app.get('/api/snapshot', async () => {
-  const cfg = config.get();
+  const cfg = effective.get();
   const ids = (cfg.targets.targets || []).filter((t) => t.enabled !== false).map((t) => t.id);
   return snapshot.toJSON(ids);
 });
@@ -115,7 +151,7 @@ app.get('/api/token_detail', async (req, reply) => {
   const days = TOKEN_RANGE_DAYS[range] || 1;
   const tt = tokenTarget();
   if (!tt) return reply.code(404).send({ error: 'no sql token target configured' });
-  const tokenCard = (config.get().layout?.grid || []).find((c) => c.type === 'token');
+  const tokenCard = (effective.get().layout?.grid || []).find((c) => c.type === 'token');
   try {
     const rows = tt.source?.type === 'demo'
       ? demoTokenRows(tt.classify, days)
@@ -169,6 +205,51 @@ app.get('/api/discover', async (req, reply) => {
     discoverInflight--;
   }
 });
+
+// ── user data (slice 2, TEMPORARY self-test surface) ────────────────
+// NOT the real API — slice 2b designs that. This exists so the storage + assembly
+// pipeline can be exercised end to end. The write is preflighted against the merged
+// document BEFORE it touches the database: an invalid pair is refused with the
+// validator's own errors and the store never holds a row that cannot be assembled,
+// so there is no rollback path to get wrong.
+app.post('/api/_debug/user_target', async (req, reply) => {
+  const { target, card, card_id } = req.body || {};
+  if (!target?.id) { reply.code(400); return { error: 'body.target.id is required' }; }
+  const cardId = card_id || `${target.id}_card`;
+  try {
+    const cur = userStore.getUserConfig();
+    // The prospective state: this pair replaces any same-id rows, everything else stays.
+    const proposed = {
+      targets: [...cur.targets.filter((t) => t.id !== target.id), { ...target, enabled: target.enabled !== false }],
+      cards: card ? [...cur.cards.filter((c) => c.target !== target.id), card] : cur.cards,
+    };
+    const pre = effective.preflight(config.get(), proposed);
+    if (!pre.ok) { reply.code(400); return { error: 'rejected', errors: pre.errors, applied: false }; }
+
+    userStore.upsertTarget(target.id, target, { enabled: target.enabled !== false });
+    if (card) userStore.upsertCard(cardId, card);
+    const r = refreshUserData(`user_target ${target.id}`);
+    return { ok: r.ok, applied: r.ok, etag: effective.get().etag, ...(r.ok ? {} : { errors: r.errors }) };
+  } catch (e) {
+    reply.code(400);
+    return { error: 'write failed', reason: String(e?.message || e), applied: false };
+  }
+});
+
+app.delete('/api/_debug/user_target/:id', async (req, reply) => {
+  try {
+    const out = userStore.deleteTarget(req.params.id);
+    const r = refreshUserData(`delete ${req.params.id}`);
+    return { ok: true, ...out, etag: effective.get().etag, rebuild_ok: r.ok };
+  } catch (e) {
+    reply.code(400);
+    return { error: 'delete failed', reason: String(e?.message || e) };
+  }
+});
+
+app.get('/api/_debug/user_data', async () => ({
+  ...userStore.getUserConfig(), counts: userStore.countAll(), effective: effective.health(),
+}));
 
 app.post('/api/push/:targetId', async (req, reply) => {
   const id = req.params.targetId;
@@ -225,6 +306,6 @@ process.on('SIGTERM', () => shutdown('SIGTERM'));
 app.listen({ port: PORT, host: '0.0.0.0' })
   .then((addr) => {
     console.log(`[homenet-hub] listening on ${addr}`);
-    console.log(`[homenet-hub] config etag=${config.get().etag} sqlite=${join(DATA_DIR, 'homenet.db')}`);
+    console.log(`[homenet-hub] config etag=${effective.get().etag} sqlite=${join(DATA_DIR, 'homenet.db')}`);
   })
   .catch((err) => { console.error(err); process.exit(1); });
