@@ -49,7 +49,7 @@ const sourceSchema = {
   type: 'object',
   required: ['type'],
   properties: {
-    type: { enum: ['http', 'http_push', 'sql', 'exec', 'demo'] },
+    type: { enum: ['http', 'http_push', 'sql', 'exec', 'demo', 'tcp', 'tls'] },
     // http
     url: { type: 'string' },
     interval: { type: 'string' },     // duration string e.g. "1.5s", "8s", "30s"
@@ -68,6 +68,10 @@ const sourceSchema = {
     // exec
     command: { type: 'string' },
     args: { type: 'array', items: { type: ['string', 'number', 'boolean'] } },
+    // tcp / tls (slice 2c): a private-IPv4 host and one port. Both are re-validated at
+    // collection time by net_guard — the schema only shapes them.
+    host: { type: 'string' },
+    port: { type: 'integer', minimum: 1, maximum: 65535 },
   },
   additionalProperties: true,
   allOf: [
@@ -75,6 +79,11 @@ const sourceSchema = {
     { if: { properties: { type: { const: 'http_push' } } }, then: { required: ['token_env'] } },
     { if: { properties: { type: { const: 'sql' } } }, then: { required: ['query_file', 'dsn_env'] } },
     { if: { properties: { type: { const: 'exec' } } }, then: { required: ['command'] } },
+    // Additive: the branches above are untouched. tcp/tls simply must carry the pair
+    // they cannot work without, so a hand-edited row fails validation rather than
+    // becoming a target that throws on every poll.
+    { if: { properties: { type: { const: 'tcp' } } }, then: { required: ['host', 'port'] } },
+    { if: { properties: { type: { const: 'tls' } } }, then: { required: ['host', 'port'] } },
   ],
 };
 

@@ -22,36 +22,16 @@ import https from 'node:https';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { checkPrivateIp } from '../net_guard.js';
+import { DISCOVERY_PORTS as PORTS, NODE_FAMILIES } from '../capabilities/ports.js';
+import { suggestFor } from '../capabilities/catalog.js';
 
 const pexecFile = promisify(execFile);
 const isWin = process.platform === 'win32';
 
-// ── the bounded port set ────────────────────────────────────────────
-// Fixed, not configurable. `scheme` marks the ports worth an HTTP fingerprint;
-// `tls` marks the ones whose certificate is worth reading.
-//
-// `port_hint` is the CONVENTIONAL name of the port, not the product that answered:
-// :3000 is labelled grafana and on this LAN it is Open WebUI. What actually runs there
-// is in services[].title / services[].server. The field is named hint so nobody builds
-// on it as an identification.
-const PORTS = [
-  { port: 22,    port_hint: 'ssh' },
-  { port: 80,    port_hint: 'http',          scheme: 'http' },
-  { port: 443,   port_hint: 'https',         scheme: 'https', tls: true },
-  { port: 445,   port_hint: 'smb' },
-  { port: 1883,  port_hint: 'mqtt' },
-  { port: 3000,  port_hint: 'grafana',       scheme: 'http' },
-  { port: 3306,  port_hint: 'mysql' },
-  { port: 3389,  port_hint: 'rdp' },
-  { port: 5000,  port_hint: 'dsm-http',      scheme: 'http' },
-  { port: 5001,  port_hint: 'dsm-https',     scheme: 'https', tls: true },
-  { port: 5432,  port_hint: 'postgres' },
-  { port: 6379,  port_hint: 'redis' },
-  { port: 8006,  port_hint: 'proxmox',       scheme: 'https', tls: true },
-  { port: 9090,  port_hint: 'prometheus',    scheme: 'http' },
-  { port: 9100,  port_hint: 'node_exporter', scheme: 'http' },
-  { port: 32400, port_hint: 'plex',          scheme: 'http' },
-];
+// The bounded port set and the node_exporter family list now live in
+// capabilities/ports.js, imported above: the capability catalog needs the same table
+// to decide what it may build a target for, and a table owned by either module would
+// have made that a cycle.
 
 const TCP_TIMEOUT_MS = 1200;
 const TCP_CONCURRENCY = 20;
@@ -61,14 +41,6 @@ const PING_TIMEOUT_MS = 2000;
 const TOTAL_BUDGET_MS = 10000;
 const BODY_LIMIT = 64 * 1024;         // enough for <head>; we only want <title>
 const METRICS_LIMIT = 2 * 1024 * 1024; // node_exporter's full page is a few hundred KB
-
-// Families we report on explicitly — the four a machine card would need.
-const NODE_FAMILIES = [
-  'node_cpu_seconds_total',
-  'node_memory_MemAvailable_bytes',
-  'node_filesystem_avail_bytes',
-  'node_network_receive_bytes_total',
-];
 
 // ── TCP reachability ────────────────────────────────────────────────
 function tcpProbe(ip, port, timeoutMs) {
@@ -288,95 +260,6 @@ function osHint(openSet, services, nodeExp) {
   return { os_hint: 'unknown', os_hint_reason: 'no evidence in the probed surface' };
 }
 
-// ── capability suggestions ──────────────────────────────────────────
-// `collector_exists` is an addition to the requested shape: it says whether
-// source_preview names a collector this server can actually run today. ping_host and
-// http exist; a raw TCP check, a Prometheus-text parser and anything over SSH/WinRM do
-// not. Slice 2 can wire the true ones immediately and knows what it must build first.
-function suggest({ ip, open, services, nodeExp, osHintValue }) {
-  const caps = [];
-  const openSet = new Set(open.map((o) => o.port));
-
-  caps.push({
-    id: 'reachability',
-    label: 'Reachability (ping)',
-    widget: 'service',
-    requires: null,
-    collector_exists: true,
-    source_preview: { type: 'exec', command: 'ping_host', args: [ip] },
-  });
-
-  for (const o of open) {
-    caps.push({
-      id: `port_check:${o.port}`,
-      label: `Port ${o.port} (${o.port_hint})`,
-      widget: 'service',
-      requires: null,
-      collector_exists: false,
-      source_preview: { type: 'tcp', host: ip, port: o.port },
-    });
-  }
-
-  for (const s of services) {
-    if (!s.scheme) continue;
-    caps.push({
-      id: `http_check:${s.port}`,
-      label: `HTTP ${s.port}${s.title ? ` — ${s.title}` : ''}`,
-      widget: 'service',
-      requires: null,
-      collector_exists: true,
-      source_preview: { type: 'http', url: `${s.scheme}://${ip}:${s.port}/`, interval_s: 30 },
-    });
-  }
-
-  for (const s of services) {
-    if (s.tls_expiry_days == null) continue;
-    caps.push({
-      id: `tls_cert:${s.port}`,
-      label: `TLS certificate (:${s.port})`,
-      widget: 'info',
-      requires: null,
-      collector_exists: false,
-      source_preview: { type: 'tls', host: ip, port: s.port, field: 'expiry_days' },
-    });
-  }
-
-  if (nodeExp?.present) {
-    const fam = new Set(nodeExp.metric_families);
-    const NODE_CAPS = [
-      ['node_cpu',  'CPU (node_exporter)',    'node_cpu_seconds_total'],
-      ['node_mem',  'Memory (node_exporter)', 'node_memory_MemAvailable_bytes'],
-      ['node_disk', 'Disk (node_exporter)',   'node_filesystem_avail_bytes'],
-      ['node_net',  'Network (node_exporter)', 'node_network_receive_bytes_total'],
-    ];
-    for (const [id, label, family] of NODE_CAPS) {
-      if (!fam.has(family)) continue;
-      caps.push({
-        id, label, widget: 'machine', requires: null, collector_exists: false,
-        source_preview: {
-          type: 'prometheus', url: `http://${ip}:9100/metrics`, metric_family: family,
-        },
-      });
-    }
-  }
-
-  // Deep metrics: listed so the caller sees what credentials would buy, never probed.
-  const deep = osHintValue === 'windows' ? 'winrm' : 'ssh';
-  if (openSet.has(22) || openSet.has(3389) || openSet.has(5985) || openSet.has(5986)) {
-    for (const [id, label] of [['cpu', 'CPU'], ['mem', 'Memory'], ['disk', 'Disk']]) {
-      caps.push({
-        id: `${deep}_${id}`,
-        label: `${label} (via ${deep.toUpperCase()}, credentials required)`,
-        widget: 'machine',
-        requires: deep,
-        collector_exists: false,
-        source_preview: { type: deep, host: ip, metric: id },
-      });
-    }
-  }
-  return caps;
-}
-
 /**
  * Read-only surface discovery of one private-IPv4 host.
  * Never throws for probe failures — a failed probe is an absent field.
@@ -480,11 +363,13 @@ export async function discoverTarget(host, opts = {}) {
   manifest.os_hint = hint.os_hint;
   manifest.os_hint_reason = hint.os_hint_reason;
 
-  manifest.suggested_capabilities = suggest({
-    ip, open, services, nodeExp: manifest.node_exporter, osHintValue: manifest.os_hint,
+  // Suggestions come from the capability catalog, not from a second list kept here:
+  // what the caller is offered and what POST /api/user_targets would build are now the
+  // same code path, so a suggestion the API refuses cannot happen.
+  manifest.suggested_capabilities = suggestFor({
+    host: ip, open, services, nodeExporter: manifest.node_exporter, osHint: manifest.os_hint,
   });
   manifest.took_ms = Date.now() - started;
   return manifest;
 }
 
-export const DISCOVERY_PORTS = PORTS;

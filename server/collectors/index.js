@@ -3,6 +3,7 @@
 // http_push is fed by the POST route and swept for staleness. On config
 // hot-reload we tear down all timers and rebuild from the new config.
 import { collectHttp } from './http.js';
+import { collectTcp, collectTls } from './net_probe.js';
 import { collectExec } from './exec.js';
 import { collectSql, collectSqlScalar, collectSqlRows } from './sql.js';
 import { collectDemo, demoTokenRows, demoTokenSpeed } from './demo.js';
@@ -17,11 +18,14 @@ const TOTALS_TTL_MS = 600000; // B4: cumulative all-time totals cache TTL (10 mi
 export function parseDuration(s, fallbackMs = 5000) {
   if (typeof s === 'number') return s;
   if (typeof s !== 'string') return fallbackMs;
-  const m = s.trim().match(/^([\d.]+)\s*(ms|s|m)?$/);
+  const m = s.trim().match(/^([\d.]+)\s*(ms|s|m|h|d)?$/);
   if (!m) return fallbackMs;
   const v = Number(m[1]);
   const unit = m[2] || 's';
-  return unit === 'ms' ? v : unit === 'm' ? v * 60000 : v * 1000;
+  // h/d added in slice 2c alongside tls_cert's hour-scale interval. ms/s/m unchanged,
+  // and an unknown unit cannot reach here (the regex gates it).
+  const mult = { ms: 1, s: 1000, m: 60000, h: 3600000, d: 86400000 };
+  return v * (mult[unit] ?? 1000);
 }
 
 export class Scheduler {
@@ -49,7 +53,12 @@ export class Scheduler {
         this.pushTargets.set(target.id, target);
         continue;
       }
-      const interval = parseDuration(target.source?.interval, type === 'http' ? 1500 : type === 'demo' ? 2000 : 8000);
+      // tls gets its own default: a certificate moves once a day at most, and the
+      // generic 8s fallback would mean a handshake every 8 seconds forever if a
+      // hand-written target omitted `interval`.
+      const interval = parseDuration(target.source?.interval,
+        type === 'http' ? 1500 : type === 'demo' ? 2000
+          : type === 'tls' ? 3600000 : type === 'tcp' ? 10000 : 8000);
       const tick = () => {
         if (this._inflight.has(target.id)) return;
         this._inflight.add(target.id);
@@ -116,6 +125,8 @@ export class Scheduler {
       }
       const raw = type === 'http' ? await collectHttp(target.source, parseDuration(target.source.timeout, 3000))
         : type === 'exec' ? await collectExec(target.source)
+        : type === 'tcp' ? await collectTcp(target.source, parseDuration(target.source.timeout, 3000))
+        : type === 'tls' ? await collectTls(target.source, parseDuration(target.source.timeout, 4000))
         : type === 'demo' ? collectDemo(target, metrics)
         : null;
       if (raw == null) throw new Error(`unsupported source type: ${type}`);
