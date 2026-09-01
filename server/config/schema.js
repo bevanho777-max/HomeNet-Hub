@@ -49,7 +49,7 @@ const sourceSchema = {
   type: 'object',
   required: ['type'],
   properties: {
-    type: { enum: ['http', 'http_push', 'sql', 'exec', 'demo', 'tcp', 'tls'] },
+    type: { enum: ['http', 'http_push', 'sql', 'exec', 'demo', 'tcp', 'tls', 'prometheus'] },
     // http
     url: { type: 'string' },
     interval: { type: 'string' },     // duration string e.g. "1.5s", "8s", "30s"
@@ -84,6 +84,9 @@ const sourceSchema = {
     // becoming a target that throws on every poll.
     { if: { properties: { type: { const: 'tcp' } } }, then: { required: ['host', 'port'] } },
     { if: { properties: { type: { const: 'tls' } } }, then: { required: ['host', 'port'] } },
+    // B24 slice 2d: a scrape needs its endpoint; the host inside it is re-checked by
+    // net_guard at collection time, same as tcp/tls.
+    { if: { properties: { type: { const: 'prometheus' } } }, then: { required: ['url'] } },
   ],
 };
 

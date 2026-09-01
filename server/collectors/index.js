@@ -4,6 +4,7 @@
 // hot-reload we tear down all timers and rebuild from the new config.
 import { collectHttp } from './http.js';
 import { collectTcp, collectTls } from './net_probe.js';
+import { collectPrometheus } from './prometheus.js';
 import { collectExec } from './exec.js';
 import { collectSql, collectSqlScalar, collectSqlRows } from './sql.js';
 import { collectDemo, demoTokenRows, demoTokenSpeed } from './demo.js';
@@ -58,7 +59,8 @@ export class Scheduler {
       // hand-written target omitted `interval`.
       const interval = parseDuration(target.source?.interval,
         type === 'http' ? 1500 : type === 'demo' ? 2000
-          : type === 'tls' ? 3600000 : type === 'tcp' ? 10000 : 8000);
+          : type === 'tls' ? 3600000 : type === 'tcp' ? 10000
+            : type === 'prometheus' ? 10000 : 8000);
       const tick = () => {
         if (this._inflight.has(target.id)) return;
         this._inflight.add(target.id);
@@ -127,6 +129,7 @@ export class Scheduler {
         : type === 'exec' ? await collectExec(target.source)
         : type === 'tcp' ? await collectTcp(target.source, parseDuration(target.source.timeout, 3000))
         : type === 'tls' ? await collectTls(target.source, parseDuration(target.source.timeout, 4000))
+        : type === 'prometheus' ? await collectPrometheus(target.source, parseDuration(target.source.timeout, 4000))
         : type === 'demo' ? collectDemo(target, metrics)
         : null;
       if (raw == null) throw new Error(`unsupported source type: ${type}`);

@@ -152,31 +152,62 @@ const CAPABILITIES = {
       };
     },
   },
+
+  // ONE capability, not four. A single /metrics scrape yields cpu, memory, disk and
+  // network together; modelling them as node_cpu/node_mem/node_disk/node_net would
+  // have meant four targets scraping the same endpoint on the same interval — four
+  // times the traffic for one host's numbers — and four one-metric cards where the
+  // panel already has a card type that shows exactly this set. The four ids are gone;
+  // `node_metrics` replaces them.
+  node_metrics: {
+    status: 'available',
+    needsPort: false,
+    widget: 'machine',
+    requires: null,
+    label: () => 'Machine metrics (node_exporter)',
+    // Offered only when the exporter actually answered AND carries the families the
+    // card renders. A host running node_exporter with the CPU collector disabled would
+    // otherwise get a card of dashes.
+    appliesTo: (f) => (f.nodeExporter?.present
+      && (f.nodeExporter.metric_families || []).length ? [{}] : []),
+    materialize({ host, name }) {
+      const id = idOf(host, 'node_metrics');
+      return {
+        id,
+        target: {
+          id,
+          name: name || `${host} (node_exporter)`,
+          source: {
+            type: 'prometheus', url: `http://${host}:9100/metrics`,
+            interval: '10s', timeout: '4s',
+          },
+          // The agent-protocol map, verbatim: the collector emits that payload shape
+          // precisely so a scraped host reuses the same map, templates and card as a
+          // host running the push agent.
+          map: {
+            cpu: '$.cpu.pct',
+            mem_bytes: { v: '$.mem.used_gb', max: '$.mem.total_gb' },
+            disk_bytes: { v: '$.disk.used_gb', max: '$.disk.total_gb' },
+            net: { rx: '$.net.rx_bps', tx: '$.net.tx_bps' },
+            uptime: { s: '$.uptime_s' },
+          },
+        },
+        card: {
+          type: 'machine', target: id,
+          rings: ['cpu'], items: ['mem_bytes', 'disk_bytes', 'net'],
+          header_right: 'uptime',
+        },
+      };
+    },
+  },
 };
 
 // Deep/pending capabilities: discovery still lists them so the operator can see what
 // exists, but nothing can be built until their collector lands.
-const PENDING = {
-  node_cpu:  { family: 'node_cpu_seconds_total',            label: 'CPU (node_exporter)' },
-  node_mem:  { family: 'node_memory_MemAvailable_bytes',    label: 'Memory (node_exporter)' },
-  node_disk: { family: 'node_filesystem_avail_bytes',       label: 'Disk (node_exporter)' },
-  node_net:  { family: 'node_network_receive_bytes_total',  label: 'Network (node_exporter)' },
-};
+// node_cpu / node_mem / node_disk / node_net were four pending entries until slice 2d;
+// they are now the single available `node_metrics` above. Only the credentialed
+// transports remain pending.
 const DEEP_METRICS = [['cpu', 'CPU'], ['mem', 'Memory'], ['disk', 'Disk']];
-
-for (const [id, def] of Object.entries(PENDING)) {
-  CAPABILITIES[id] = {
-    status: 'pending',
-    needsPort: false,
-    widget: 'machine',
-    requires: null,
-    label: () => def.label,
-    appliesTo: (f) => (f.nodeExporter?.metric_families || []).includes(def.family) ? [{}] : [],
-    previewSource: (host) => ({
-      type: 'prometheus', url: `http://${host}:9100/metrics`, metric_family: def.family,
-    }),
-  };
-}
 for (const transport of ['ssh', 'winrm']) {
   for (const [metric, label] of DEEP_METRICS) {
     CAPABILITIES[`${transport}_${metric}`] = {
