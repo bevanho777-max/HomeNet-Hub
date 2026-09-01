@@ -49,7 +49,7 @@ const sourceSchema = {
   type: 'object',
   required: ['type'],
   properties: {
-    type: { enum: ['http', 'http_push', 'sql', 'exec', 'demo', 'tcp', 'tls', 'prometheus'] },
+    type: { enum: ['http', 'http_push', 'sql', 'exec', 'demo', 'tcp', 'tls', 'prometheus', 'ssh'] },
     // http
     url: { type: 'string' },
     interval: { type: 'string' },     // duration string e.g. "1.5s", "8s", "30s"
@@ -72,6 +72,9 @@ const sourceSchema = {
     // collection time by net_guard — the schema only shapes them.
     host: { type: 'string' },
     port: { type: 'integer', minimum: 1, maximum: 65535 },
+    // ssh (slice 2f): a reference to a vault credential. The secret itself is never
+    // in config, in the database's target row, or anywhere a schema could describe it.
+    credential_id: { type: 'string' },
   },
   additionalProperties: true,
   allOf: [
@@ -87,6 +90,7 @@ const sourceSchema = {
     // B24 slice 2d: a scrape needs its endpoint; the host inside it is re-checked by
     // net_guard at collection time, same as tcp/tls.
     { if: { properties: { type: { const: 'prometheus' } } }, then: { required: ['url'] } },
+    { if: { properties: { type: { const: 'ssh' } } }, then: { required: ['host', 'credential_id'] } },
   ],
 };
 

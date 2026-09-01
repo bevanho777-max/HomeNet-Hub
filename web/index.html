@@ -12,6 +12,7 @@
     <div class="meta">
       <!-- 切片3:添加目标入口。放在连接角标之前,与时钟同处 header 右侧。 -->
       <button type="button" id="addOpen" class="addOpen">＋ 添加目标</button>
+      <button type="button" id="credOpen" class="addOpen">凭据</button>
       <span id="conn" class="conn"></span>
       <!-- 双时区时钟:id 留在外层容器上,header.clock 显隐开关逻辑不变。
            每行结构固定,tickClock 只改 .tztime 的文本与 .tzrow 的昼夜 class。
@@ -45,6 +46,37 @@
     <summary id="rawTitle"></summary>
     <pre id="rawjson">—</pre>
   </details>
+
+  <!-- credentials panel (slice 2e): same modal shell; secret is write-only -->
+  <div class="modal-mask" id="credModal">
+    <div class="modal addModal">
+      <div class="modal-head">
+        <h2>凭据</h2>
+        <button class="modal-close" id="credClose">关闭</button>
+      </div>
+      <div id="credLocked" class="credLocked" hidden>
+        <b>未配置 VAULT_KEY</b>
+        <span class="addMuted">金库锁定,无法存取凭据(<span id="credLockedWhy"></span>)。</span>
+        <span class="addMuted">在宿主机的 compose 环境里设置 VAULT_KEY 后重启容器即可。</span>
+      </div>
+      <div id="credForm">
+        <div class="credGrid">
+          <label>名称<input id="credName" class="addInput" type="text" maxlength="60" placeholder="nas-root" autocomplete="off" /></label>
+          <label>类型<select id="credType" class="addInput credSelect">
+            <option value="ssh_password">SSH 密码</option>
+            <option value="ssh_key">SSH 私钥</option>
+            <option value="winrm_password">WinRM 密码</option>
+          </select></label>
+          <label>用户名<input id="credUser" class="addInput" type="text" maxlength="60" placeholder="root" autocomplete="off" /></label>
+          <label>密钥 / 密码<input id="credSecret" class="addInput" type="password" autocomplete="new-password" placeholder="存入后不可读出" /></label>
+        </div>
+        <div class="addFoot"><button type="button" id="credSave" class="addBtn primary">加密保存</button></div>
+      </div>
+      <div id="credStatus" class="addStatus"></div>
+      <div class="addSection">已存凭据</div>
+      <div id="credList"></div>
+    </div>
+  </div>
 
   <!-- 版本号页脚(切片 version):内容由 /api/config 的 version 字段填,未取到则整个
        页脚留空、不占视觉位置。 -->

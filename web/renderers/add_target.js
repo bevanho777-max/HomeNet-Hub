@@ -14,6 +14,7 @@ const $ = (s) => document.querySelector(s);
 
 let onChanged = () => {};
 let manifest = null;      // last successful /api/discover result
+let creds = { vault: { configured: false }, credentials: [] };
 let busy = false;
 
 // ── host pre-check ──────────────────────────────────────────────────
@@ -72,6 +73,10 @@ async function discover() {
     const j = await r.json();
     if (!r.ok) return setStatus(`探测被拒绝:${esc(zhReason(j.reason || j.error || ''))}`, 'bad');
     manifest = j;
+    // Fetched alongside the manifest so a credential-backed row can render its picker
+    // in the same paint — asking for it lazily would flash an empty select.
+    try { creds = await (await fetch('/api/credentials', { cache: 'no-store' })).json(); }
+    catch { creds = { vault: { configured: false }, credentials: [] }; }
     const n = j.suggested_capabilities.filter((c) => c.available).length;
     setStatus(j.reachable
       ? `探测完成,用时 ${j.took_ms}ms,可添加 ${n} 项`
@@ -91,6 +96,20 @@ const WIDGET_GROUP = {
   info: '证书与信息',
   machine: '机器指标',
 };
+
+// A capability that needs a credential gets a picker instead of a name field. The list
+// comes from the credentials API — names only, which is all this side ever sees.
+function credPicker(capId) {
+  if (!creds.vault?.configured) {
+    return `<span class="addPending">金库未配置,无法使用凭据</span>`;
+  }
+  if (!creds.credentials.length) {
+    return `<span class="addPending">先去「凭据」面板添加一个 SSH 凭据</span>`;
+  }
+  return `<select class="addName addCred credSelect" data-for="${esc(capId)}">`
+    + creds.credentials.map((c) => `<option value="${esc(c.id)}">${esc(c.name)} (${esc(c.username)})</option>`).join('')
+    + '</select>';
+}
 
 function pendingWhy(cap) {
   if (cap.requires === 'ssh') return '需要 SSH 凭据';
@@ -125,10 +144,12 @@ function renderManifest() {
   }
   const caps = [...groups].map(([g, list]) => `
     <div class="addGroup"><h4>${esc(g)}</h4>${list.map((c) => (c.available ? `
-      <label class="addCap" data-cap="${esc(c.id)}">
-        <input type="checkbox" class="addPick" value="${esc(c.id)}" />
+      <label class="addCap${c.requires === 'credential' ? ' needsCred' : ''}" data-cap="${esc(c.id)}">
+        <input type="checkbox" class="addPick" value="${esc(c.id)}"${
+          c.requires === 'credential' && !(creds.vault?.configured && creds.credentials.length) ? ' disabled' : ''} />
         <span class="addCapLabel">${esc(c.label)}</span>
-        <input type="text" class="addName" placeholder="自定义名称(可选)" maxlength="60" />
+        ${c.requires === 'credential' ? credPicker(c.id)
+          : '<input type="text" class="addName" placeholder="自定义名称(可选)" maxlength="60" />'}
         <span class="addResult"></span>
       </label>` : `
       <div class="addCap off">
@@ -184,7 +205,10 @@ async function addSelected() {
   for (const pick of picks) {
     const row = pick.closest('.addCap');
     const out = row.querySelector('.addResult');
-    const name = row.querySelector('.addName')?.value.trim() || undefined;
+    const credSel = row.querySelector('.addCred');
+    const credentialId = credSel ? credSel.value : undefined;
+    // The name input and the credential picker share a slot; only one is ever present.
+    const name = credSel ? undefined : (row.querySelector('.addName')?.value.trim() || undefined);
     out.className = 'addResult busy';
     out.textContent = '添加中…';
     try {
@@ -192,7 +216,10 @@ async function addSelected() {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         // host + capability id only. No source, ever.
-        body: JSON.stringify({ host: manifest.host, capability: pick.value, ...(name ? { name } : {}) }),
+        body: JSON.stringify({
+          host: manifest.host, capability: pick.value,
+          ...(name ? { name } : {}), ...(credentialId ? { credential_id: credentialId } : {}),
+        }),
       });
       const j = await r.json();
       if (r.ok) {

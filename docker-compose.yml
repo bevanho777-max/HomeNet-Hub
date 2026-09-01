@@ -9,6 +9,9 @@ services:
     environment:
       - PORT=3100
       - PG_DSN=${PG_DSN:-}                # read-only token DB (optional; demo needs none)
+      # B26: credential vault. Unset -> the vault stays locked and the panel runs exactly
+      # as before, minus the credentials panel. Generate with: openssl rand -base64 32
+      - VAULT_KEY=${VAULT_KEY:-}
       - PUSH_TOKEN_GPU1=${PUSH_TOKEN_GPU1:-} # http_push shared secret (optional)
       - PUSH_TOKEN_M26=${PUSH_TOKEN_M26:-}   # machine 26 push agent
       - PUSH_TOKEN_M25=${PUSH_TOKEN_M25:-}   # machine 25 push agent

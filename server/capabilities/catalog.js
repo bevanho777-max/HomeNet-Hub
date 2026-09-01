@@ -200,6 +200,48 @@ const CAPABILITIES = {
       };
     },
   },
+
+  // ONE capability again, and for the same reason node_metrics is one: a single SSH
+  // session yields cpu, memory, disk and network together. Three capabilities would
+  // have meant three sessions, three authentications and three cards for one host.
+  //
+  // requires:'credential' is what makes this different from everything before it — the
+  // caller must name a stored credential, and materialize() puts its ID (never its
+  // secret) in the target. The collector decrypts at connect time.
+  ssh_metrics: {
+    status: 'available',
+    needsPort: false,
+    widget: 'machine',
+    requires: 'credential',
+    label: () => 'Machine metrics (via SSH)',
+    appliesTo: (f) => (f.open.some((p) => p.port === 22) ? [{}] : []),
+    materialize({ host, name, credentialId }) {
+      const id = idOf(host, 'ssh_metrics');
+      return {
+        id,
+        target: {
+          id,
+          name: name || `${host} (ssh)`,
+          source: {
+            type: 'ssh', host, port: 22, credential_id: credentialId,
+            interval: '10s', timeout: '6s',
+          },
+          map: {
+            cpu: '$.cpu.pct',
+            mem_bytes: { v: '$.mem.used_gb', max: '$.mem.total_gb' },
+            disk_bytes: { v: '$.disk.used_gb', max: '$.disk.total_gb' },
+            net: { rx: '$.net.rx_bps', tx: '$.net.tx_bps' },
+            uptime: { s: '$.uptime_s' },
+          },
+        },
+        card: {
+          type: 'machine', target: id,
+          rings: ['cpu'], items: ['mem_bytes', 'disk_bytes', 'net'],
+          header_right: 'uptime',
+        },
+      };
+    },
+  },
 };
 
 // Deep/pending capabilities: discovery still lists them so the operator can see what
@@ -207,8 +249,10 @@ const CAPABILITIES = {
 // node_cpu / node_mem / node_disk / node_net were four pending entries until slice 2d;
 // they are now the single available `node_metrics` above. Only the credentialed
 // transports remain pending.
+// ssh_cpu / ssh_mem / ssh_disk were three pending entries until slice 2f; they are now
+// the single available `ssh_metrics` above. Windows still has no collector.
 const DEEP_METRICS = [['cpu', 'CPU'], ['mem', 'Memory'], ['disk', 'Disk']];
-for (const transport of ['ssh', 'winrm']) {
+for (const transport of ['winrm']) {
   for (const [metric, label] of DEEP_METRICS) {
     CAPABILITIES[`${transport}_${metric}`] = {
       status: 'pending',
@@ -218,10 +262,9 @@ for (const transport of ['ssh', 'winrm']) {
       label: () => `${label} (via ${transport.toUpperCase()}, credentials required)`,
       // Offered on the transport the OS hint points at, when a login port is open.
       appliesTo: (f) => {
-        const want = f.osHint === 'windows' ? 'winrm' : 'ssh';
-        if (transport !== want) return [];
+        if (f.osHint !== 'windows') return [];
         const p = new Set(f.open.map((o) => o.port));
-        return (p.has(22) || p.has(3389) || p.has(5985) || p.has(5986)) ? [{}] : [];
+        return (p.has(3389) || p.has(5985) || p.has(5986)) ? [{}] : [];
       },
       previewSource: (host) => ({ type: transport, host, metric }),
     };
@@ -253,8 +296,13 @@ export function suggestFor(finding) {
         // The preview IS what gets stored — same function, same constants. For a
         // pending capability there is nothing to store yet, so its declared shape is
         // returned instead and `available:false` says so.
+        // The preview IS what gets stored, so a credential-backed capability previews
+        // with a placeholder id: the real one is chosen when the caller adds it.
         source_preview: available
-          ? entry.materialize({ host: finding.host, port }).target.source
+          ? entry.materialize({
+            host: finding.host, port,
+            credentialId: entry.requires === 'credential' ? '<credential_id>' : undefined,
+          }).target.source
           : entry.previewSource(finding.host, port),
       });
     }
@@ -301,7 +349,7 @@ export function parseCapability(capId) {
  * from the caller — this function is the last thing before the database.
  * @returns {{ok:true, id, target, card} | {ok:false, reason, pending?}}
  */
-export function materialize({ host, capability, name }) {
+export function materialize({ host, capability, name, credentialId }) {
   const guard = checkPrivateIp(host);
   if (!guard.ok) return { ok: false, reason: guard.reason };
   const parsed = parseCapability(capability);
@@ -309,8 +357,14 @@ export function materialize({ host, capability, name }) {
   if (name != null && (typeof name !== 'string' || name.length > 60)) {
     return { ok: false, reason: 'name must be a string of at most 60 characters' };
   }
-  const built = CAPABILITIES[parsed.kind].materialize({
-    host: guard.ip, port: parsed.port, name: name || undefined,
+  const entry = CAPABILITIES[parsed.kind];
+  // A credential-backed capability is refused outright without one, rather than being
+  // built with an empty reference that only fails later, on the first poll.
+  if (entry.requires === 'credential' && !credentialId) {
+    return { ok: false, needsCredential: true, reason: `capability "${capability}" requires a credential` };
+  }
+  const built = entry.materialize({
+    host: guard.ip, port: parsed.port, name: name || undefined, credentialId,
   });
   // Provenance rides in the target doc so the list endpoint can answer "where did this
   // come from" without parsing it back out of the id. targets.yaml's schema allows

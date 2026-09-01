@@ -10,6 +10,7 @@ import { renderInfo } from './renderers/info.js';
 import { initHistory, historyRefresh } from './renderers/history.js';
 import { initMachineDetail, openMachineModal, closeMachineModal, bindMachineModal } from './renderers/machine_detail.js';
 import { bindAddTarget, closeAddPanel } from './renderers/add_target.js';
+import { bindCredentials, closeCredPanel } from './renderers/credentials.js';
 import { esc, statusLevel } from './renderers/common.js';
 
 const FAST_MS = 1500;     // snapshot poll (machine/GPU rhythm)
@@ -446,12 +447,18 @@ bindMachineModal();
 bindAddTarget({
   onChanged: async () => { await configTick(false); await snapTick(); },
 });
+// Credentials do not appear on the board themselves, but a target that uses one will,
+// so the panel refreshes through the same path rather than inventing a second one.
+bindCredentials({
+  onChanged: async () => { await configTick(false); await snapTick(); },
+});
 // Esc closes whichever modal is open — the token one had no keyboard exit either.
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
   closeMachineModal();
   closeTokenModal();
   closeAddPanel();
+  closeCredPanel();
 });
 
 // B15 §4: relax the snapshot cadence on touch / narrow devices to save battery

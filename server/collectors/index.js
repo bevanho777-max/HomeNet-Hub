@@ -5,6 +5,7 @@
 import { collectHttp } from './http.js';
 import { collectTcp, collectTls } from './net_probe.js';
 import { collectPrometheus } from './prometheus.js';
+import { collectSsh } from './ssh.js';
 import { collectExec } from './exec.js';
 import { collectSql, collectSqlScalar, collectSqlRows } from './sql.js';
 import { collectDemo, demoTokenRows, demoTokenSpeed } from './demo.js';
@@ -60,7 +61,7 @@ export class Scheduler {
       const interval = parseDuration(target.source?.interval,
         type === 'http' ? 1500 : type === 'demo' ? 2000
           : type === 'tls' ? 3600000 : type === 'tcp' ? 10000
-            : type === 'prometheus' ? 10000 : 8000);
+            : type === 'prometheus' ? 10000 : type === 'ssh' ? 10000 : 8000);
       const tick = () => {
         if (this._inflight.has(target.id)) return;
         this._inflight.add(target.id);
@@ -130,6 +131,12 @@ export class Scheduler {
         : type === 'tcp' ? await collectTcp(target.source, parseDuration(target.source.timeout, 3000))
         : type === 'tls' ? await collectTls(target.source, parseDuration(target.source.timeout, 4000))
         : type === 'prometheus' ? await collectPrometheus(target.source, parseDuration(target.source.timeout, 4000))
+        : type === 'ssh' ? await collectSsh(target.source, {
+          // The vault and the credential store reach the collector through ctx, not
+          // through the target: a source row can name a credential, never carry one.
+          vault: this.ctx.vault, credStore: this.ctx.credStore,
+          timeoutMs: parseDuration(target.source.timeout, 6000),
+        })
         : type === 'demo' ? collectDemo(target, metrics)
         : null;
       if (raw == null) throw new Error(`unsupported source type: ${type}`);

@@ -416,6 +416,9 @@ h2:empty { display: none; } /* 堆叠卡外框无标题时不留空行 */
 .addCapLabel { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .addCap .addName { display: none; }
 .addCap.picked .addName { display: inline-block; }
+/* 凭据下拉不是可选项,是必填项 —— 与"自定义名称"不同,它常显,否则勾选前看不出
+   这条能力还需要一个凭据。 */
+.addCap .addCred { display: inline-block; width: 168px; padding: 2px 6px; }
 .addName { width: 150px; background: transparent; color: var(--text); border: 1px solid transparent;
   border-bottom: 1px solid var(--hair); border-radius: 0; padding: 2px 4px; font-size: 11.5px;
   font-family: var(--font); outline: none; }
@@ -459,3 +462,21 @@ h2:empty { display: none; } /* 堆叠卡外框无标题时不留空行 */
   font-variant-numeric: tabular-nums; }
 .foot:has(#version:empty) { padding: 0; }
 @media (max-width: 560px) { .foot { padding-left: var(--s4); padding-right: var(--s4); } }
+
+/* ---------- 凭据面板(切片2e) ---------- */
+.credGrid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s3); margin-bottom: var(--s3); }
+.credGrid label { display: flex; flex-direction: column; gap: 5px; font-size: 11px; color: var(--muted2);
+  text-transform: uppercase; letter-spacing: .6px; }
+.credGrid .addInput { width: 100%; text-transform: none; letter-spacing: 0; }
+/* 自己的下拉样式,不借用 .hostSel —— 那是 history.js 用来找 pane 选择器的行为类,
+   它会 querySelectorAll('.hostSel') 并重写 innerHTML,把这里的选项换成目标列表。 */
+.credSelect { appearance: none; cursor: pointer; color-scheme: dark; }
+.credSelect option { background: #0c1322; color: var(--text); }
+/* [hidden] 必须显式写:作者样式的 display:flex 压过 UA 默认的 [hidden]{display:none}。
+   .addFoot 踩过同一个坑,这里是第二次 —— 元素的 .hidden 属性是 true,但它照样显示,
+   所以断言必须看 computed style,不能看属性。 */
+.credLocked[hidden] { display: none; }
+.credLocked { display: flex; flex-direction: column; gap: 6px; padding: var(--s3) var(--s4);
+  border: 1px solid var(--hair); border-radius: 10px; background: var(--glass); margin-bottom: var(--s3); }
+.credLocked b { color: var(--yellow); font-size: 13px; }
+@media (max-width: 560px) { .credGrid { grid-template-columns: 1fr; } }

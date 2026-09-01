@@ -10,6 +10,8 @@ import { fileURLToPath } from 'node:url';
 import { ConfigStore } from './config/watch.js';
 import { publicConfig } from './config/loader.js';
 import { VERSION } from './version.js';
+import { CredStore, validateCredential, CRED_TYPES } from './store/cred_store.js';
+import { openVault } from './vault.js';
 import { Snapshot } from './store/snapshot.js';
 import { Tsdb, RANGE_SEC } from './store/sqlite.js';
 import { Scheduler } from './collectors/index.js';
@@ -33,7 +35,6 @@ config.start(); // fatal if initial config is invalid
 
 const snapshot = new Snapshot();
 const tsdb = new Tsdb(join(DATA_DIR, 'homenet.db'));
-const scheduler = new Scheduler({ snapshot, tsdb, env: process.env });
 
 // Slice 2: runtime-added targets/cards live in the same db file and are merged onto
 // the file config here. Everything downstream (scheduler, publicConfig, frontend)
@@ -41,6 +42,15 @@ const scheduler = new Scheduler({ snapshot, tsdb, env: process.env });
 // change this slice makes. With an empty user store buildEffective returns the file
 // object itself, so the two are the same reference and the etag is untouched.
 const userStore = new UserStore(join(DATA_DIR, 'homenet.db'));
+// Slice 2e: credentials live in the same file, encrypted. The vault is opened once at
+// startup against VAULT_KEY; with no key it stays locked and every write path refuses,
+// which is the whole point — a locked vault must not silently fall back to plaintext.
+const credStore = new CredStore(join(DATA_DIR, 'homenet.db'));
+const vault = openVault(process.env.VAULT_KEY, credStore);
+// The scheduler is built after the vault so the ssh collector can reach it through ctx.
+const scheduler = new Scheduler({ snapshot, tsdb, env: process.env, vault, credStore });
+console.log(`[vault] ${vault.locked ? `locked — ${vault.reason}` : 'unlocked'}`
+  + ` (${credStore.count()} credential(s) stored)`);
 const effective = new EffectiveStore({ userStore });
 effective.rebuild(config.get());
 
@@ -124,6 +134,9 @@ await app.register(fastifyCompress, {
 app.get('/healthz', async () => ({
   ok: true, service: 'homenet-hub', version: VERSION, ts: Date.now(),
   config: config.health(), effective: effective.health(),
+  // Status only: whether a key is configured and, if not, why. Never the key, never a
+  // secret, never a ciphertext.
+  vault: { ...vault.status(), credentials: credStore.count() },
 }));
 
 app.get('/api/config', async (req, reply) => {
@@ -208,6 +221,60 @@ app.get('/api/discover', async (req, reply) => {
   }
 });
 
+// ── credentials (slice 2e) ──────────────────────────────────────────
+// A write-only door. `secret` goes in and is encrypted before it touches the database;
+// nothing in this file ever sends one back out, in any shape — not plaintext, not
+// ciphertext, not in an error message. The listing query does not even SELECT the
+// column. To use a credential later, a collector decrypts it in memory at connect time.
+const vaultLocked = (reply) => {
+  reply.code(503);
+  return { error: 'vault not configured', reason: vault.reason, hint: 'set VAULT_KEY and restart' };
+};
+
+app.post('/api/credentials', async (req, reply) => {
+  if (vault.locked) return vaultLocked(reply);
+  const v = validateCredential(req.body);
+  // Note what is NOT here: req.body is never spread into the response, so a rejected
+  // request cannot bounce the secret back to the caller (or into an access log).
+  if (!v.ok) { reply.code(400); return { error: 'rejected', reason: v.reason }; }
+  try {
+    const enc = vault.encrypt(v.secret);
+    const row = credStore.insert({ name: v.name, type: v.type, username: v.username }, enc);
+    return { id: row.id, name: row.name, type: row.type, username: row.username };
+  } catch (e) {
+    if (String(e?.message || '').includes('UNIQUE')) {
+      reply.code(409);
+      return { error: 'a credential with that name already exists', name: v.name };
+    }
+    reply.code(500);
+    // Generic on purpose: a crypto or driver error must not carry fragments of input.
+    return { error: 'could not store credential' };
+  }
+});
+
+app.get('/api/credentials', async () => ({
+  vault: vault.status(),
+  types: CRED_TYPES,
+  credentials: credStore.list(),
+}));
+
+app.delete('/api/credentials/:id', async (req, reply) => {
+  const id = req.params.id;
+  if (!credStore.get(id)) { reply.code(404); return { error: 'no such credential', id }; }
+  // Refuse while something still points at it. Slice 2f is what will create those
+  // references; the check ships now so the first target that uses one cannot be
+  // orphaned by a delete that happened to land first.
+  const users = userStore.getUserConfig().targets
+    .filter((t) => t.credential_id === id || t.source?.credential_id === id)
+    .map((t) => t.id);
+  if (users.length) {
+    reply.code(409);
+    return { error: 'credential is in use', id, used_by: users };
+  }
+  const out = credStore.remove(id);
+  return { ok: true, ...out, id };
+});
+
 // ── user targets (slice 2b) ─────────────────────────────────────────
 // Materialise a discovered capability into a persisted {target, card}.
 //
@@ -217,11 +284,26 @@ app.get('/api/discover', async (req, reply) => {
 // target's source is exactly what the scheduler executes. The host goes through
 // net_guard and the port through discovery's bounded set, both inside materialize().
 app.post('/api/user_targets', async (req, reply) => {
-  const { host, capability, name } = req.body || {};
-  const built = materialize({ host, capability, name });
+  const { host, capability, name, credential_id: credentialId } = req.body || {};
+  // A credential-backed capability is checked against the vault BEFORE anything is
+  // built: the id must name a credential that exists, and the vault must be open — a
+  // target referencing an unopenable secret would poll forever and fail every time.
+  if (credentialId != null) {
+    if (vault.locked) return vaultLocked(reply);
+    if (!credStore.get(String(credentialId))) {
+      reply.code(400);
+      return { error: 'rejected', reason: `no such credential: ${String(credentialId).slice(0, 40)}`, applied: false };
+    }
+  }
+  const built = materialize({ host, capability, name, credentialId });
   if (!built.ok) {
+    if (built.needsCredential && vault.locked) return vaultLocked(reply);
     reply.code(400);
-    return { error: built.pending ? 'not materializable yet' : 'rejected', reason: built.reason, applied: false };
+    return {
+      error: built.pending ? 'not materializable yet' : 'rejected',
+      reason: built.reason, applied: false,
+      ...(built.needsCredential ? { needs_credential: true } : {}),
+    };
   }
   const { id, target, card } = built;
   try {
