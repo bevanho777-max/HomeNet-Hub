@@ -14,6 +14,71 @@ need `git pull` alone. Each entry below is tagged accordingly.
 
 ---
 
+## v2.2 — 2026-09-01
+
+**Deeper views, cheaper history.** Machine cards now open their own multi-metric history
+modal, charts name every line **on the plot** in the line's own colour instead of leaving
+you to match colours against a legend, and the time-series store moved to a tiered layout
+so long-range queries stay cheap as history accumulates. An LLM gateway card, per-drive
+NAS temperatures and a dual-timezone header round out the panel.
+
+> **视图更深,历史更省。** 机器卡可以点开自己的多指标历史弹窗;图表把每条线的名字**直接
+> 标在图上**、用线本身的颜色,不再让人对着底部图例比色;时序库改为分级存储,历史越积越多
+> 也不会拖慢长时段查询。另新增 LLM 网关卡、NAS 逐盘温度与双时区页眉。
+
+**Deploying this release:** the view and time-series entries are `server/`+`web/`, so
+they land only after `docker compose up -d --build` on the host. The agent-side entries
+travel a different path — install the script on the machine that runs it and restart its
+service (`sudo install -m 0755 agents/homenet-agent.sh /opt/homenet-agent/` +
+`sudo systemctl restart homenet-agent`); rebuilding the hub does nothing for them.
+
+> **本次部署方式:** 视图与时序两组是 `server/`+`web/` 改动,要在宿主机上
+> `docker compose up -d --build` 才生效;agent 那两组走的是另一条路 —— 在跑它的机器上
+> 安装脚本并重启服务(`sudo install -m 0755 agents/homenet-agent.sh /opt/homenet-agent/`
+> + `sudo systemctl restart homenet-agent`),重建 hub 镜像对它们没有任何作用。
+
+### Views (面板视图)
+
+| Commit | Change | Rebuild |
+|---|---|---|
+| `b183fd6` | machine card → multi-metric history modal (24h/7d/30d, role-driven series, missing lines noted instead of drawn empty) | **yes** (server+web) |
+| `06f02c0` | chart series named on the plot in their own colour — label gutter outside the plot area, collision-resolved with leader lines; shared by the modal and the compare panes | **yes** (web) |
+| `0633b7c` | LLM gateway card — CPU / cache-hit / success rings, per-model request counts, 5-minute inbound rate | no (agents) |
+| `a8bfe94` | NAS drive temperatures on the card — composite metrics gained per-segment colouring and superscript labels | **yes** (server+web) |
+| `ca96b12` `7cafb31` `51b14d5` | dual-timezone header clock; day/night as an inline SVG sun / crescent | **yes** (web) |
+
+### Time-series store (时序库)
+
+| Commit | Change | Rebuild |
+|---|---|---|
+| `aec7155` | `metrics` covering index — history reads stop going back to the row | **yes** (server) |
+| `b9697c6` | tiered downsampling — raw samples for the recent days, 5-minute buckets (min/max/avg/n) for about a month; the rolling job chunks its work and yields between chunks, and a delete is verified against its own aggregate inside the same transaction before it commits | **yes** (server) |
+| `57b57e4` | read-side bucketing; fix a full-index scan when listing metric names | **yes** (server) |
+
+### Gateway metrics (网关指标)
+
+| Commit | Change | Rebuild |
+|---|---|---|
+| `dbd84ff` | litellm same-day figures read the `DailyUserSpend` pre-aggregate, bucketed by local date | no (agents) |
+| `436a08c` | `reqs_5m` sums every litellm instance's inbound log — it counted one container, so it read 0 whenever traffic moved to another instance | no (agents) |
+| `867abd9` | `LITELLM_CONTAINERS` documented in the agent protocol doc and the config examples | no (docs) |
+
+### Fixes (修复)
+
+| Commit | Change | Rebuild |
+|---|---|---|
+| `08dc7ea` `0576a4b` `2d91c34` et al. | assorted view and rendering fixes — VRAM series key, ring label not refreshing after a metric swap, card glow, history overlay/timeout handling, resize debounce and per-pane request de-duplication | **yes** (web) |
+
+### Config surface added this release
+
+- `metrics[]`: `divide` scaling, `level_map` text colouring, per-segment colours and
+  superscript labels on composite metrics
+- agent side (on the gateway host's `/etc/homenet-agent.env`, see
+  [`docs/AGENT_PROTOCOL.md`](docs/AGENT_PROTOCOL.md) §6.1): `LITELLM_PG_DSN`,
+  `LITELLM_DB_CONTAINER`, `LITELLM_CONTAINERS`
+
+---
+
 ## v2.1 — 2026-07-13
 
 **From demo to production.** This release standardizes a machine-initiated **push

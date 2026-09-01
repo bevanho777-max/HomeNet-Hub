@@ -9,6 +9,9 @@ working before wiring up anything real.
 
 ![HomeNet Hub dashboard](docs/screenshot.png)
 
+> The screenshot predates the newest views — the "On-screen views" section below lists
+> what the panel shows today.
+
 > All display text (titles, labels, categories, theme) is configuration — write it in
 > **any language**. The shipped example is English; your `config/` is yours.
 
@@ -31,11 +34,44 @@ working before wiring up anything real.
   (row/column, responsive); N-pane history compare via `panes: [...]`.
 - **Collectors** — `http` (pull), `http_push` (machine pushes to you), `sql`
   (read-only Postgres), `exec` (allowlisted local commands), `demo` (synthetic).
-- **Time-series & token accounting** — built-in **SQLite** history with compare charts;
-  **Postgres** token accounting with a cumulative all-time total plus a live tokens/sec.
+- **Metric templates** — one metric key says how a value is read *and* how it is drawn:
+  `value/max` composites, `divide` scaling, `level_map` for colouring text states, and
+  per-segment colouring with superscript labels (that is how NAS drive temperatures
+  carry their drive number, and the gateway card its per-model request counts).
+- **Time-series & token accounting** — built-in **SQLite** history with compare charts,
+  tiered downsampling (raw samples for the recent days, folded into 5-minute aggregate
+  buckets for about a month, each bucket keeping min/max so spikes are not flattened)
+  over a covering index, which keeps long-range queries cheap; **Postgres** token
+  accounting with a cumulative all-time total plus a live tokens/sec.
 - **Themeable & resilient** — fonts/colors via `theme.yaml`; visibility-aware polling
   with a reconnect badge for flaky mobile networks.
 - **Single container** — `docker compose up` and you're done.
+
+---
+
+## On-screen views
+
+- **Machine history modal** — click any machine card for that host's own history over
+  **24h / 7d / 30d**. Which lines are drawn follows the card's role (GPU box → GPU% /
+  temperature / power, gateway → CPU / cache hit / success, NAS → CPU / memory / drive
+  temperature). A line the host has never recorded — or has not recorded *in this
+  window* — is dropped with a note saying which of the two it was, rather than drawn as
+  an empty line for you to puzzle over.
+- **Labels on the lines** — every series is named beside the chart in its own colour, in
+  a gutter outside the plot area, so a spike can never cross a label and a label can
+  never hide a sample. Names whose lines end close together are spread apart and joined
+  back to their line by a matching leader. The modal and the compare panes share one
+  renderer, so both read the same way.
+- **LLM gateway card** — rings for CPU / cache hit rate / success rate, today's requests
+  split per model (the model name rides along as a superscript), and a 5-minute inbound
+  rate summed across every gateway instance, so a second instance serving a different
+  model is not silently left out.
+- **NAS drive temperatures** — one reading per drive, each carrying its drive number as
+  a superscript, coloured on two thresholds.
+- **Dual-timezone clock** — two zones side by side in the header, day and night told
+  apart by an inline SVG sun / crescent.
+- **N-pane history compare** — the `panes: [...]` layout listed above; it shares the
+  chart renderer with the modal, and therefore the same on-plot labels.
 
 ---
 
@@ -52,6 +88,7 @@ monitored machines
                        ▼                              ▼                              ▼
               snapshot (in-memory)            tsdb (SQLite)                Postgres (token acct)
                 /api/snapshot                  /api/history                 /api/token_detail
+                                       raw samples + 5-min buckets
 
   config/*.yaml ──(chokidar watch + ajv validate)──► /api/config (ETag)
                                                                      ▼
@@ -123,6 +160,9 @@ Add a card for it in `config/layout.yaml`, save, and it appears within ~3 s.
 - **Service `/stats`** — optional real-value integration for a service card
   (`{ procs, sessions, skills }`); see the disabled `*_real_example` blocks in
   [`config.example/targets.yaml`](config.example/targets.yaml).
+- **LLM gateway collection** — the agent-side environment that fills a gateway card's
+  `extra.litellm.*` (`LITELLM_PG_DSN`, `LITELLM_DB_CONTAINER`, `LITELLM_CONTAINERS`) is
+  documented in [`docs/AGENT_PROTOCOL.md`](docs/AGENT_PROTOCOL.md) §6.1.
 
 ---
 

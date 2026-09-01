@@ -8,6 +8,8 @@
 
 ![HomeNet Hub 面板](docs/screenshot.png)
 
+> 截图早于最新的几项视图 —— 面板现在长什么样,见下方「面板视图」章节。
+
 > 所有展示文案(标题、标签、分类、主题)都来自配置,可用**任意语言**书写。仓库自带示例是
 > 英文;你的 `config/` 归你自己。
 
@@ -27,10 +29,34 @@
   历史图 N 屏对比(`panes: [...]`)。
 - **采集器** — `http`(拉取)、`http_push`(机器主动推)、`sql`(只读 Postgres)、
   `exec`(白名单本地命令)、`demo`(合成)。
-- **时序与 token 记账** — 内置 **SQLite** 历史与对比图;**Postgres** token 记账,给出
-  全量累计总量 + 实时 tokens/秒。
+- **指标模板** — 一个指标 key 同时描述值怎么取、怎么画:`value/max` 复合、`divide`
+  缩放、`level_map` 给文本状态着色,以及复合指标逐段着色 + 上标标签(NAS 盘温的盘号、
+  网关卡按模型拆开的请求量都是这么来的)。
+- **时序与 token 记账** — 内置 **SQLite** 历史与对比图,分级降采样(近几天保留原始
+  采样,再往前折成 5 分钟聚合桶保留约一个月,桶内保留 min/max,尖峰不被抹平),配合
+  覆盖索引,显著降低长时段查询开销;**Postgres** token 记账,给出全量累计总量 +
+  实时 tokens/秒。
 - **可换肤 & 韧性** — 字体/配色走 `theme.yaml`;可见性感知轮询 + 断连角标,应对弱网移动端。
 - **单容器** — `docker compose up` 即可。
+
+---
+
+## 面板视图
+
+- **机器卡历史弹窗** — 点任意机器卡,弹出这台机自己的多指标历史,**24h / 7d / 30d**
+  三档。画哪几条线按卡的角色定(GPU 机 → GPU%/温度/功耗,网关 → CPU/缓存命中/成功率,
+  NAS → CPU/内存/盘温)。某条线这台机从未记录过、或只是这个时段没有数据,会被剔除并
+  在弹窗底部注明是两者中的哪一种,而不是画一条空线让你自己猜。
+- **线名直接标在图上** — 每条线在图旁用它自己的颜色标出名字,标签放在画区之外的标注
+  槽里,所以尖峰不会穿过标签,标签也不会盖住数据。末端挨得太近的名字会自动上下错开,
+  并用同色引线连回各自的线。弹窗与对比屏共用同一个渲染器,两处读起来一样。
+- **LLM 网关卡** — CPU / 缓存命中率 / 成功率三个圆环,当日请求量按模型拆开(模型名作
+  上标),外加 5 分钟入站速率;该速率累加所有网关实例,第二个实例挂着别的模型也不会被
+  静默漏掉。
+- **NAS 磁盘温度** — 每块盘一个读数,各自带盘号上标,按两档阈值分级着色。
+- **双时区时钟** — 页眉并排显示两个时区,昼夜用内联 SVG 太阳/月牙区分。
+- **N 屏历史对比** — 即上面列出的 `panes: [...]` 布局;它与弹窗共用图表渲染器,因此
+  同样有线上标注。
 
 ---
 
@@ -47,6 +73,7 @@
                        ▼                               ▼                              ▼
               snapshot(内存最新)               tsdb(SQLite)              Postgres(token 记账)
                 /api/snapshot                    /api/history                /api/token_detail
+                                         原始采样 + 5 分钟聚合桶
 
   config/*.yaml ──(chokidar 监听 + ajv 校验)──► /api/config(ETag)
                                                                       ▼
@@ -115,6 +142,9 @@ docker compose up -d --build
 - **服务 `/stats`** —— service 卡换真值的可选集成(`{ procs, sessions, skills }`),
   见 [`config.example/targets.yaml`](config.example/targets.yaml) 里禁用的
   `*_real_example` 段。
+- **LLM 网关采集** —— 网关卡 `extra.litellm.*` 所需的 agent 侧环境变量
+  (`LITELLM_PG_DSN`、`LITELLM_DB_CONTAINER`、`LITELLM_CONTAINERS`)见
+  [`docs/AGENT_PROTOCOL.md`](docs/AGENT_PROTOCOL.md) §6.1。
 
 ---
 
