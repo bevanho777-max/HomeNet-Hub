@@ -16,7 +16,10 @@ GPU_NAMES="${GPU_NAMES:-}"         # 可选:逗号分隔卡名,按 idx 对应(AM
 # litellm 采集(仅网关机启用):不设 LITELLM_PG_DSN 就整段跳过,其余机器行为完全不变。
 # DSN 走 homenet_ro 只读账号;psql 在 litellm-db 容器内执行,故主机名用 localhost。
 LITELLM_PG_DSN="${LITELLM_PG_DSN:-}"
-LITELLM_CONTAINER="${LITELLM_CONTAINER:-litellm}"
+# 入站请求量按容器读访问日志,而两个 litellm 实例各收各的(4000 挂 27b,4001 挂 35b),
+# 只读一个容器就只统计一半流量。这里收一份空格分隔的容器名列表并全部累加。旧的单容器
+# LITELLM_CONTAINER 仍然生效,作为未设新变量时的默认值,老机器的 env 不用改。
+LITELLM_CONTAINERS="${LITELLM_CONTAINERS:-${LITELLM_CONTAINER:-litellm}}"
 LITELLM_DB_CONTAINER="${LITELLM_DB_CONTAINER:-litellm-db}"
 LITELLM_TTL="${LITELLM_TTL:-45}"        # 真正采集的间隔秒(远大于 INTERVAL,不拖慢推送)
 LITELLM_STALE="${LITELLM_STALE:-180}"   # 缓存超过此秒数即丢弃,字段整体省略
@@ -140,7 +143,7 @@ llm_isnum() { case "$1" in ''|*[!0-9.]*) return 1;; *) return 0;; esac; }
 
 # 输出 extra.litellm 的 JSON 片段(不含外层花括号),失败输出空串 → 字段整体省略。
 llm_collect() {
-  local raw stats logs ch sp rt r5 m1 m2 m3 out=""
+  local raw stats logs ch sp rt r5 n c m1 m2 m3 out=""
   [ -n "$LITELLM_PG_DSN" ] || return 0      # 未启用则整段跳过(主循环也有守卫,这里保证函数自洽)
   raw=$(llm_sql | timeout 6 docker exec -i "$LITELLM_DB_CONTAINER" \
           psql "$LITELLM_PG_DSN" -tAq 2>/dev/null) || raw=""
@@ -164,11 +167,20 @@ llm_collect() {
   fi
   # 近 5 分钟入站 LLM 请求:走访问日志,天然不含 litellm→后端的健康探测(那些不是入站 HTTP)。
   # 日志为空是常态(流量稀疏),要与"取不到日志"区分:前者记 0,后者省略字段。
-  if logs=$(timeout 5 docker logs --since 5m "$LITELLM_CONTAINER" 2>/dev/null); then
-    r5=$(printf '%s\n' "$logs" \
-      | grep -cE '"POST /v1/(chat/completions|embeddings|responses|completions)[^"]*" [0-9]{3}' || true)
-    llm_isnum "$r5" && out="$out\"reqs_5m\":$r5,"
-  fi
+  # 多实例逐个累加(LITELLM_CONTAINERS 故意不加引号,靠分词取列表)。任何一个容器的日志取
+  # 不到(没跑/改名/docker 报错)就整个字段省略,而不是报一个只含另一半流量的数 —— 少一个
+  # 数看得出来是"—",少一半流量看起来像个正常的小数字,不会有人发现。
+  r5=0
+  for c in $LITELLM_CONTAINERS; do
+    if logs=$(timeout 5 docker logs --since 5m "$c" 2>/dev/null); then
+      n=$(printf '%s\n' "$logs" \
+        | grep -cE '"POST /v1/(chat/completions|embeddings|responses|completions)[^"]*" [0-9]{3}' || true)
+      if llm_isnum "$n"; then r5=$((r5 + n)); else r5=""; break; fi
+    else
+      r5=""; break
+    fi
+  done
+  [ -n "$r5" ] && out="$out\"reqs_5m\":$r5,"
   [ -n "$out" ] && printf '"litellm":{%s}' "${out%,}"
 }
 
