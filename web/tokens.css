@@ -362,3 +362,91 @@ h2:empty { display: none; } /* 堆叠卡外框无标题时不留空行 */
   .big { font-size: 32px; }
 }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; } .card { transition: none; } }
+
+/* ---------- 添加目标面板（切片3） ---------- */
+/* 复用 .modal-mask/.modal 外壳,只加面板内部的元件。全部走既有 token,没有新颜色。 */
+.addOpen { background: var(--glass2); color: var(--text); border: 1px solid var(--hair); border-radius: 9px;
+  padding: 5px 12px; font-size: 12px; font-weight: 600; cursor: pointer; letter-spacing: .5px;
+  transition: border-color .2s, background .2s; }
+.addOpen:hover { border-color: var(--text); background: var(--glass); }
+.addModal { width: min(760px, 96vw); }
+
+.addBar { display: flex; gap: var(--s2); margin-bottom: var(--s3); }
+.addInput { flex: 1; background: var(--track, rgba(255,255,255,0.05)); color: var(--text); border: 1px solid var(--hair);
+  border-radius: 9px; padding: 9px 13px; font-size: 13px; font-family: var(--font); outline: none; }
+.addInput:focus { border-color: var(--hair2); }
+.addInput::placeholder { color: var(--muted2); }
+.addBtn { background: var(--glass2); color: var(--text); border: 1px solid var(--hair); border-radius: 9px;
+  padding: 8px 18px; font-size: 13px; font-weight: 600; cursor: pointer; transition: border-color .2s, opacity .2s; }
+.addBtn:hover:not(:disabled) { border-color: var(--text); }
+.addBtn:disabled { opacity: .45; cursor: default; }
+
+.addStatus { font-size: 12px; color: var(--muted); min-height: 18px; line-height: 1.6; }
+.addStatus.ok { color: var(--green); }
+.addStatus.warn { color: var(--yellow); }
+.addStatus.bad { color: var(--red); }
+.addStatus.busy { color: var(--muted); }
+
+.addSum { display: flex; align-items: center; flex-wrap: wrap; gap: var(--s2); font-size: 13px;
+  margin: var(--s3) 0 var(--s2); }
+.addDot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted2); }
+.addDot.ok { background: var(--green); box-shadow: 0 0 8px var(--green); }
+.addDot.bad { background: var(--red); box-shadow: 0 0 8px var(--red); }
+.addMuted { color: var(--muted2); font-size: 11.5px; }
+
+.addRow { display: flex; gap: var(--s3); align-items: flex-start; margin: var(--s2) 0; font-size: 12px; }
+.addRow > .addMuted { min-width: 56px; padding-top: 3px; }
+.addChips { display: flex; flex-wrap: wrap; gap: 6px; }
+.addChip { display: inline-flex; align-items: baseline; gap: 5px; background: var(--glass); border: 1px solid var(--hair);
+  border-radius: 7px; padding: 2px 8px; font-size: 11.5px; color: var(--text); }
+.addChip i { font-style: normal; color: var(--muted2); font-size: 10.5px; }
+.addSvcs { display: flex; flex-direction: column; gap: 3px; }
+.addSvc { display: flex; gap: var(--s2); flex-wrap: wrap; font-size: 11.5px; color: var(--muted); }
+.addSvc b { color: var(--text); }
+
+.addCaps { margin-top: var(--s3); border-top: 1px solid var(--hair); padding-top: var(--s3); }
+.addGroup { margin-bottom: var(--s3); }
+.addGroup h4 { margin: 0 0 6px; font-size: 11px; font-weight: 500; color: var(--muted2);
+  text-transform: uppercase; letter-spacing: .8px; }
+.addCap { display: flex; align-items: center; gap: var(--s2); padding: 5px 8px; border-radius: 8px;
+  font-size: 12.5px; color: var(--text); cursor: pointer; }
+.addCap:hover:not(.off) { background: var(--glass); }
+.addCap.off { color: var(--muted2); cursor: default; }
+.addCap.done { opacity: .55; }
+.addCapLabel { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.addCap .addName { display: none; }
+.addCap.picked .addName { display: inline-block; }
+.addName { width: 150px; background: transparent; color: var(--text); border: 1px solid transparent;
+  border-bottom: 1px solid var(--hair); border-radius: 0; padding: 2px 4px; font-size: 11.5px;
+  font-family: var(--font); outline: none; }
+.addName:focus { border-bottom-color: var(--hair2); }
+.addName::placeholder { color: var(--muted2); }
+.addPending { font-size: 11px; color: var(--muted2); }
+.addResult { font-size: 11px; min-width: 62px; text-align: right; }
+.addResult.ok { color: var(--green); }
+.addResult.warn { color: var(--yellow); }
+.addResult.bad { color: var(--red); text-align: left; }
+
+/* 主操作贴底:面板内容常常长过一屏,按钮沉到折叠线以下等于没有按钮。
+   [hidden] 必须显式写:作者样式的 display:flex 会压过 UA 默认的 [hidden]{display:none},
+   面板刚打开、还没探测时会凭空多出一个死按钮。仓库里 .histErr[hidden] 同款。 */
+.addFoot[hidden] { display: none; }
+.addFoot { display: flex; justify-content: flex-end; margin-top: var(--s2);
+  position: sticky; bottom: -1px; padding: var(--s2) 0;
+  background: linear-gradient(180deg, transparent, var(--bg1) 40%); }
+.addSection { margin: var(--s5) 0 var(--s2); font-size: 11px; font-weight: 500; color: var(--muted2);
+  text-transform: uppercase; letter-spacing: .8px; border-top: 1px solid var(--hair); padding-top: var(--s3); }
+.addItem { display: flex; align-items: center; gap: var(--s2); padding: 6px 8px; border-radius: 8px; font-size: 12.5px; }
+.addItem:hover { background: var(--glass); }
+.addItem b { color: var(--text); font-weight: 600; }
+.addItem .addChip { margin-left: auto; }
+.addDel { background: transparent; color: var(--muted); border: 1px solid var(--hair); border-radius: 7px;
+  padding: 3px 10px; font-size: 11px; cursor: pointer; }
+.addDel:hover:not(:disabled) { border-color: var(--red); color: var(--red); }
+.addDel:disabled { opacity: .5; cursor: default; }
+
+@media (max-width: 560px) {
+  .addOpen { padding: 4px 9px; font-size: 11px; }
+  .addName { width: 96px; }
+  .addCap { flex-wrap: wrap; }
+}

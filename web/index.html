@@ -10,6 +10,8 @@
   <header class="topbar">
     <div class="brand"><span class="logo">◆</span><h1 id="title"></h1></div>
     <div class="meta">
+      <!-- 切片3:添加目标入口。放在连接角标之前,与时钟同处 header 右侧。 -->
+      <button type="button" id="addOpen" class="addOpen">＋ 添加目标</button>
       <span id="conn" class="conn"></span>
       <!-- 双时区时钟:id 留在外层容器上,header.clock 显隐开关逻辑不变。
            每行结构固定,tickClock 只改 .tztime 的文本与 .tzrow 的昼夜 class。
@@ -71,6 +73,28 @@
       </div>
       <div class="legend" id="machineModalLegend" style="margin-top:12px"></div>
       <div class="note" id="machineModalNote" hidden></div>
+    </div>
+  </div>
+
+  <!-- add-target panel (slice 3): reuses the modal shell the token/machine modals use -->
+  <div class="modal-mask" id="addModal">
+    <div class="modal addModal">
+      <div class="modal-head">
+        <h2>添加目标</h2>
+        <button class="modal-close" id="addClose">关闭</button>
+      </div>
+      <div class="addBar">
+        <input id="addHost" class="addInput" type="text" inputmode="numeric" autocomplete="off"
+               placeholder="192.168.1.x（仅限私网地址）" maxlength="15" />
+        <button type="button" id="addDiscover" class="addBtn primary">发现</button>
+      </div>
+      <div id="addStatus" class="addStatus"></div>
+      <div id="addManifest"></div>
+      <div id="addFoot" class="addFoot" hidden>
+        <button type="button" id="addSelected" class="addBtn primary" disabled>添加所选</button>
+      </div>
+      <div class="addSection">已添加</div>
+      <div id="addList"></div>
     </div>
   </div>
 

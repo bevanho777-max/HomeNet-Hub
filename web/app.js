@@ -9,6 +9,7 @@ import { renderStack } from './renderers/stack.js';
 import { renderInfo } from './renderers/info.js';
 import { initHistory, historyRefresh } from './renderers/history.js';
 import { initMachineDetail, openMachineModal, closeMachineModal, bindMachineModal } from './renderers/machine_detail.js';
+import { bindAddTarget, closeAddPanel } from './renderers/add_target.js';
 import { esc, statusLevel } from './renderers/common.js';
 
 const FAST_MS = 1500;     // snapshot poll (machine/GPU rhythm)
@@ -435,11 +436,18 @@ function drawTokenChart(series) {
 $('#tokenModalClose').onclick = closeTokenModal;
 $('#tokenModal').onclick = (e) => { if (e.target.id === 'tokenModal') closeTokenModal(); };
 bindMachineModal();
+// Slice 3: the add-target panel refreshes the board through the same two ticks a
+// hot-reload would use, rather than reaching into the renderers itself. A new target
+// changes the config etag, so configTick fetches instead of 304-ing.
+bindAddTarget({
+  onChanged: async () => { await configTick(false); await snapTick(); },
+});
 // Esc closes whichever modal is open — the token one had no keyboard exit either.
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
   closeMachineModal();
   closeTokenModal();
+  closeAddPanel();
 });
 
 // B15 §4: relax the snapshot cadence on touch / narrow devices to save battery
