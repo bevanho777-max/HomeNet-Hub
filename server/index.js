@@ -14,6 +14,7 @@ import { Scheduler } from './collectors/index.js';
 import { collectSql, clearQueryCache } from './collectors/sql.js';
 import { demoTokenRows } from './collectors/demo.js';
 import { pivotTokens, TOKEN_RANGE_DAYS } from './token_detail.js';
+import { discoverTarget } from './collectors/discovery.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..');
@@ -123,6 +124,49 @@ app.get('/api/token_detail', async (req, reply) => {
   } catch (e) {
     reply.code(502);
     return { range, error: String(e?.message || e), columns: [], spark: [], table: [], series: { days: [], classes: [], matrix: {} } };
+  }
+});
+
+// ── read-only discovery (slice 1) ───────────────────────────────────
+// Answers "what could I monitor at this IP?" — probes only, no writes: nothing here
+// touches the scheduler, the config or the tsdb. Two guards keep it from being turned
+// into an internal port scanner: at most DISCOVER_MAX_INFLIGHT runs at once, and a
+// repeat of the same IP inside DISCOVER_TTL_MS is served the previous manifest rather
+// than re-probing. The host itself is validated inside discoverTarget (net_guard).
+const DISCOVER_MAX_INFLIGHT = 3;
+const DISCOVER_TTL_MS = 5000;
+let discoverInflight = 0;
+const discoverCache = new Map();   // ip -> { at, manifest }
+
+app.get('/api/discover', async (req, reply) => {
+  const host = req.query?.host;
+  const cached = discoverCache.get(String(host || '').trim());
+  if (cached && Date.now() - cached.at < DISCOVER_TTL_MS) {
+    reply.header('X-Discovery-Cache', 'hit');
+    return cached.manifest;
+  }
+  if (discoverInflight >= DISCOVER_MAX_INFLIGHT) {
+    reply.code(429);
+    return { error: 'too many discoveries in flight', limit: DISCOVER_MAX_INFLIGHT, host: host ?? null };
+  }
+  discoverInflight++;
+  try {
+    const manifest = await discoverTarget(host);
+    // Key the cache on the canonical IP the guard returned, not on the raw query.
+    discoverCache.set(manifest.host, { at: Date.now(), manifest });
+    if (discoverCache.size > 256) {
+      for (const [k, v] of discoverCache) if (Date.now() - v.at > DISCOVER_TTL_MS) discoverCache.delete(k);
+    }
+    return manifest;
+  } catch (e) {
+    if (e?.code === 'EHOSTNOTALLOWED') {
+      reply.code(400);
+      return { error: 'host rejected', reason: String(e.message), host: host ?? null };
+    }
+    reply.code(502);
+    return { error: 'discovery failed', reason: String(e?.message || e), host: host ?? null };
+  } finally {
+    discoverInflight--;
   }
 });
 
