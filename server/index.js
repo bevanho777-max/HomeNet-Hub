@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 
 import { ConfigStore } from './config/watch.js';
 import { publicConfig } from './config/loader.js';
+import { VERSION } from './version.js';
 import { Snapshot } from './store/snapshot.js';
 import { Tsdb, RANGE_SEC } from './store/sqlite.js';
 import { Scheduler } from './collectors/index.js';
@@ -121,7 +122,7 @@ await app.register(fastifyCompress, {
 });
 
 app.get('/healthz', async () => ({
-  ok: true, service: 'homenet-hub', ts: Date.now(),
+  ok: true, service: 'homenet-hub', version: VERSION, ts: Date.now(),
   config: config.health(), effective: effective.health(),
 }));
 

@@ -12,6 +12,15 @@ cd <repo> && git pull && docker compose up -d --build
 frontend is baked into the image). Commits that only touch `agents/` or `docs/`
 need `git pull` alone. Each entry below is tagged accordingly.
 
+**Releasing:** bump `version` in `package.json` and add the matching section heading
+here, in the same commit. The panel reads that field at startup and shows it in the
+page footer, so `package.json` is the authority — if the two ever disagree, the version
+on screen is the one from `package.json`, and this file is what needs fixing.
+
+> **发布约定:** 改 `package.json` 的 `version` 与新增本文件的章节标题,放在同一个提交里。
+> 面板启动时读的是那个字段并显示在页脚,所以 `package.json` 是准的 —— 两者不一致时,
+> 屏幕上显示的是 `package.json` 里的版本,该改的是本文件。
+
 ---
 
 ## v2.3 — 2026-09-01

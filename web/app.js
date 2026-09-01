@@ -283,6 +283,10 @@ function applyConfig(first) {
   if (!$('#conn').textContent) $('#conn').textContent = txt('conn_connecting', 'Connecting…');
   $('#historyTitle').textContent = CONFIG.layout?.history?.title || '';
   $('#rawTitle').textContent = txt('raw_title', 'Raw JSON');
+  // Version footer. Written only when the server reported one — an older backend, or
+  // one whose package.json could not be read, leaves the footer empty rather than
+  // showing "v" or "undefined".
+  $('#version').textContent = CONFIG.version ? `v${CONFIG.version}` : '';
   $('#tokenModalClose').textContent = txt('modal_close', 'Close');
   $('#machineModalClose').textContent = txt('modal_close', 'Close');
   initHistory(CONFIG);

@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import YAML from 'yaml';
 import { validate, crossValidate } from './schema.js';
+import { VERSION } from '../version.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..', '..');
@@ -119,10 +120,17 @@ export function loadConfig() {
  * The etag recipe, in one place. The effective-config layer recomputes it over the
  * merged document, and a drift between the two recipes would show as a frontend that
  * never notices a change — or one that reloads forever.
+ *
+ * VERSION is folded in here rather than at the call sites, for both correctness and
+ * safety. Correctness: the etag identifies the PAYLOAD /api/config serves, and that
+ * payload now carries `version` — without this, a tab polling with If-None-Match keeps
+ * getting 304 after a deploy and shows the old version until someone reloads. Safety:
+ * one place means the two call sites cannot drift apart again.
  * @param {{metrics:object,targets:object,layout:object,theme:object}} merged
  */
 export function computeEtag(merged) {
-  return '"' + createHash('sha1').update(JSON.stringify(merged)).digest('hex').slice(0, 16) + '"';
+  const payload = JSON.stringify({ ...merged, version: VERSION });
+  return '"' + createHash('sha1').update(payload).digest('hex').slice(0, 16) + '"';
 }
 
 /**
@@ -142,6 +150,7 @@ export function publicConfig(cfg) {
   return {
     // no hardcoded brand: the frontend supplies a generic bottom-line title
     header: cfg.layout.header || { clock: true },
+    version: VERSION,                     // product version for the page footer
     theme: cfg.theme || {},               // §12-step6: appearance (visual only, no secrets)
     metrics: cfg.metrics.metrics || {},
     targets,

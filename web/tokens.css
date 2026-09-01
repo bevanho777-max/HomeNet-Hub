@@ -450,3 +450,12 @@ h2:empty { display: none; } /* 堆叠卡外框无标题时不留空行 */
   .addName { width: 96px; }
   .addCap { flex-wrap: wrap; }
 }
+
+/* ---------- 版本号页脚 ---------- */
+/* 右下角一行,用最暗的一档文本色 —— 要能查到,不该被看到。空 #version 时
+   :empty 让整个页脚不占高度,旧后端(无 version 字段)下版面与改前一致。 */
+.foot { padding: 0 var(--s6) var(--s5); text-align: right; }
+.foot #version { font-size: 10.5px; color: var(--muted2); letter-spacing: .5px;
+  font-variant-numeric: tabular-nums; }
+.foot:has(#version:empty) { padding: 0; }
+@media (max-width: 560px) { .foot { padding-left: var(--s4); padding-right: var(--s4); } }
