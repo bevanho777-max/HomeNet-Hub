@@ -7,8 +7,13 @@
 # clone with NO real backend and NO env still shows a live, animated panel.
 #
 # To go live: replace a target's `source` with a real collector (http/http_push/
-# sql/exec) pointing at your own machine — the `map` stays the same. See the
-# disabled "real-backend examples" near the bottom.
+# sql/exec/tcp/tls) pointing at your own machine — the `map` stays the same. See
+# the disabled "real-backend examples" near the bottom.
+#
+# B24: `interval` and `timeout` are duration strings — "500ms", "1.5s", "30s",
+# "2m", "1h", "1d". Units below a second need the ms suffix; a bare number is read
+# as seconds. h/d were added alongside the tls source, whose certificate moves once
+# a day at most and has no business being polled on a seconds-scale clock.
 
 defaults:
   http_proxy: ""
@@ -319,3 +324,36 @@ targets:
     map:
       latency: "$.latency_ms"
       status:  "$.status"
+
+  # ── tcp / tls: reachability of one port, and one certificate's expiry (B24) ──
+  # These two source types exist mainly for the discovery flow ("+ Add target" in the
+  # panel), which writes them into the runtime store rather than into this file. They
+  # are equally valid hand-written here, so the shape is documented.
+  #
+  # Both take `host` + `port` and BOTH are re-validated on every poll: the host must be
+  # a private IPv4 address (RFC1918 or loopback), and link-local 169.254.0.0/16 is
+  # refused outright. A target aimed anywhere else reports the refusal as its error and
+  # never opens a socket — so these cannot be used to reach out of the LAN.
+
+  # tcp: a plain connect probe. A closed or filtered port is a RESULT (status:offline),
+  # not a collection failure — that is the whole point of watching a port.
+  - id: port_check_example
+    name: "Router SSH (:22)"
+    source: { type: tcp, host: "192.0.2.1", port: 22, interval: "10s", timeout: "3s" }
+    enabled: false
+    map:
+      status:  "$.status"
+      latency: "$.latency_ms"
+
+  # tls: reads the peer certificate and reports days until expiry. Self-signed
+  # certificates are accepted on purpose (rejecting them would report nothing at all
+  # for most LAN appliances); this measures expiry, it does not establish trust.
+  # Render it on a `type: info` card — items there are {label, value} rows:
+  #   - { type: info, target: tls_cert_example, title: "NAS cert",
+  #       items: [ { label: "Expires in", value: "{expiry_days} days" } ] }
+  - id: tls_cert_example
+    name: "NAS certificate (:5001)"
+    source: { type: tls, host: "192.0.2.2", port: 5001, interval: "60m", timeout: "4s" }
+    enabled: false
+    map:
+      expiry_days: "$.expiry_days"
