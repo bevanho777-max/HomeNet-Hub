@@ -18,6 +18,7 @@ import { pivotTokens, TOKEN_RANGE_DAYS } from './token_detail.js';
 import { discoverTarget } from './collectors/discovery.js';
 import { UserStore } from './store/user_store.js';
 import { EffectiveStore } from './config/effective.js';
+import { materialize, originOf } from './capabilities/catalog.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..');
@@ -206,39 +207,60 @@ app.get('/api/discover', async (req, reply) => {
   }
 });
 
-// ── user data (slice 2, TEMPORARY self-test surface) ────────────────
-// NOT the real API — slice 2b designs that. This exists so the storage + assembly
-// pipeline can be exercised end to end. The write is preflighted against the merged
-// document BEFORE it touches the database: an invalid pair is refused with the
-// validator's own errors and the store never holds a row that cannot be assembled,
-// so there is no rollback path to get wrong.
-app.post('/api/_debug/user_target', async (req, reply) => {
-  const { target, card, card_id } = req.body || {};
-  if (!target?.id) { reply.code(400); return { error: 'body.target.id is required' }; }
-  const cardId = card_id || `${target.id}_card`;
+// ── user targets (slice 2b) ─────────────────────────────────────────
+// Materialise a discovered capability into a persisted {target, card}.
+//
+// The client sends { host, capability, name? } and NOTHING else that reaches the
+// database. `source` is built by the catalog from constants — accepting one from the
+// caller would make this endpoint "run this command on a timer for me", since a
+// target's source is exactly what the scheduler executes. The host goes through
+// net_guard and the port through discovery's bounded set, both inside materialize().
+app.post('/api/user_targets', async (req, reply) => {
+  const { host, capability, name } = req.body || {};
+  const built = materialize({ host, capability, name });
+  if (!built.ok) {
+    reply.code(400);
+    return { error: built.pending ? 'not materializable yet' : 'rejected', reason: built.reason, applied: false };
+  }
+  const { id, target, card } = built;
   try {
     const cur = userStore.getUserConfig();
-    // The prospective state: this pair replaces any same-id rows, everything else stays.
-    const proposed = {
-      targets: [...cur.targets.filter((t) => t.id !== target.id), { ...target, enabled: target.enabled !== false }],
-      cards: card ? [...cur.cards.filter((c) => c.target !== target.id), card] : cur.cards,
-    };
+    // The id is deterministic, so "already added" is a plain lookup — no separate
+    // dedupe key, and re-adding cannot silently duplicate a card.
+    if (cur.targets.some((t) => t.id === id)) {
+      reply.code(409);
+      return { error: 'capability already added on this host', id, applied: false };
+    }
+    const proposed = { targets: [...cur.targets, target], cards: [...cur.cards, card] };
     const pre = effective.preflight(config.get(), proposed);
     if (!pre.ok) { reply.code(400); return { error: 'rejected', errors: pre.errors, applied: false }; }
 
-    userStore.upsertTarget(target.id, target, { enabled: target.enabled !== false });
-    if (card) userStore.upsertCard(cardId, card);
-    const r = refreshUserData(`user_target ${target.id}`);
-    return { ok: r.ok, applied: r.ok, etag: effective.get().etag, ...(r.ok ? {} : { errors: r.errors }) };
+    userStore.upsertTarget(id, target);
+    userStore.upsertCard(`${id}_card`, card);
+    const r = refreshUserData(`add ${capability} on ${built.target._origin.host}`);
+    return { ok: r.ok, applied: r.ok, id, etag: effective.get().etag, ...(r.ok ? {} : { errors: r.errors }) };
   } catch (e) {
     reply.code(400);
     return { error: 'write failed', reason: String(e?.message || e), applied: false };
   }
 });
 
-app.delete('/api/_debug/user_target/:id', async (req, reply) => {
+app.get('/api/user_targets', async () => {
+  const { targets } = userStore.getUserConfig();
+  return {
+    targets: targets.map((t) => ({
+      id: t.id,
+      name: t.name || t.id,
+      enabled: t.enabled !== false,
+      ...(originOf(t) || { host: null, capability: null, added_at: null }),
+    })),
+  };
+});
+
+app.delete('/api/user_targets/:id', async (req, reply) => {
   try {
     const out = userStore.deleteTarget(req.params.id);
+    if (!out.removed) { reply.code(404); return { error: 'no such user target', id: req.params.id }; }
     const r = refreshUserData(`delete ${req.params.id}`);
     return { ok: true, ...out, etag: effective.get().etag, rebuild_ok: r.ok };
   } catch (e) {
@@ -246,10 +268,6 @@ app.delete('/api/_debug/user_target/:id', async (req, reply) => {
     return { error: 'delete failed', reason: String(e?.message || e) };
   }
 });
-
-app.get('/api/_debug/user_data', async () => ({
-  ...userStore.getUserConfig(), counts: userStore.countAll(), effective: effective.health(),
-}));
 
 app.post('/api/push/:targetId', async (req, reply) => {
   const id = req.params.targetId;

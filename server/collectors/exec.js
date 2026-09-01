@@ -5,24 +5,17 @@
 import os from 'node:os';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { checkPrivateIp } from '../net_guard.js';
 
 const pexecFile = promisify(execFile);
 const isWin = process.platform === 'win32';
 
 // ── helpers ─────────────────────────────────────────────────────────
-// Private/LAN IPv4 only (RFC1918). Blocks SSRF-ish pings to arbitrary hosts.
-function assertPrivateIp(host) {
-  if (typeof host !== 'string') return false;
-  const m = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
-  if (!m) return false;
-  const [a, b] = [Number(m[1]), Number(m[2])];
-  if ([a, Number(m[3]), Number(m[4])].some((x) => x > 255) || a > 255) return false;
-  if (a === 10) return true;
-  if (a === 192 && b === 168) return true;
-  if (a === 172 && b >= 16 && b <= 31) return true;
-  if (a === 127) return true;
-  return false;
-}
+// The private-IPv4 rule now lives in net_guard.js, shared with the discovery
+// collector. Two copies of a security check drift, and this one had already drifted:
+// it read "010.0.0.1" as 10.x (private, allowed) while the resolver behind ping reads
+// the leading zero as octal and dials 8.0.0.1. The shared check refuses ambiguous
+// octets and hands back the canonical address, which is what we now ping.
 
 // ── CPU% via os.cpus() delta sampling ───────────────────────────────
 let _prevCpu = null;
@@ -99,8 +92,10 @@ async function sysreportLocal() {
 }
 
 async function pingHost(host) {
-  if (!assertPrivateIp(host)) throw new Error(`illegal ping target (not a private IP): ${host}`);
-  const args = isWin ? ['-n', '1', '-w', '1500', host] : ['-c', '1', '-W', '2', host];
+  const guard = checkPrivateIp(host);
+  if (!guard.ok) throw new Error(`illegal ping target: ${guard.reason}`);
+  const ip = guard.ip;
+  const args = isWin ? ['-n', '1', '-w', '1500', ip] : ['-c', '1', '-W', '2', ip];
   const started = Date.now();
   try {
     const { stdout } = await pexecFile('ping', args, { timeout: 4000 });
