@@ -12,6 +12,10 @@ import { publicConfig } from './config/loader.js';
 import { VERSION } from './version.js';
 import { CredStore, validateCredential, CRED_TYPES } from './store/cred_store.js';
 import { openVault } from './vault.js';
+import {
+  createAuth, LoginLimiter, parseCookies, serializeCookie, clearCookie, checkOrigin,
+  COOKIE_NAME,
+} from './auth.js';
 import { Snapshot } from './store/snapshot.js';
 import { Tsdb, RANGE_SEC } from './store/sqlite.js';
 import { Scheduler } from './collectors/index.js';
@@ -47,10 +51,21 @@ const userStore = new UserStore(join(DATA_DIR, 'homenet.db'));
 // which is the whole point — a locked vault must not silently fall back to plaintext.
 const credStore = new CredStore(join(DATA_DIR, 'homenet.db'));
 const vault = openVault(process.env.VAULT_KEY, credStore);
+// Admin gate. Read once at startup like the vault key, and like the vault it is
+// fail-closed: no ADMIN_PASSWORD means the management endpoints answer 401, never that
+// they open up. The dashboard itself stays public unless REQUIRE_LOGIN_TO_VIEW says
+// otherwise, so an existing install keeps behaving exactly as it did.
+const auth = createAuth(process.env.ADMIN_PASSWORD);
+const loginLimiter = new LoginLimiter();
+const REQUIRE_LOGIN_TO_VIEW = /^(1|true|yes|on)$/i.test(String(process.env.REQUIRE_LOGIN_TO_VIEW || '').trim());
 // The scheduler is built after the vault so the ssh collector can reach it through ctx.
 const scheduler = new Scheduler({ snapshot, tsdb, env: process.env, vault, credStore });
 console.log(`[vault] ${vault.locked ? `locked — ${vault.reason}` : 'unlocked'}`
   + ` (${credStore.count()} credential(s) stored)`);
+// Never the password, never anything derived from it — only whether one is configured.
+console.log(`[auth] admin ${auth.configured ? 'configured' : `DISABLED — ${auth.reason}`}`
+  + ` (admin endpoints ${auth.configured ? 'require login' : 'all answer 401'};`
+  + ` dashboard ${REQUIRE_LOGIN_TO_VIEW ? 'requires login' : 'public'})`);
 const effective = new EffectiveStore({ userStore });
 effective.rebuild(config.get());
 
@@ -119,7 +134,50 @@ function tokenTarget() {
 }
 
 // ── server ──────────────────────────────────────────────────────────
-const app = Fastify({ logger: { level: process.env.LOG_LEVEL || 'warn' } });
+// trustProxy: this service sits behind Lucky, which terminates TLS and forwards plain
+// HTTP to :3100. Without it every request looks like it came from the proxy over http —
+// which would put a Secure cookie on nothing and collapse the login rate limit onto one
+// IP. With it, req.protocol reflects X-Forwarded-Proto and req.ip the real client.
+// The header is only as trustworthy as who can reach the port directly, which is why
+// the login limiter also bounds attempts per socket peer (see auth.js).
+const app = Fastify({
+  trustProxy: true,
+  logger: { level: process.env.LOG_LEVEL || 'warn' },
+});
+
+// ── admin gate ──────────────────────────────────────────────────────
+// Secure follows the request's own protocol rather than a build-time guess: through
+// Lucky that is https and the cookie is marked Secure; a direct http://192.168.x.x:3100
+// hit from the LAN still gets a working (non-Secure) cookie instead of one the browser
+// accepts and never sends back. httpOnly and SameSite=Strict are unconditional.
+const isSecureReq = (req) => req.protocol === 'https';
+
+const sessionOf = (req) => auth.verify(parseCookies(req.headers.cookie)[COOKIE_NAME]);
+
+/** Every management endpoint hangs off this. Unconfigured admin => 401, always. */
+async function requireAdmin(req, reply) {
+  if (!auth.configured) {
+    return reply.code(401).send({ error: 'admin not configured', reason: auth.reason });
+  }
+  const v = sessionOf(req);
+  if (!v.ok) return reply.code(401).send({ error: 'authentication required', reason: v.reason });
+}
+
+/** Belt to SameSite=Strict's braces, on state-changing requests only. */
+async function requireSameOrigin(req, reply) {
+  const o = checkOrigin(req);
+  if (!o.ok) return reply.code(403).send({ error: 'forbidden', reason: o.reason });
+}
+
+/** Optional whole-site privacy. Default off: the board stays public, as before. */
+async function requireView(req, reply) {
+  if (!REQUIRE_LOGIN_TO_VIEW) return;
+  return requireAdmin(req, reply);
+}
+
+const ADMIN = { preHandler: requireAdmin };
+const ADMIN_WRITE = { preHandler: [requireAdmin, requireSameOrigin] };
+const VIEW = { preHandler: requireView };
 
 // B17: gzip. /api/history is ~3.4 MB at range=24h and this shape of JSON (repeated
 // numeric samples) compresses ~10x. The reverse proxy in front of us is Lucky on the
@@ -137,9 +195,73 @@ app.get('/healthz', async () => ({
   // Status only: whether a key is configured and, if not, why. Never the key, never a
   // secret, never a ciphertext.
   vault: { ...vault.status(), credentials: credStore.count() },
+  // Whether an admin password exists and whether the board is private. Booleans only.
+  admin: { ...auth.status(), require_login_to_view: REQUIRE_LOGIN_TO_VIEW },
 }));
 
-app.get('/api/config', async (req, reply) => {
+// ── admin login ─────────────────────────────────────────────────────
+// The password never leaves this handler: it is compared in constant time and dropped.
+// Nothing about it — not its value, not its length, not a hash — reaches the response,
+// the log line, or an error. A failed attempt says only "invalid password".
+app.post('/api/login', async (req, reply) => {
+  if (!auth.configured) {
+    return reply.code(401).send({ error: 'admin not configured', reason: auth.reason });
+  }
+  const o = checkOrigin(req);
+  if (!o.ok) return reply.code(403).send({ error: 'forbidden', reason: o.reason });
+
+  // req.ip is the real client under trustProxy; the socket peer is the second tier,
+  // which is what bounds someone rotating X-Forwarded-For (see auth.js).
+  const clientKey = req.ip || 'unknown';
+  const peerKey = req.socket?.remoteAddress || 'unknown';
+
+  const gate = loginLimiter.check(clientKey, peerKey);
+  if (!gate.ok) {
+    reply.header('Retry-After', String(gate.retryAfterS));
+    return reply.code(429).send({ error: 'too many attempts', retry_after_s: gate.retryAfterS });
+  }
+
+  const password = req.body?.password;
+  if (!auth.matches(typeof password === 'string' ? password : '')) {
+    const after = loginLimiter.fail(clientKey, peerKey);
+    // The IP, never the attempt's content.
+    app.log.warn(`[auth:DENY] failed admin login from ${clientKey}`);
+    if (!after.ok) reply.header('Retry-After', String(after.retryAfterS));
+    return reply.code(401).send({
+      error: 'invalid password',
+      ...(after.ok ? {} : { retry_after_s: after.retryAfterS }),
+    });
+  }
+
+  loginLimiter.succeed(clientKey);
+  const s = auth.issue();
+  reply.header('set-cookie', serializeCookie(s.value, { secure: isSecureReq(req), maxAgeS: s.maxAgeS }));
+  return { ok: true, authenticated: true, expires_at: s.expiresAt };
+});
+
+// Idempotent, and deliberately not behind requireAdmin: clearing a cookie you may no
+// longer have a valid session for must still work.
+app.post('/api/logout', async (req, reply) => {
+  const o = checkOrigin(req);
+  if (!o.ok) return reply.code(403).send({ error: 'forbidden', reason: o.reason });
+  // Revoke, don't just unset. Clearing the cookie only disposes of the copy the caller
+  // is holding; a session cookie captured before the logout would otherwise stay valid
+  // for the rest of its 12 hours, which is not what anyone means by "log out".
+  auth.revoke(parseCookies(req.headers.cookie)[COOKIE_NAME]);
+  reply.header('set-cookie', clearCookie({ secure: isSecureReq(req) }));
+  return { ok: true, authenticated: false };
+});
+
+// Booleans only — no expiry, no username, nothing that describes the credential. The
+// frontend needs exactly two facts: may I show the admin controls, and is there an
+// admin password at all (so it can say "not configured" instead of offering a login
+// box that can never succeed).
+app.get('/api/session', async (req) => ({
+  authenticated: auth.configured ? sessionOf(req).ok : false,
+  configured: auth.configured,
+}));
+
+app.get('/api/config', VIEW, async (req, reply) => {
   const pub = publicConfig(effective.get());
   reply.header('ETag', pub.etag);
   reply.header('Cache-Control', 'no-cache');
@@ -147,13 +269,13 @@ app.get('/api/config', async (req, reply) => {
   return pub;
 });
 
-app.get('/api/snapshot', async () => {
+app.get('/api/snapshot', VIEW, async () => {
   const cfg = effective.get();
   const ids = (cfg.targets.targets || []).filter((t) => t.enabled !== false).map((t) => t.id);
   return snapshot.toJSON(ids);
 });
 
-app.get('/api/history', async (req) => {
+app.get('/api/history', VIEW, async (req) => {
   const { target, metric, range = '6h' } = req.query || {};
   const since = Math.floor(Date.now() / 1000) - (RANGE_SEC[range] || RANGE_SEC['6h']);
   if (!target) return { target: null, range, series: {} };
@@ -161,7 +283,7 @@ app.get('/api/history', async (req) => {
   return { target, range, series: tsdb.historyTarget(target, since) };
 });
 
-app.get('/api/token_detail', async (req, reply) => {
+app.get('/api/token_detail', VIEW, async (req, reply) => {
   const range = (req.query?.range) || '24h';
   const days = TOKEN_RANGE_DAYS[range] || 1;
   const tt = tokenTarget();
@@ -189,7 +311,7 @@ const DISCOVER_TTL_MS = 5000;
 let discoverInflight = 0;
 const discoverCache = new Map();   // ip -> { at, manifest }
 
-app.get('/api/discover', async (req, reply) => {
+app.get('/api/discover', ADMIN, async (req, reply) => {
   const host = req.query?.host;
   const cached = discoverCache.get(String(host || '').trim());
   if (cached && Date.now() - cached.at < DISCOVER_TTL_MS) {
@@ -231,7 +353,7 @@ const vaultLocked = (reply) => {
   return { error: 'vault not configured', reason: vault.reason, hint: 'set VAULT_KEY and restart' };
 };
 
-app.post('/api/credentials', async (req, reply) => {
+app.post('/api/credentials', ADMIN_WRITE, async (req, reply) => {
   if (vault.locked) return vaultLocked(reply);
   const v = validateCredential(req.body);
   // Note what is NOT here: req.body is never spread into the response, so a rejected
@@ -252,13 +374,13 @@ app.post('/api/credentials', async (req, reply) => {
   }
 });
 
-app.get('/api/credentials', async () => ({
+app.get('/api/credentials', ADMIN, async () => ({
   vault: vault.status(),
   types: CRED_TYPES,
   credentials: credStore.list(),
 }));
 
-app.delete('/api/credentials/:id', async (req, reply) => {
+app.delete('/api/credentials/:id', ADMIN_WRITE, async (req, reply) => {
   const id = req.params.id;
   if (!credStore.get(id)) { reply.code(404); return { error: 'no such credential', id }; }
   // Refuse while something still points at it. Slice 2f is what will create those
@@ -283,7 +405,7 @@ app.delete('/api/credentials/:id', async (req, reply) => {
 // caller would make this endpoint "run this command on a timer for me", since a
 // target's source is exactly what the scheduler executes. The host goes through
 // net_guard and the port through discovery's bounded set, both inside materialize().
-app.post('/api/user_targets', async (req, reply) => {
+app.post('/api/user_targets', ADMIN_WRITE, async (req, reply) => {
   const { host, capability, name, credential_id: credentialId } = req.body || {};
   // A credential-backed capability is checked against the vault BEFORE anything is
   // built: the id must name a credential that exists, and the vault must be open — a
@@ -328,7 +450,7 @@ app.post('/api/user_targets', async (req, reply) => {
   }
 });
 
-app.get('/api/user_targets', async () => {
+app.get('/api/user_targets', VIEW, async () => {
   const { targets } = userStore.getUserConfig();
   return {
     targets: targets.map((t) => ({
@@ -340,7 +462,7 @@ app.get('/api/user_targets', async () => {
   };
 });
 
-app.delete('/api/user_targets/:id', async (req, reply) => {
+app.delete('/api/user_targets/:id', ADMIN_WRITE, async (req, reply) => {
   try {
     const out = userStore.deleteTarget(req.params.id);
     if (!out.removed) { reply.code(404); return { error: 'no such user target', id: req.params.id }; }

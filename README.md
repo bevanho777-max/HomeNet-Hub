@@ -365,6 +365,8 @@ and fill in what you use.
 | Variable | Purpose |
 |---|---|
 | `VAULT_KEY` | Credential-vault passphrase (≥16 chars; `openssl rand -base64 32`). Unset → the vault is locked and no credential can be stored or decrypted. **Losing it voids every stored credential.** |
+| `ADMIN_PASSWORD` | Admin password for every management endpoint — discovery, runtime targets, the whole credentials API (≥8 chars; `openssl rand -base64 24`). Unset → those endpoints answer **401**, never "open"; the dashboard itself is unaffected. It also signs the session cookie, so changing it logs every admin session out. |
+| `REQUIRE_LOGIN_TO_VIEW` | `1`/`true`/`on` → viewing needs a session too (`/api/config`, `/api/snapshot`, `/api/history`, …). Default off: the board stays public and only management is gated. |
 | `PG_DSN` | Read-only Postgres DSN for a `sql` token collector. The name is whatever the target's `dsn_env` says; `PG_DSN` is the shipped example. |
 | `PUSH_TOKEN_*` | Shared secret per `http_push` target; the name must match that target's `token_env` (`openssl rand -hex 32`). |
 | `TELEGRAM_BOT_TOKEN` | Optional, for the built-in `probe_telegram` exec command. |
@@ -412,6 +414,15 @@ fixing.
   that is always built server-side from constants. Discovery itself writes nothing, is
   capped at 3 concurrent runs, and serves a repeat of the same IP from a 5-second
   cache.
+- **Admin auth** — discovery, runtime targets and the credentials API require a signed
+  session cookie (HttpOnly, SameSite=Strict, Secure whenever the request arrived over
+  HTTPS). The password is compared in constant time and never logged, echoed or
+  returned; no `ADMIN_PASSWORD` means those endpoints answer **401**, not "open". The
+  signing key is `scrypt(ADMIN_PASSWORD, …)`, so changing the password invalidates every
+  outstanding session; logging out revokes that session server-side rather than only
+  deleting the browser's copy. Login is rate-limited per client IP **and** per socket
+  peer, and state-changing calls also check `Origin`. Hiding the admin buttons in the UI
+  is cosmetic — the server refuses the request either way.
 - **Credentials** — AES-256-GCM at rest under a key derived from `VAULT_KEY`; no
   plaintext column, no route that returns a secret, and no fallback to plaintext when
   the vault is locked. SSH host keys are trust-on-first-use and a changed key aborts
@@ -422,10 +433,11 @@ fixing.
 - **sql** is read-only; SQL comes only from `queries/*.sql`; the single bound parameter
   is a whitelisted integer. No config- or client-supplied SQL is ever executed.
 - **http_push** requires a matching `X-Push-Token`; unknown/invalid tokens are rejected.
-- Secrets (`PG_DSN`, push tokens, `VAULT_KEY`) live in `.env`; `config/`, `data/` and
-  `.env` are git-ignored, and `config.example/` is safe to publish. There is **no
-  built-in auth** — put it behind an authenticated reverse proxy if you expose it beyond
-  a trusted LAN.
+- Secrets (`PG_DSN`, push tokens, `VAULT_KEY`, `ADMIN_PASSWORD`) live in `.env`;
+  `config/`, `data/` and `.env` are git-ignored, and `config.example/` is safe to
+  publish. Management is gated by `ADMIN_PASSWORD`; the read-only board is public unless
+  `REQUIRE_LOGIN_TO_VIEW` says otherwise. Neither is TLS — terminate that at a reverse
+  proxy if you expose the panel beyond a trusted LAN.
 
 ---
 

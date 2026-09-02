@@ -322,6 +322,8 @@ cd <repo> && git pull && docker compose up -d --build
 | 变量 | 用途 |
 |---|---|
 | `VAULT_KEY` | 凭据金库主密钥(≥16 字符;`openssl rand -base64 32`)。不设 → 金库锁定,凭据既存不进也解不开。**丢了它 = 所有已存凭据作废。** |
+| `ADMIN_PASSWORD` | 管理端点(发现、运行时目标、整个凭据 API)的管理密码(≥8 字符;`openssl rand -base64 24`)。不设 → 这些端点一律 **401**,而不是"放开";看板本身不受影响。它同时是会话 cookie 的签名密钥,所以改密码 = 所有已登录会话立即失效。 |
+| `REQUIRE_LOGIN_TO_VIEW` | 设为 `1`/`true`/`on` → 连"看"也要登录(`/api/config`、`/api/snapshot`、`/api/history` 等)。默认关闭:看板保持公开,只有管理动作需要登录。 |
 | `PG_DSN` | `sql` token 采集器用的只读 Postgres DSN。变量名由目标的 `dsn_env` 决定,`PG_DSN` 是自带示例里用的那个。 |
 | `PUSH_TOKEN_*` | 每个 `http_push` 目标一个共享密钥,变量名必须与该目标的 `token_env` 一致(`openssl rand -hex 32`)。 |
 | `TELEGRAM_BOT_TOKEN` | 可选,内置 `probe_telegram` exec 命令用。 |
@@ -365,6 +367,13 @@ LiteLLM 网关那几个变量(`LITELLM_PG_DSN`、`LITELLM_DB_CONTAINER`、
 - **发现与运行时目标** —— 只允许私网 RFC1918 IPv4(链路本地、前导零八位组一律拒绝),
   端口集固定且调用方无法扩展,`source` 永远由服务端用常量构建。发现本身不写任何东西,
   并发上限 3,同一个 IP 在 5 秒内重复请求直接返回上次的清单。
+- **管理鉴权** —— 发现、运行时目标与凭据 API 都要求一枚签名过的会话 cookie
+  (HttpOnly、SameSite=Strict,请求本身走 HTTPS 时带 Secure)。密码以常量时间比较,
+  从不写日志、不回显、不出现在任何响应里;没有 `ADMIN_PASSWORD` 就是全部 **401**,
+  而不是"放开"。签名密钥是 `scrypt(ADMIN_PASSWORD, …)`,所以改密码等于吊销所有会话;
+  登出会在服务端吊销该会话,而不只是删掉浏览器手里那份副本。登录按客户端 IP **和**
+  socket 对端两层限速,写操作另外校验 `Origin`。前端隐藏管理按钮只是观感 ——
+  服务端无论如何都会拒绝。
 - **凭据** —— AES-256-GCM 静态加密,主密钥由 `VAULT_KEY` 派生;没有明文列、没有任何
   返回密钥的路由,金库锁定时也绝不退化成明文。SSH 主机密钥首次信任,密钥变更会在认证
   之前中止握手。
@@ -373,9 +382,10 @@ LiteLLM 网关那几个变量(`LITELLM_PG_DSN`、`LITELLM_DB_CONTAINER`、
 - **sql** 只读;SQL 仅来自 `queries/*.sql`;唯一绑定参数是白名单整数。绝不执行来自
   config 或客户端的 SQL。
 - **http_push** 校验 `X-Push-Token`;未知/错误 token 一律拒绝。
-- 密钥(`PG_DSN`、push token、`VAULT_KEY`)放 `.env`;`config/`、`data/`、`.env` 均
-  git-ignore,`config.example/` 可安全发布。**无内置鉴权** —— 若要暴露到可信局域网之外,
-  请置于带鉴权的反向代理之后。
+- 密钥(`PG_DSN`、push token、`VAULT_KEY`、`ADMIN_PASSWORD`)放 `.env`;`config/`、
+  `data/`、`.env` 均 git-ignore,`config.example/` 可安全发布。管理动作由
+  `ADMIN_PASSWORD` 把守;只读看板默认公开,除非打开 `REQUIRE_LOGIN_TO_VIEW`。这两者都
+  不是 TLS —— 要暴露到可信局域网之外,TLS 仍然请在反向代理上终止。
 
 ---
 

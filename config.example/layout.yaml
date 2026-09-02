@@ -20,6 +20,7 @@ text:
   conn_online: "Online"
   conn_reconnecting: "Reconnecting…"   # B15: shown after a few consecutive poll failures
   conn_offline: "Disconnected"
+  conn_locked: "Login required"      # admin-auth: REQUIRE_LOGIN_TO_VIEW is on and this tab has no session
 
 status_bar:                         # top service pill row
   targets: [svc_api, svc_imagegen, svc_inference, svc_notify]

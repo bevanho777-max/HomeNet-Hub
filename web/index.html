@@ -11,8 +11,12 @@
     <div class="brand"><span class="logo">◆</span><h1 id="title"></h1></div>
     <div class="meta">
       <!-- 切片3:添加目标入口。放在连接角标之前,与时钟同处 header 右侧。 -->
-      <button type="button" id="addOpen" class="addOpen">＋ 添加目标</button>
-      <button type="button" id="credOpen" class="addOpen">凭据</button>
+      <!-- admin-auth: 管理控件默认隐藏,由 /api/session 的结果揭示 —— 默认隐藏而不是
+           默认显示再隐藏,页面就不会先闪一下未登录时点不动的按钮。 -->
+      <button type="button" id="addOpen" class="addOpen" hidden>＋ 添加目标</button>
+      <button type="button" id="credOpen" class="addOpen" hidden>凭据</button>
+      <button type="button" id="loginOpen" class="addOpen" hidden>管理登录</button>
+      <button type="button" id="logoutBtn" class="addOpen" hidden>登出</button>
       <span id="conn" class="conn"></span>
       <!-- 双时区时钟:id 留在外层容器上,header.clock 显隐开关逻辑不变。
            每行结构固定,tickClock 只改 .tztime 的文本与 .tzrow 的昼夜 class。
@@ -46,6 +50,23 @@
     <summary id="rawTitle"></summary>
     <pre id="rawjson">—</pre>
   </details>
+
+  <!-- admin login (admin-auth): same modal shell. The field is type=password, is never
+       populated from a response, and is cleared on every submit outcome. -->
+  <div class="modal-mask" id="loginModal">
+    <div class="modal addModal">
+      <div class="modal-head">
+        <h2>管理登录</h2>
+        <button class="modal-close" id="loginClose">关闭</button>
+      </div>
+      <div class="addBar">
+        <input id="loginPass" class="addInput" type="password" autocomplete="current-password"
+               placeholder="管理密码" />
+        <button type="button" id="loginSubmit" class="addBtn primary">登录</button>
+      </div>
+      <div id="loginStatus" class="addStatus"></div>
+    </div>
+  </div>
 
   <!-- credentials panel (slice 2e): same modal shell; secret is write-only -->
   <div class="modal-mask" id="credModal">

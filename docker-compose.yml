@@ -12,6 +12,11 @@ services:
       # B26: credential vault. Unset -> the vault stays locked and the panel runs exactly
       # as before, minus the credentials panel. Generate with: openssl rand -base64 32
       - VAULT_KEY=${VAULT_KEY:-}
+      # admin auth. Unset -> every management endpoint answers 401 (fail-closed) and the
+      # UI hides its admin controls; the dashboard itself is unaffected.
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
+      # Optional: also require a login to VIEW the board (default off).
+      - REQUIRE_LOGIN_TO_VIEW=${REQUIRE_LOGIN_TO_VIEW:-}
       - PUSH_TOKEN_GPU1=${PUSH_TOKEN_GPU1:-} # http_push shared secret (optional)
       - PUSH_TOKEN_M26=${PUSH_TOKEN_M26:-}   # machine 26 push agent
       - PUSH_TOKEN_M25=${PUSH_TOKEN_M25:-}   # machine 25 push agent

@@ -11,6 +11,7 @@ import { initHistory, historyRefresh } from './renderers/history.js';
 import { initMachineDetail, openMachineModal, closeMachineModal, bindMachineModal } from './renderers/machine_detail.js';
 import { bindAddTarget, closeAddPanel } from './renderers/add_target.js';
 import { bindCredentials, closeCredPanel } from './renderers/credentials.js';
+import { bindSession, refreshSession, sessionLost, closeLoginPanel } from './renderers/session.js';
 import { esc, statusLevel } from './renderers/common.js';
 
 const FAST_MS = 1500;     // snapshot poll (machine/GPU rhythm)
@@ -214,12 +215,14 @@ function setConn(state) {
   const el = $('#conn'); if (!el) return;
   if (state === 'ok') { el.className = 'conn ok'; el.textContent = txt('conn_online', 'Online'); }
   else if (state === 'reconnecting') { el.className = 'conn warn'; el.textContent = txt('conn_reconnecting', 'Reconnecting…'); }
+  else if (state === 'locked') { el.className = 'conn warn'; el.textContent = txt('conn_locked', 'Login required'); }
   else { el.className = 'conn bad'; el.textContent = txt('conn_offline', 'Disconnected'); }
 }
 
 async function snapTick() {
   try {
     const r = await fetchT('/api/snapshot', { cache: 'no-store' });
+    if (r.status === 401) { setConn('locked'); await sessionLost(); return; }
     if (!r.ok) throw new Error('http ' + r.status);
     lastSnap = await r.json();
     // B23: the detail modal picks its default lines from the host's live role (GPU box
@@ -241,6 +244,10 @@ async function configTick(first = false) {
     const headers = CONFIG_ETAG ? { 'If-None-Match': CONFIG_ETAG } : {};
     const r = await fetchT('/api/config', { cache: 'no-store', headers });
     if (r.status === 304) return;
+    // 401 here means REQUIRE_LOGIN_TO_VIEW is on and we are not (or no longer) logged
+    // in. Distinct from a network failure: the badge says so and the login entry comes
+    // back, rather than the page sitting on "Disconnected" forever.
+    if (r.status === 401) { setConn('locked'); await sessionLost(); return; }
     if (!r.ok) return;
     CONFIG = await r.json();
     CONFIG_ETAG = r.headers.get('ETag') || CONFIG.etag || null;
@@ -452,6 +459,17 @@ bindAddTarget({
 bindCredentials({
   onChanged: async () => { await configTick(false); await snapTick(); },
 });
+// admin-auth: logging in or out changes what this tab may see AND what it may show, so
+// both directions refresh the board through the same two ticks everything else uses.
+// Logging out also closes any admin panel left open behind the modal.
+bindSession({
+  onChange: async () => {
+    closeAddPanel();
+    closeCredPanel();
+    await configTick(false);
+    await snapTick();
+  },
+});
 // Esc closes whichever modal is open — the token one had no keyboard exit either.
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
@@ -459,6 +477,7 @@ document.addEventListener('keydown', (e) => {
   closeTokenModal();
   closeAddPanel();
   closeCredPanel();
+  closeLoginPanel();
 });
 
 // B15 §4: relax the snapshot cadence on touch / narrow devices to save battery
@@ -481,11 +500,15 @@ function stopTimers() {
   snapTimer = configTimer = clockTimer = null;
 }
 
-configTick(true).then(() => {
-  snapTick();
-  tickClock();
-  startTimers();
-});
+// The session comes first: with REQUIRE_LOGIN_TO_VIEW on, configTick's answer depends
+// on it, and either way the header must not flash admin buttons the server would refuse.
+refreshSession()
+  .then(() => configTick(true))
+  .then(() => {
+    snapTick();
+    tickClock();
+    startTimers();
+  });
 
 // B15 §1/§3: on returning to the foreground, refresh everything immediately
 // (don't wait for the next interval) and resume timers; on hidden, pause the

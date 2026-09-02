@@ -369,6 +369,10 @@ h2:empty { display: none; } /* 堆叠卡外框无标题时不留空行 */
   padding: 5px 12px; font-size: 12px; font-weight: 600; cursor: pointer; letter-spacing: .5px;
   transition: border-color .2s, background .2s; }
 .addOpen:hover { border-color: var(--text); background: var(--glass); }
+/* admin-auth: 同 .addFoot/.credLocked 的老坑 —— 作者样式一旦给按钮写了 display,
+   UA 默认的 [hidden]{display:none} 就压不住了。这里显式写死,未登录时管理按钮
+   必须真的不在页面上。 */
+.addOpen[hidden] { display: none; }
 .addModal { width: min(760px, 96vw); }
 
 .addBar { display: flex; gap: var(--s2); margin-bottom: var(--s3); }
