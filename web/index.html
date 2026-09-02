@@ -16,6 +16,7 @@
       <button type="button" id="addOpen" class="addOpen" hidden>＋ 添加目标</button>
       <button type="button" id="credOpen" class="addOpen" hidden>凭据</button>
       <button type="button" id="loginOpen" class="addOpen" hidden>管理登录</button>
+      <button type="button" id="passwdOpen" class="addOpen" hidden>改密</button>
       <button type="button" id="logoutBtn" class="addOpen" hidden>登出</button>
       <span id="conn" class="conn"></span>
       <!-- 双时区时钟:id 留在外层容器上,header.clock 显隐开关逻辑不变。
@@ -65,6 +66,28 @@
         <button type="button" id="loginSubmit" class="addBtn primary">登录</button>
       </div>
       <div id="loginStatus" class="addStatus"></div>
+    </div>
+  </div>
+
+  <!-- 修改管理密码。三个框都是 password 类型,任何一条路径出去都清空:把用户刚打的字
+       留在 DOM 里,和把它显示出来只差一次"检查元素"。 -->
+  <div class="modal-mask" id="passwdModal">
+    <div class="modal addModal">
+      <div class="modal-head">
+        <h2>修改管理密码</h2>
+        <button class="modal-close" id="passwdClose">关闭</button>
+      </div>
+      <div class="credGrid">
+        <label>当前密码<input id="passwdCurrent" class="addInput" type="password"
+               autocomplete="current-password" /></label>
+        <label>新密码<input id="passwdNew" class="addInput" type="password"
+               autocomplete="new-password" placeholder="至少 8 个字符" /></label>
+        <label>确认新密码<input id="passwdConfirm" class="addInput" type="password"
+               autocomplete="new-password" /></label>
+      </div>
+      <div class="addFoot"><button type="button" id="passwdSubmit" class="addBtn primary">修改密码</button></div>
+      <div id="passwdStatus" class="addStatus"></div>
+      <div class="addMuted">改密后,除当前这个标签页之外的所有已登录会话都会立即失效。</div>
     </div>
   </div>
 

@@ -37,7 +37,7 @@ function clearPass() {
 /** Show/hide every admin control from the one piece of state. */
 function apply() {
   const admin = !!state.authenticated;
-  for (const id of ['#addOpen', '#credOpen', '#logoutBtn']) {
+  for (const id of ['#addOpen', '#credOpen', '#passwdOpen', '#logoutBtn']) {
     const el = $(id);
     if (el) el.hidden = !admin;
   }
@@ -113,8 +113,100 @@ async function logout() {
   // Drop the "已登录。" the modal is still holding: the next person to open it must not
   // be told they are logged in by a leftover line.
   setStatus('');
+  // Close the password panel too: leaving it open after a logout means a form whose
+  // every action is now a 401, with the previous outcome still on screen.
+  closePasswdPanel();
   await refreshSession();
   await onChange();
+}
+
+// ── change password ────────────────────────────────────────────────
+// The same rule as the login field, three times over: every path out of a submit clears
+// all three boxes. A failed attempt must leave nothing in the DOM to read back, and the
+// two that matter here are the CURRENT password (which is the secret being guessed at)
+// and the new one (which is about to become it).
+const setPwStatus = (html, cls = '') => {
+  const el = $('#passwdStatus');
+  if (el) { el.className = `addStatus ${cls}`; el.innerHTML = html; }
+};
+
+function clearPasswdFields() {
+  for (const id of ['#passwdCurrent', '#passwdNew', '#passwdConfirm']) {
+    const el = $(id);
+    if (el) el.value = '';
+  }
+}
+
+async function submitPasswd() {
+  if (busy) return;
+  const current = $('#passwdCurrent').value;
+  const next = $('#passwdNew').value;
+  const confirm = $('#passwdConfirm').value;
+
+  // Checked here only to save a round trip; the server enforces every one of these
+  // again and is the only place that decides.
+  if (!current) return setPwStatus('请输入当前密码。', 'bad');
+  if (!next) return setPwStatus('请输入新密码。', 'bad');
+  if (next !== confirm) {
+    // Not a server error, so nothing is sent — but the boxes still get cleared, because
+    // a mistyped password sitting in the DOM is the same exposure as a submitted one.
+    clearPasswdFields();
+    return setPwStatus('两次输入的新密码不一致,已清空重填。', 'bad');
+  }
+
+  busy = true;
+  $('#passwdSubmit').disabled = true;
+  setPwStatus('正在修改…', 'busy');
+  try {
+    const r = await fetch('/api/admin/password', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ current_password: current, new_password: next }),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (r.ok) {
+      setPwStatus('密码已修改。本标签页仍然登录,其他会话已全部失效。', 'ok');
+      await refreshSession();
+      await onChange();
+    } else if (r.status === 429) {
+      setPwStatus(`尝试过于频繁,请 ${Number(j.retry_after_s) || 60} 秒后再试。`, 'bad');
+    } else if (r.status === 403) {
+      setPwStatus('请求被拒(跨站来源)。', 'bad');
+    } else if (r.status === 401 && j.error === 'invalid current password') {
+      setPwStatus(j.retry_after_s
+        ? `当前密码不正确,已触发限速,${Number(j.retry_after_s)} 秒后可再试。`
+        : '当前密码不正确。', 'bad');
+    } else if (r.status === 401) {
+      // The session went away underneath us — an expiry, or another tab changing the
+      // password first. Say so and put the login entry back rather than blaming the
+      // password they typed.
+      setPwStatus('会话已失效,请重新登录。', 'bad');
+      await sessionLost();
+    } else {
+      setPwStatus(esc(String(j.reason || '修改失败。')), 'bad');
+    }
+  } catch (e) {
+    setPwStatus(`请求失败:${esc(String(e?.message || e))}`, 'bad');
+  } finally {
+    clearPasswdFields();   // always — success, rejection, or network failure
+    busy = false;
+    $('#passwdSubmit').disabled = false;
+  }
+}
+
+export function openPasswdPanel() {
+  $('#passwdModal').classList.add('open');
+  clearPasswdFields();
+  setPwStatus('需要当前密码。改密会立即让其他所有已登录会话失效。');
+  setTimeout(() => $('#passwdCurrent')?.focus(), 0);
+}
+
+export function closePasswdPanel() {
+  $('#passwdModal')?.classList.remove('open');
+  clearPasswdFields();
+  // Same reason logout() clears the login panel's line: the next person to open this
+  // must not be greeted by the previous outcome.
+  setPwStatus('');
 }
 
 export function openLoginPanel() {
@@ -143,5 +235,12 @@ export function bindSession(opts = {}) {
   $('#loginSubmit').onclick = submit;
   $('#loginPass').onkeydown = (e) => { if (e.key === 'Enter') submit(); };
   $('#logoutBtn').onclick = logout;
+  $('#passwdOpen').onclick = openPasswdPanel;
+  $('#passwdClose').onclick = closePasswdPanel;
+  $('#passwdModal').onclick = (e) => { if (e.target.id === 'passwdModal') closePasswdPanel(); };
+  $('#passwdSubmit').onclick = submitPasswd;
+  for (const id of ['#passwdCurrent', '#passwdNew', '#passwdConfirm']) {
+    $(id).onkeydown = (e) => { if (e.key === 'Enter') submitPasswd(); };
+  }
   apply();
 }

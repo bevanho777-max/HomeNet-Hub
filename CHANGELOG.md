@@ -23,6 +23,78 @@ on screen is the one from `package.json`, and this file is what needs fixing.
 
 ---
 
+## v2.5 — 2026-09-03
+
+**The admin password can now be changed from the panel, and it no longer lives in an
+env var.** v2.4 compared the submitted password against `ADMIN_PASSWORD` directly, which
+meant the only way to rotate it was to edit `.env` and redeploy — and that the plaintext
+sat in the container's environment for the life of the process. It now lives hashed in
+`data/homenet.db`, and `ADMIN_PASSWORD` is demoted to a one-time bootstrap.
+
+> **管理密码现在能在面板里改了,而且不再住在环境变量里。** v2.4 是拿提交上来的密码直接
+> 和 `ADMIN_PASSWORD` 比,所以想轮换密码只能改 `.env` 再重新部署;而且明文在整个进程
+> 生命周期里都留在容器环境中。现在它以哈希形式存在 `data/homenet.db` 里,
+> `ADMIN_PASSWORD` 降级为一次性引导。
+
+**Deploying this release:** `server/`+`web/`, so `docker compose up -d --build`.
+**Everyone gets logged out once.** The session signing key moved from
+`scrypt(ADMIN_PASSWORD, …)` to a random secret in the database, so every cookie issued
+by v2.4 fails verification after the upgrade. That is a one-time event at this upgrade
+only — from here on a restart or a rebuild does not log anyone out, and only a password
+change does. **Keep `ADMIN_PASSWORD` in `.env`**: the first boot after the upgrade uses
+it to create the `admin_auth` row, and it stays the recovery path for a forgotten
+password.
+
+> **本次部署方式:** `server/`+`web/`,需要 `docker compose up -d --build`。
+> **所有人会被登出一次。** 会话签名密钥从 `scrypt(ADMIN_PASSWORD, …)` 换成了数据库里的
+> 随机 secret,所以 v2.4 签发的每一枚 cookie 在升级后都验不过。这只发生在这一次升级 ——
+> 此后重启与重建镜像都不会踢人,只有改密才会。**`.env` 里的 `ADMIN_PASSWORD` 请保留**:
+> 升级后第一次启动要靠它创建 `admin_auth` 行,而且它此后是忘记密码时的恢复路径。
+
+### Admin password change (管理员改密)
+
+| Commit | Change | Rebuild |
+|---|---|---|
+| — | `admin_auth`, a one-row table beside the credentials and timeseries: **scrypt** hash + per-install random salt + a random 32-byte session signing secret. No plaintext column, and no route that reads any of the three back. Its own better-sqlite3 handle, mirroring `UserStore`/`CredStore` | **yes** (server) |
+| — | password priority: the `admin_auth` row is authoritative once it exists; `ADMIN_PASSWORD` only **bootstraps** it on an install that has none, and is inert afterwards; neither → the same fail-closed 401 as before. An env password that fails the length rules does **not** bootstrap — a too-short value leaves the install locked rather than installing a password nobody can then change to | **yes** (server) |
+| — | escape hatch: `DELETE FROM admin_auth;` + restart re-bootstraps from `ADMIN_PASSWORD`. That is the documented forgotten-password recovery, and the reason the env var is still read after the first boot | **yes** (server) |
+| — | `POST /api/admin/password` — admin session **+** same-origin **+** the current password **+** the same 8-256 length rule. On success it re-hashes under a fresh salt, rotates the signing secret in the same write (which is what invalidates every other session — no revocation list could cover a cookie this process never saw), and hands the caller a freshly signed cookie so the person changing the password is not logged out by their own action | **yes** (server) |
+| — | the change endpoint shares the **login** rate limiter: the current-password field is a second place to guess at the same secret, and separate budgets would hand an attacker twice the attempts by alternating endpoints. A too-short *new* password does not count against it — a typo about your own account must not lock you out | **yes** (server) |
+| — | one password change in flight at a time (409 otherwise). There is an `await` between "is the current password right" and "write the new one", so two concurrent calls could both pass the check and both write — leaving the first caller a `200` and a cookie signed with a secret that no longer existed | **yes** (server) |
+| — | frontend: a **改密** button in the admin header opening a three-field panel (current / new / confirm). All three are cleared on **every** path out of a submit — success, rejection, mismatch, network failure — because a password left sitting in the DOM is one "inspect element" away from being displayed | **yes** (web) |
+
+### Security notes
+
+- **Why the signing secret is not derived from the password hash.** The hash is
+  *verification* material — a value untrusted input is compared against. The secret is
+  *forgery* material — anything holding it can mint a session. Deriving one from the
+  other collapses the two roles, so any future accident that exposes the hash (a debug
+  route, an error path, a log line) would hand out session forgery on top of an offline
+  cracking target. It also decouples session lifetime from the hash's *encoding*:
+  re-tuning the scrypt cost later would otherwise log every admin out as a side effect.
+- **Why scrypt rather than the sha256 comparison v2.4 used.** The digest is now at rest
+  in a database file that travels in backups. A bare sha256 of a password is trivially
+  attacked offline; scrypt with a per-install random salt prices that attack.
+- **Verification moved off the event loop.** scrypt costs ~50-100ms, and doing that
+  synchronously once per login attempt is a denial-of-service lever the rate limiter
+  alone should not have to carry. `node:crypto`'s async `scrypt` runs it on the
+  threadpool; measured, a `/api/snapshot` issued while a password change is deriving
+  still answers in ~3ms.
+- **A password length cap (256) is new.** Verification is now a real key derivation
+  rather than a hash, so an unbounded password would let one request buy an arbitrary
+  amount of work. Applied identically on login, on bootstrap and on change, so a
+  password that can be set is always a password that can be used.
+- Neither password appears in a response, a log line, an error or the database. The
+  `[auth:DENY]` line for a failed change carries the client IP and nothing else.
+
+### Config surface added this release
+
+- no new env. `ADMIN_PASSWORD` keeps its name and its shape; only its **meaning**
+  narrows, from "the password" to "the password this install is created with".
+- one new table, `admin_auth`, created on first boot like the other four.
+
+---
+
 ## v2.4 — 2026-09-03
 
 **The management side of the panel now has a lock on it.** Discovery, adding and

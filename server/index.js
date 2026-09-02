@@ -16,6 +16,7 @@ import {
   createAuth, LoginLimiter, parseCookies, serializeCookie, clearCookie, checkOrigin,
   COOKIE_NAME,
 } from './auth.js';
+import { AdminStore } from './store/admin_store.js';
 import { Snapshot } from './store/snapshot.js';
 import { Tsdb, RANGE_SEC } from './store/sqlite.js';
 import { Scheduler } from './collectors/index.js';
@@ -55,7 +56,14 @@ const vault = openVault(process.env.VAULT_KEY, credStore);
 // fail-closed: no ADMIN_PASSWORD means the management endpoints answer 401, never that
 // they open up. The dashboard itself stays public unless REQUIRE_LOGIN_TO_VIEW says
 // otherwise, so an existing install keeps behaving exactly as it did.
-const auth = createAuth(process.env.ADMIN_PASSWORD);
+// Slice 2h: the admin password now lives in the database, hashed. ADMIN_PASSWORD only
+// bootstraps that row on an install that has none — see auth.js for the priority order
+// and the delete-the-row escape hatch.
+const adminStore = new AdminStore(join(DATA_DIR, 'homenet.db'));
+const auth = createAuth(adminStore, process.env.ADMIN_PASSWORD);
+// One limiter for BOTH the login form and the change-password form. They gate the same
+// secret, so giving them separate budgets would simply hand an attacker twice the
+// attempts by alternating between the two endpoints.
 const loginLimiter = new LoginLimiter();
 const REQUIRE_LOGIN_TO_VIEW = /^(1|true|yes|on)$/i.test(String(process.env.REQUIRE_LOGIN_TO_VIEW || '').trim());
 // The scheduler is built after the vault so the ssh collector can reach it through ctx.
@@ -63,9 +71,13 @@ const scheduler = new Scheduler({ snapshot, tsdb, env: process.env, vault, credS
 console.log(`[vault] ${vault.locked ? `locked — ${vault.reason}` : 'unlocked'}`
   + ` (${credStore.count()} credential(s) stored)`);
 // Never the password, never anything derived from it — only whether one is configured.
-console.log(`[auth] admin ${auth.configured ? 'configured' : `DISABLED — ${auth.reason}`}`
+console.log(`[auth] admin ${auth.configured ? `configured (${auth.source})` : `DISABLED — ${auth.reason}`}`
   + ` (admin endpoints ${auth.configured ? 'require login' : 'all answer 401'};`
   + ` dashboard ${REQUIRE_LOGIN_TO_VIEW ? 'requires login' : 'public'})`);
+if (auth.source === 'env-bootstrap') {
+  console.log('[auth] bootstrapped the admin_auth row from ADMIN_PASSWORD;'
+    + ' from now on the database is authoritative and editing that env var changes nothing.');
+}
 const effective = new EffectiveStore({ userStore });
 effective.rebuild(config.get());
 
@@ -222,7 +234,7 @@ app.post('/api/login', async (req, reply) => {
   }
 
   const password = req.body?.password;
-  if (!auth.matches(typeof password === 'string' ? password : '')) {
+  if (!(await auth.matches(typeof password === 'string' ? password : ''))) {
     const after = loginLimiter.fail(clientKey, peerKey);
     // The IP, never the attempt's content.
     app.log.warn(`[auth:DENY] failed admin login from ${clientKey}`);
@@ -250,6 +262,54 @@ app.post('/api/logout', async (req, reply) => {
   auth.revoke(parseCookies(req.headers.cookie)[COOKIE_NAME]);
   reply.header('set-cookie', clearCookie({ secure: isSecureReq(req) }));
   return { ok: true, authenticated: false };
+});
+
+// ── change the admin password ───────────────────────────────────────
+// ADMIN_WRITE (session + same-origin) is the floor, not the whole gate: this endpoint
+// also takes the current password, which makes it a second place someone can guess at
+// that secret. It therefore shares the LOGIN limiter — separate budgets would let an
+// attacker alternate endpoints for twice the attempts against one password.
+//
+// Neither password appears in the response, the log line, or an error. The failure
+// codes are about WHICH rule was broken, never about what was submitted.
+app.post('/api/admin/password', ADMIN_WRITE, async (req, reply) => {
+  const clientKey = req.ip || 'unknown';
+  const peerKey = req.socket?.remoteAddress || 'unknown';
+
+  const gate = loginLimiter.check(clientKey, peerKey);
+  if (!gate.ok) {
+    reply.header('Retry-After', String(gate.retryAfterS));
+    return reply.code(429).send({ error: 'too many attempts', retry_after_s: gate.retryAfterS });
+  }
+
+  const r = await auth.changePassword(req.body?.current_password, req.body?.new_password);
+  if (!r.ok) {
+    // Only a wrong CURRENT password is an authentication failure worth counting. A new
+    // password that is too short is the caller's own typo about their own account and
+    // must not walk them into a lockout.
+    if (r.code === 'invalid_current') {
+      const after = loginLimiter.fail(clientKey, peerKey);
+      app.log.warn(`[auth:DENY] failed password change from ${clientKey}`);
+      if (!after.ok) reply.header('Retry-After', String(after.retryAfterS));
+      return reply.code(401).send({
+        error: 'invalid current password',
+        ...(after.ok ? {} : { retry_after_s: after.retryAfterS }),
+      });
+    }
+    // 'busy' is a concurrency collision, not bad input — 409 so a client can retry.
+    if (r.code === 'busy') return reply.code(409).send({ error: r.code, reason: r.reason });
+    return reply.code(400).send({ error: r.code, reason: r.reason });
+  }
+
+  loginLimiter.succeed(clientKey);
+  // The change rotated the signing secret, so the cookie this caller arrived with is
+  // already dead. Hand back a new one in the same response: the person who changed the
+  // password is the one session that must survive their own change.
+  reply.header('set-cookie', serializeCookie(r.session.value,
+    { secure: isSecureReq(req), maxAgeS: r.session.maxAgeS }));
+  app.log.warn(`[auth] admin password changed from ${clientKey}; all other sessions invalidated`);
+  return { ok: true, authenticated: true, expires_at: r.session.expiresAt,
+    other_sessions_invalidated: true };
 });
 
 // Booleans only — no expiry, no username, nothing that describes the credential. The

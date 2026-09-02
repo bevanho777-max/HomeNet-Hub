@@ -2,31 +2,48 @@
 // SECURITY CRITICAL, and deliberately fail-closed everywhere.
 //
 // The contract this file exists to keep:
-//   - NO `ADMIN_PASSWORD` means every admin endpoint answers 401. It never means
+//   - NO password source at all means every admin endpoint answers 401. It never means
 //     "open". An unconfigured install is locked, not permissive — the opposite choice
 //     would turn a forgotten env var into a public write API;
-//   - the password is read from the environment, compared in constant time, and never
-//     written, logged, echoed or returned. Nothing derived from it leaves the process
-//     except an HMAC tag that cannot be inverted;
-//   - a session is a SIGNED cookie, not a server-side table: the signing key is derived
-//     from the password itself, so changing the password invalidates every outstanding
-//     session for free, with no revocation list to keep;
+//   - the password is compared against a stored scrypt hash and never written, logged,
+//     echoed or returned. Nothing derived from it leaves the process;
+//   - a session is a SIGNED cookie, not a server-side table. The signing key is a
+//     random secret in the database (see store/admin_store.js for why it is NOT derived
+//     from the password hash), so a restart or a rebuild does not log anyone out, while
+//     changing the password rotates the secret and invalidates every outstanding
+//     session in one step;
 //   - one byte of tampering anywhere in the cookie fails verification.
 //
-// Why the session key is scrypt(ADMIN_PASSWORD, fixed salt) rather than a random key
-// minted at boot: a random key would log every admin out on every restart and on every
-// container rebuild, which on this deployment is often. The salt is a constant because
-// its usual job — stopping precomputation against a STORED hash — does not apply: this
-// derivation's output is never stored or transmitted, only used as an HMAC key. What
-// the derivation buys is that a weak password is expensive to grind against a captured
-// cookie, and that is what scrypt's cost parameter is for.
-import { scryptSync, createHmac, createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+// Where the password lives, in priority order:
+//   1. the `admin_auth` row in data/homenet.db — authoritative once it exists;
+//   2. ADMIN_PASSWORD, used ONLY to bootstrap that row on an install that has none.
+//      After bootstrap the env var is inert: it does not override, and editing it does
+//      not change the password;
+//   3. neither → locked, every management endpoint 401.
+//
+// Escape hatch: `DELETE FROM admin_auth;` and restart — the next boot re-bootstraps
+// from ADMIN_PASSWORD. That is the documented recovery for a forgotten password, and
+// it is why the env var is still read after bootstrap.
+//
+// Why scrypt rather than the sha256 comparison this file used before: the digest is now
+// at rest in a database file that travels in backups. A bare sha256 of a password is
+// trivially attacked offline; scrypt with a per-install random salt prices that attack.
+// The verification is ASYNC (node's threadpool) because ~60-100ms of key derivation on
+// the event loop, once per login attempt, is a denial-of-service lever that the rate
+// limiter alone should not have to carry.
+import { scrypt, scryptSync, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { newSalt } from './store/admin_store.js';
 
 export const COOKIE_NAME = 'hnh_admin';
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000;      // 12h
-const KEY_SALT = Buffer.from('homenet-hub admin session v1');
 const SCRYPT = { N: 16384, r: 8, p: 1, maxmem: 64 * 1024 * 1024 };
-const MIN_PASSWORD = 8;
+const HASH_LEN = 32;
+export const MIN_PASSWORD = 8;
+// A cap, because verification is now a real key derivation rather than a hash: an
+// unbounded password would let one request buy an arbitrary amount of scrypt work.
+// Applied identically on login, on bootstrap and on change, so a password that can be
+// set is always a password that can be used.
+export const MAX_PASSWORD = 256;
 
 // ── rate limiting ───────────────────────────────────────────────────
 // Two tiers, because with a reverse proxy in front the two answer different questions.
@@ -143,68 +160,123 @@ export function serializeCookie(value, { secure, maxAgeS }) {
 
 export const clearCookie = ({ secure }) => serializeCookie('', { secure, maxAgeS: 0 });
 
+// ── password hashing ────────────────────────────────────────────────
+/** Length + type gate, applied identically wherever a password is accepted. */
+export function validatePassword(pw) {
+  if (typeof pw !== 'string' || !pw) return { ok: false, reason: 'password is required' };
+  if (pw.length < MIN_PASSWORD) return { ok: false, reason: `password must be at least ${MIN_PASSWORD} characters` };
+  if (pw.length > MAX_PASSWORD) return { ok: false, reason: `password must be at most ${MAX_PASSWORD} characters` };
+  return { ok: true };
+}
+
+/** Async so a login attempt costs threadpool time, not event-loop time. */
+const hash = (password, salt) => new Promise((resolve, reject) => {
+  scrypt(password, salt, HASH_LEN, SCRYPT, (e, dk) => (e ? reject(e) : resolve(dk)));
+});
+
+/** Bootstrap runs once at startup, where blocking is free and simpler than awaiting. */
+const hashSync = (password, salt) => scryptSync(password, salt, HASH_LEN, SCRYPT);
+
 // ── the gate ────────────────────────────────────────────────────────
 /**
- * @param {string|undefined} password  process.env.ADMIN_PASSWORD
- * @returns {{configured:boolean, reason:string|null, issue:Function, verify:Function,
- *           matches:Function, status:Function}}
+ * @param {{get:Function, bootstrap:Function, setPassword:Function}} store  AdminStore
+ * @param {string|undefined} envPassword  process.env.ADMIN_PASSWORD, bootstrap only
+ * @returns {{configured:boolean, reason:string|null, source:string|null, issue:Function,
+ *           verify:Function, matches:Function, changePassword:Function, revoke:Function,
+ *           status:Function}}
  */
-export function createAuth(password) {
+export function createAuth(store, envPassword) {
   const disabled = (reason) => ({
     configured: false,
     reason,
-    matches: () => false,
+    source: null,
+    matches: async () => false,
     issue: () => { throw new Error('admin not configured'); },
     verify: () => ({ ok: false, reason: 'admin not configured' }),
+    changePassword: async () => ({ ok: false, reason: 'admin not configured' }),
     revoke: () => false,
     status: () => ({ configured: false }),
   });
 
-  // An empty or whitespace-only value is "unset", not a password — `ADMIN_PASSWORD=`
-  // in an env file must not become a login with the empty string.
-  if (typeof password !== 'string' || !password.trim()) return disabled('not configured');
-  if (password.length < MIN_PASSWORD) {
-    return disabled(`ADMIN_PASSWORD must be at least ${MIN_PASSWORD} characters`);
+  let row = store.get();
+  let source = 'db';
+
+  if (!row) {
+    // Bootstrap. An empty or whitespace-only value is "unset", not a password —
+    // `ADMIN_PASSWORD=` in an env file must not become a login with the empty string.
+    if (typeof envPassword !== 'string' || !envPassword.trim()) return disabled('not configured');
+    const v = validatePassword(envPassword);
+    // A rejected env password does NOT bootstrap: a too-short value must leave the
+    // install locked rather than install a password nobody can then change to.
+    if (!v.ok) return disabled(`ADMIN_PASSWORD rejected: ${v.reason}`);
+    const salt = newSalt();
+    store.bootstrap({ passwordHash: hashSync(envPassword, salt), salt });
+    // Re-read rather than trusting the write: on the losing side of a race between two
+    // boots, DO NOTHING left the other one's row in place and that is the row whose
+    // signing secret matters.
+    row = store.get();
+    if (!row) return disabled('admin row could not be created');
+    source = 'env-bootstrap';
   }
 
-  const key = scryptSync(password, KEY_SALT, 32, SCRYPT);
+  // Mutable so changePassword can rotate them in place: every closure below reads
+  // through these bindings, so a rotation takes effect for the next request with no
+  // object to re-wire.
+  let { passwordHash, salt, signingSecret } = row;
+
   // Revoked session ids (the cookie's nonce) -> the expiry we may forget them at.
   // A signed cookie needs no server-side table to be VERIFIED, but without one "log
   // out" would only mean "delete my copy": a cookie captured beforehand would stay
   // good for the rest of its 12 hours. The map holds one small entry per logout and
   // is pruned by expiry, so it cannot grow without bound. It is deliberately in-memory
   // only — a restart forgets it, which is the same exposure a restart already has
-  // (the signing key is derived from the password, not minted per boot).
-  const revoked = new Map();
-  // Compared as fixed-length digests: timingSafeEqual throws on a length mismatch, and
-  // the raw lengths would themselves leak the password's length through that error.
-  const expected = createHash('sha256').update(password, 'utf8').digest();
+  // (the signing secret is persisted, not minted per boot).
+  let revoked = new Map();
+  // changePassword has an `await` between "is the current password right" and "write the
+  // new one", so two concurrent calls can both pass the check and then both write. The
+  // second write wins in the database AND in memory, which leaves the FIRST caller
+  // holding a 200 and a cookie signed with a secret that no longer exists — a dead
+  // session reported as a success. One in-flight change at a time removes the whole
+  // class; a second concurrent attempt is told to retry rather than silently losing.
+  let changing = false;
 
-  const sign = (body) => b64u(createHmac('sha256', key).update(body).digest());
+  const sign = (body) => b64u(createHmac('sha256', signingSecret).update(body).digest());
+
+  const issue = (now = Date.now()) => {
+    const exp = now + SESSION_TTL_MS;
+    // The nonce makes two sessions issued in the same millisecond distinct; it is not
+    // a secret and carries nothing about the password.
+    const id = b64u(randomBytes(9));
+    const body = `v1.${exp}.${id}`;
+    return {
+      value: `${body}.${sign(body)}`, id, expiresAt: exp,
+      maxAgeS: Math.floor(SESSION_TTL_MS / 1000),
+    };
+  };
 
   return {
     configured: true,
     reason: null,
+    /** 'db' or 'env-bootstrap'. For the startup log line only — never served. */
+    source,
 
-    /** Constant-time password check. */
-    matches(candidate) {
+    /**
+     * Constant-time password check against the stored hash.
+     * Rejects an over-long candidate BEFORE deriving, so the cap is a real bound on the
+     * work one request can buy rather than a validation nicety.
+     */
+    async matches(candidate) {
       if (typeof candidate !== 'string' || !candidate) return false;
-      const got = createHash('sha256').update(candidate, 'utf8').digest();
-      return timingSafeEqual(got, expected);
+      if (candidate.length > MAX_PASSWORD) return false;
+      let got;
+      try { got = await hash(candidate, salt); } catch { return false; }
+      // Both sides are fixed-length scrypt output, so timingSafeEqual cannot throw on a
+      // length mismatch and no length information is in play.
+      return got.length === passwordHash.length && timingSafeEqual(got, passwordHash);
     },
 
     /** @returns {{value:string, expiresAt:number, maxAgeS:number}} */
-    issue(now = Date.now()) {
-      const exp = now + SESSION_TTL_MS;
-      // The nonce makes two sessions issued in the same millisecond distinct; it is not
-      // a secret and carries nothing about the password.
-      const id = b64u(randomBytes(9));
-      const body = `v1.${exp}.${id}`;
-      return {
-        value: `${body}.${sign(body)}`, id, expiresAt: exp,
-        maxAgeS: Math.floor(SESSION_TTL_MS / 1000),
-      };
-    },
+    issue,
 
     /** @returns {{ok:true, expiresAt:number} | {ok:false, reason:string}} */
     verify(token, now = Date.now()) {
@@ -235,6 +307,53 @@ export function createAuth(password) {
       revoked.set(v.id, v.expiresAt);
       for (const [k, exp] of revoked) if (exp <= now) revoked.delete(k);
       return true;
+    },
+
+    /**
+     * Change the password: verify the current one, re-hash the new one under a FRESH
+     * salt, and rotate the signing secret in the same write.
+     *
+     * Rotating the secret is what makes every other session die — not a revocation
+     * list, which could not cover sessions this process never saw (another replica, a
+     * cookie captured off the wire). The caller gets a freshly issued session back so
+     * the person doing the change is not logged out by their own action.
+     *
+     * Returns a reason, never a value: no branch of this function can put either
+     * password into a response.
+     *
+     * @returns {{ok:true, session:object} | {ok:false, reason:string, code:string}}
+     */
+    async changePassword(current, next) {
+      if (changing) return { ok: false, code: 'busy', reason: 'a password change is already in progress' };
+      changing = true;
+      try {
+        return await this._changePassword(current, next);
+      } finally {
+        changing = false;
+      }
+    },
+
+    async _changePassword(current, next) {
+      if (!(await this.matches(typeof current === 'string' ? current : ''))) {
+        return { ok: false, code: 'invalid_current', reason: 'current password is incorrect' };
+      }
+      const v = validatePassword(next);
+      if (!v.ok) return { ok: false, code: 'invalid_new', reason: v.reason };
+      // A no-op change would still rotate the secret and kick every other session, which
+      // is a surprising amount of damage for a mistyped form.
+      if (next === current) {
+        return { ok: false, code: 'unchanged', reason: 'new password must differ from the current one' };
+      }
+      const nextSalt = newSalt();
+      const nextHash = await hash(next, nextSalt);
+      const nextSecret = store.setPassword({ passwordHash: nextHash, salt: nextSalt });
+      passwordHash = nextHash;
+      salt = nextSalt;
+      signingSecret = nextSecret;
+      // Every id in here was signed with the old secret and can no longer verify, so the
+      // map is dead weight rather than protection.
+      revoked = new Map();
+      return { ok: true, session: issue() };
     },
 
     status: () => ({ configured: true }),

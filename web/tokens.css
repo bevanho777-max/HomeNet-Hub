@@ -476,6 +476,13 @@ h2:empty { display: none; } /* 堆叠卡外框无标题时不留空行 */
    它会 querySelectorAll('.hostSel') 并重写 innerHTML,把这里的选项换成目标列表。 */
 .credSelect { appearance: none; cursor: pointer; color-scheme: dark; }
 .credSelect option { background: #0c1322; color: var(--text); }
+
+/* ---------- 修改管理密码(切片2h) ---------- */
+/* 借 .credGrid 的标签/输入框样式,但列数自己定:三个框在两列网格里会摊成 2+1,
+   最后一个"确认新密码"独占一行、宽度还和上面对不齐。三列是并排,窄屏收成一列。 */
+#passwdModal .modal { width: min(560px, 96vw); }
+#passwdModal .credGrid { grid-template-columns: 1fr; }
+@media (min-width: 560px) { #passwdModal .credGrid { grid-template-columns: repeat(3, 1fr); } }
 /* [hidden] 必须显式写:作者样式的 display:flex 压过 UA 默认的 [hidden]{display:none}。
    .addFoot 踩过同一个坑,这里是第二次 —— 元素的 .hidden 属性是 true,但它照样显示,
    所以断言必须看 computed style,不能看属性。 */

@@ -264,19 +264,60 @@ a control the server would refuse. **This is cosmetic.** Nothing about the UI is
 security boundary: the endpoints refuse an unauthenticated caller whether or not a
 button was ever drawn.
 
+### Changing it
+
+Logged in, the header carries a **改密** button. It asks for the current password and
+the new one twice, and on success the tab you did it in stays logged in while **every
+other session is invalidated immediately**.
+
+The endpoint is `POST /api/admin/password`, and it is gated four ways: a valid admin
+session, the same-origin check, the *current* password, and the same length rules as
+any other password. It shares the **login rate limiter** — the current-password field is
+a second place to guess at that secret, and separate budgets would hand an attacker
+twice the attempts by alternating endpoints. A new password that is merely too short
+does not count against that budget: your own typo about your own account should not lock
+you out.
+
+### Where the password lives
+
+| | |
+|---|---|
+| `admin_auth` row in `data/homenet.db` | **authoritative** once it exists — scrypt hash + random salt, no plaintext column |
+| `ADMIN_PASSWORD` | **bootstrap only.** Used to create that row on an install that has none. After that it is inert: it does not override the stored password, and editing it changes nothing |
+| neither | locked — every management endpoint answers `401` |
+
+**Forgot the password?** That is what the escape hatch is for:
+
+```bash
+docker compose exec homenet-hub sh -c \
+  "sqlite3 /app/data/homenet.db 'DELETE FROM admin_auth;'"
+# or, on the host:  sqlite3 data/homenet.db 'DELETE FROM admin_auth;'
+docker compose restart homenet-hub
+```
+
+The next boot re-bootstraps the row from whatever `ADMIN_PASSWORD` currently says — which
+is the only reason that env var is still read after the first boot. Deleting the row
+also invalidates every session, since the signing secret goes with it.
+
 ### How the session works
 
-- The cookie is **signed, not stored** — there is no session table. The signing key is
-  `scrypt(ADMIN_PASSWORD, fixed salt)`, so **changing the password invalidates every
-  outstanding session** with nothing to revoke, while a restart or a rebuild does *not*
-  log everyone out (a random per-boot key would, and on this deployment that is often).
+- The cookie is **signed, not stored** — there is no session table. The signing key is a
+  random 32-byte secret in the `admin_auth` row, rotated in the same write that changes
+  the password, so **changing the password invalidates every outstanding session** with
+  nothing to revoke, while a restart or a rebuild does *not* log everyone out (a random
+  per-boot key would, and on this deployment that is often). The secret is its own value
+  rather than something derived from the password hash: the hash is what untrusted input
+  is *compared* against, the secret is what *mints* sessions, and collapsing the two
+  would turn any future accident that exposes the hash into session forgery.
 - `HttpOnly`, `SameSite=Strict`, 12-hour lifetime. `Secure` follows the **request's**
   protocol, so a direct `http://192.168.x.x:3100` hit from the LAN still gets a cookie
   the browser will send back.
 - **Logout revokes server-side.** Deleting only the browser's copy would leave a cookie
   captured beforehand valid for the rest of its 12 hours.
-- The password is compared in constant time and never logged, echoed or returned —
-  neither the value, nor its length, nor a hash of it.
+- The password is stored as **scrypt** over a per-install random salt — never in
+  plaintext, and nowhere a route can read it back. Verification is constant-time and
+  runs off the event loop, and neither the value, nor its length, nor the hash reaches a
+  log line, a response or an error.
 - Login is rate-limited in **two tiers**: per client IP, and per socket peer. The second
   is what bounds an attacker rotating `X-Forwarded-For`, a header `trustProxy` means we
   believe. Backoff is exponential from the 6th failure, capped at 15 minutes, and the
@@ -287,9 +328,9 @@ button was ever drawn.
   its absence means a non-browser caller (curl, a script, a health check) with no
   ambient cookie to abuse.
 
-Nothing is persisted for any of this: no user table, no session table. The only
-server-side state is an in-memory revocation map for logged-out sessions plus the rate
-limiter's bounded map, and a restart forgets both.
+The only things persisted are the hash, its salt and the signing secret — one row, no
+user table, no session table. The rest is in-memory: a revocation map for logged-out
+sessions plus the rate limiter's bounded map, and a restart forgets both.
 
 ---
 
@@ -448,7 +489,7 @@ and fill in what you use.
 | Variable | Purpose |
 |---|---|
 | `VAULT_KEY` | Credential-vault passphrase (≥16 chars; `openssl rand -base64 32`). Unset → the vault is locked and no credential can be stored or decrypted. **Losing it voids every stored credential.** |
-| `ADMIN_PASSWORD` | Admin password for the management endpoints — discovery, the credentials API, and *writes* to runtime targets (≥8 chars; `openssl rand -base64 24`). Unset → those endpoints answer **401**, never "open"; the dashboard itself is unaffected. It also signs the session cookie, so changing it logs every admin session out. |
+| `ADMIN_PASSWORD` | **Bootstrap** password for the management endpoints — discovery, the credentials API, and *writes* to runtime targets (8-256 chars; `openssl rand -base64 24`). Used once, to create the hashed `admin_auth` row on an install that has none; after that the database is authoritative and this var is inert. Unset **and** no row → those endpoints answer **401**, never "open". Delete the row to make it bootstrap again — that is the forgotten-password recovery. |
 | `REQUIRE_LOGIN_TO_VIEW` | `1`/`true`/`on` → viewing needs a session too (`/api/config`, `/api/snapshot`, `/api/history`, …). Default off: the board stays public and only management is gated. |
 | `PG_DSN` | Read-only Postgres DSN for a `sql` token collector. The name is whatever the target's `dsn_env` says; `PG_DSN` is the shipped example. |
 | `PUSH_TOKEN_*` | Shared secret per `http_push` target; the name must match that target's `token_env` (`openssl rand -hex 32`). |
