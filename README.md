@@ -31,6 +31,9 @@ you see the whole thing working before wiring up anything real.
   derived from `VAULT_KEY`, and the API is a write-only door: nothing ever reads a
   credential back out. SSH host keys are trust-on-first-use, and a changed key aborts
   the handshake *before* the credential is sent.
+- **Admin auth** — discovery, runtime targets and the credentials API sit behind an
+  **`ADMIN_PASSWORD`**. Unset means those endpoints answer `401`, never "open". Reading
+  the board stays public unless `REQUIRE_LOGIN_TO_VIEW` says otherwise.
 - **Hot-reload** — edit YAML on the host and the panel re-shapes in ~3 s. A bad edit is
   rejected and the last good config stays live (the panel never goes dark).
 - **Push agents, zero inbound ports** — monitored machines POST to the hub, opening
@@ -215,6 +218,81 @@ only ever sees credential names, and sends back an id:
 
 ---
 
+## Admin auth
+
+Everything on the previous two pages — discovery, adding and deleting runtime targets,
+the whole credentials API — is a **write** to your network's monitoring. All of it is
+behind an admin password.
+
+Set one when you deploy:
+
+```bash
+openssl rand -base64 24        # >= 8 chars
+# -> .env:  ADMIN_PASSWORD=...
+```
+
+**With no `ADMIN_PASSWORD` set, those endpoints answer `401` — never "open".** A
+forgotten env var yields a locked install, not a public write API. That is the same
+fail-closed default the vault takes, for the same reason.
+
+### What is gated, and what is not
+
+| Endpoint | Gate |
+|---|---|
+| `GET /api/discover`, `GET /api/credentials` | admin session |
+| `POST`/`DELETE /api/credentials`, `POST`/`DELETE /api/user_targets` | admin session **+** same-origin check |
+| `GET /api/config`, `/api/snapshot`, `/api/history`, `/api/token_detail`, `GET /api/user_targets` | public by default; admin session when `REQUIRE_LOGIN_TO_VIEW` is on |
+| `/healthz`, `/api/login`, `/api/logout`, `/api/session` | always reachable |
+| `POST /api/push/:targetId` | its target's `X-Push-Token`, unchanged |
+
+Reading the board stays public, because that is what an existing install already did and
+a monitor on a trusted LAN is usually meant to be glanceable. Flip
+`REQUIRE_LOGIN_TO_VIEW=1` and the whole panel — data included — needs a session.
+
+### The controls follow the session
+
+Logged out, the header offers one button:
+
+![Header with no admin session — only a login button](docs/auth-logged-out.png)
+
+Logged in, the management controls appear:
+
+![Header after logging in — add-target, credentials and logout](docs/auth-logged-in.png)
+
+The buttons start hidden and are revealed by `/api/session`, so the header never flashes
+a control the server would refuse. **This is cosmetic.** Nothing about the UI is a
+security boundary: the endpoints refuse an unauthenticated caller whether or not a
+button was ever drawn.
+
+### How the session works
+
+- The cookie is **signed, not stored** — there is no session table. The signing key is
+  `scrypt(ADMIN_PASSWORD, fixed salt)`, so **changing the password invalidates every
+  outstanding session** with nothing to revoke, while a restart or a rebuild does *not*
+  log everyone out (a random per-boot key would, and on this deployment that is often).
+- `HttpOnly`, `SameSite=Strict`, 12-hour lifetime. `Secure` follows the **request's**
+  protocol, so a direct `http://192.168.x.x:3100` hit from the LAN still gets a cookie
+  the browser will send back.
+- **Logout revokes server-side.** Deleting only the browser's copy would leave a cookie
+  captured beforehand valid for the rest of its 12 hours.
+- The password is compared in constant time and never logged, echoed or returned —
+  neither the value, nor its length, nor a hash of it.
+- Login is rate-limited in **two tiers**: per client IP, and per socket peer. The second
+  is what bounds an attacker rotating `X-Forwarded-For`, a header `trustProxy` means we
+  believe. Backoff is exponential from the 6th failure, capped at 15 minutes, and the
+  gate is checked *before* the password — a correct password during a lockout is still
+  `429`.
+- State-changing calls also check `Origin`. A **missing** `Origin` is allowed on
+  purpose: browsers attach one to every cross-site request that could carry a cookie, so
+  its absence means a non-browser caller (curl, a script, a health check) with no
+  ambient cookie to abuse.
+
+Nothing is persisted for any of this: no user table, no session table. The only
+server-side state is an in-memory revocation map for logged-out sessions plus the rate
+limiter's bounded map, and a restart forgets both.
+
+---
+
 ## Architecture
 
 Four nouns carry the whole design:
@@ -303,6 +381,11 @@ automatically.
 Run without Docker: `npm install && npm start` (→ `http://127.0.0.1:3100`, set `PORT`
 to change).
 
+**Before you add anything real**, set an `ADMIN_PASSWORD` in `.env`
+(`openssl rand -base64 24`). Without it the demo board still renders in full, but the
+management controls are hidden and their endpoints answer `401` — see
+[Admin auth](#admin-auth).
+
 **Deploying an update on the host:**
 
 ```bash
@@ -365,7 +448,7 @@ and fill in what you use.
 | Variable | Purpose |
 |---|---|
 | `VAULT_KEY` | Credential-vault passphrase (≥16 chars; `openssl rand -base64 32`). Unset → the vault is locked and no credential can be stored or decrypted. **Losing it voids every stored credential.** |
-| `ADMIN_PASSWORD` | Admin password for every management endpoint — discovery, runtime targets, the whole credentials API (≥8 chars; `openssl rand -base64 24`). Unset → those endpoints answer **401**, never "open"; the dashboard itself is unaffected. It also signs the session cookie, so changing it logs every admin session out. |
+| `ADMIN_PASSWORD` | Admin password for the management endpoints — discovery, the credentials API, and *writes* to runtime targets (≥8 chars; `openssl rand -base64 24`). Unset → those endpoints answer **401**, never "open"; the dashboard itself is unaffected. It also signs the session cookie, so changing it logs every admin session out. |
 | `REQUIRE_LOGIN_TO_VIEW` | `1`/`true`/`on` → viewing needs a session too (`/api/config`, `/api/snapshot`, `/api/history`, …). Default off: the board stays public and only management is gated. |
 | `PG_DSN` | Read-only Postgres DSN for a `sql` token collector. The name is whatever the target's `dsn_env` says; `PG_DSN` is the shipped example. |
 | `PUSH_TOKEN_*` | Shared secret per `http_push` target; the name must match that target's `token_env` (`openssl rand -hex 32`). |
@@ -414,9 +497,10 @@ fixing.
   that is always built server-side from constants. Discovery itself writes nothing, is
   capped at 3 concurrent runs, and serves a repeat of the same IP from a 5-second
   cache.
-- **Admin auth** — discovery, runtime targets and the credentials API require a signed
-  session cookie (HttpOnly, SameSite=Strict, Secure whenever the request arrived over
-  HTTPS). The password is compared in constant time and never logged, echoed or
+- **Admin auth** — discovery, the credentials API and every *write* to runtime targets
+  require a signed session cookie (HttpOnly, SameSite=Strict, Secure whenever the
+  request arrived over HTTPS); listing targets follows the view gate with the rest of
+  the board. The password is compared in constant time and never logged, echoed or
   returned; no `ADMIN_PASSWORD` means those endpoints answer **401**, not "open". The
   signing key is `scrypt(ADMIN_PASSWORD, …)`, so changing the password invalidates every
   outstanding session; logging out revokes that session server-side rather than only
