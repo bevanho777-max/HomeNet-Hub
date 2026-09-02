@@ -2,13 +2,11 @@
 
 [English](README.md) · **简体中文**
 
-一个**配置驱动、可自托管的局域网监控面板**。用几行 YAML 就能把你的机器和服务接进来——
-不改代码、不用重新构建。clone 下来即可启动进入带**合成数据的实时 demo**,先看到整套效果
-再接真实后端。
+一个**配置驱动、可自托管的局域网监控面板**。用几行 YAML 就能把机器和服务接进来——
+或者干脆输一个 IP,让面板自己去发现那台机器上有什么。clone 下来即可启动进入带
+**合成数据的实时 demo**,先看到整套效果再接真实后端。
 
 ![HomeNet Hub 面板](docs/screenshot.png)
-
-> 截图早于最新的几项视图 —— 面板现在长什么样,见下方「面板视图」章节。
 
 > 所有展示文案(标题、标签、分类、主题)都来自配置,可用**任意语言**书写。仓库自带示例是
 > 英文;你的 `config/` 归你自己。
@@ -18,6 +16,15 @@
 ## 核心特性
 
 - **配置驱动** — 加一台机器/服务只需改 YAML,保存即出卡;没有任何写死。
+- **发现 → 加 → 看见** — 输入一个私网 IPv4,面板去探这台机器上有什么,然后列出这些发现
+  能支撑的能力。勾选,它们就变成真正的 target 和卡片,存进数据库而不是只读挂载的 YAML。
+  这一层**完全不需要凭据**。
+- **机器指标:零凭据 / 凭据式两条路** — 跑着 **node_exporter** 的机器,一次抓取就是一张
+  完整机器卡,全程没有任何密钥;只开了 **SSH** 的机器,一次会话产出同样的卡,密码或私钥
+  存在加密金库里。(WinRM/Windows 已在能力目录中登记,但采集器尚未实现。)
+- **凭据金库** — 密钥以 **AES-256-GCM** 静态加密,主密钥由 `VAULT_KEY` 派生;API 是一扇
+  **只进不出**的门:任何路径都不会把凭据读回来。SSH 主机密钥采用首次信任(TOFU),密钥
+  变了就在**发送凭据之前**中止握手。
 - **热重载** — 在宿主机改 YAML,面板约 3 秒内重塑。坏配置会被拒绝并保留上一份好配置
   (面板绝不黑屏)。
 - **推送 agent,零入站端口** — 被监控机主动 POST 到 hub,自身**不开任何监听端口**。
@@ -28,7 +35,8 @@
 - **组合布局** — `stack` 卡把多个 service 后端合进一个外框(row/column 自适应);
   历史图 N 屏对比(`panes: [...]`)。
 - **采集器** — `http`(拉取)、`http_push`(机器主动推)、`sql`(只读 Postgres)、
-  `exec`(白名单本地命令)、`demo`(合成)。
+  `exec`(白名单本地命令)、`tcp`、`tls`、`prometheus`(抓 node_exporter)、
+  `ssh`(凭据式 Linux 指标)、`demo`(合成)。
 - **指标模板** — 一个指标 key 同时描述值怎么取、怎么画:`value/max` 复合、`divide`
   缩放、`level_map` 给文本状态着色,以及复合指标逐段着色 + 上标标签(NAS 盘温的盘号、
   网关卡按模型拆开的请求量都是这么来的)。
@@ -41,44 +49,203 @@
 
 ---
 
-## 面板视图
+## 发现 → 加 → 看见
 
-- **机器卡历史弹窗** — 点任意机器卡,弹出这台机自己的多指标历史,**24h / 7d / 30d**
-  三档。画哪几条线按卡的角色定(GPU 机 → GPU%/温度/功耗,网关 → CPU/缓存命中/成功率,
-  NAS → CPU/内存/盘温)。某条线这台机从未记录过、或只是这个时段没有数据,会被剔除并
-  在弹窗底部注明是两者中的哪一种,而不是画一条空线让你自己猜。
-- **线名直接标在图上** — 每条线在图旁用它自己的颜色标出名字,标签放在画区之外的标注
-  槽里,所以尖峰不会穿过标签,标签也不会盖住数据。末端挨得太近的名字会自动上下错开,
-  并用同色引线连回各自的线。弹窗与对比屏共用同一个渲染器,两处读起来一样。
-- **LLM 网关卡** — CPU / 缓存命中率 / 成功率三个圆环,当日请求量按模型拆开(模型名作
-  上标),外加 5 分钟入站速率;该速率累加所有网关实例,第二个实例挂着别的模型也不会被
-  静默漏掉。
-- **NAS 磁盘温度** — 每块盘一个读数,各自带盘号上标,按两档阈值分级着色。
-- **双时区时钟** — 页眉并排显示两个时区,昼夜用内联 SVG 太阳/月牙区分。
-- **N 屏历史对比** — 即上面列出的 `panes: [...]` 布局;它与弹窗共用图表渲染器,因此
-  同样有线上标注。
+点 **＋ 添加目标**,输入一个私网 IPv4,面板不带任何凭据地去探:有界的 TCP 端口扫描、
+不认证的 HTTP 指纹(状态码 / `Server` / `<title>`)、TLS 证书到期天数、node_exporter
+探测。回来的是一份清单,外加这些发现能支撑的能力 —— 勾选,它们就被创建成真正的 target
+和卡片。
+
+![发现面板](docs/discovery.png)
+
+| 能力 | 会创建什么 | 前提 |
+|---|---|---|
+| `reachability` | service 卡 —— ping 状态 + 延迟 | 无(即使这台机什么都没答,也照样提供) |
+| `port_check:<port>` | service 卡 —— TCP 连通 + 延迟 | 该端口开着,且在已知端口集内 |
+| `http_check:<port>` | service 卡 —— HTTP 状态 + 延迟 | **明文** HTTP 端口(443 由 `tls_cert` 覆盖) |
+| `tls_cert:<port>` | info 卡 —— 证书剩余天数 | TLS 端口且握手确实取回了证书 |
+| `node_metrics` | machine 卡 —— CPU / 内存 / 磁盘 / 网络 / 运行时长 | `:9100` 上的 node_exporter 有卡片要画的那些指标族 |
+| `ssh_metrics` | machine 卡 —— 同样一组,走 SSH | 22 端口开着 **且**已存了凭据 |
+| `winrm_cpu` · `winrm_mem` · `winrm_disk` | *(规划中)* | 列为 pending,采集器尚未实现 |
+
+它为什么不会变成一个"远程执行"入口:
+
+- **只允许私网 IPv4。** `net_guard.js` 是唯一权威:公网地址、链路本地
+  `169.254.0.0/16`、以及带前导零的八位组(`010.0.0.1` —— 解析器会当八进制读)一律拒绝,
+  且只会连它返回的规范形式。
+- **端口集是常量**(`server/capabilities/ports.js`)。调用方无法指定端口,所以无论发现
+  还是落库的 target,都不可能被指向任意内网服务。
+- **客户端从不发送 `source`。** 它只发 `{host, capability, name?, credential_id?}`,
+  别的一概不发;存进去的东西由服务端的能力目录用常量构建。target 的 `source` 就是调度器
+  要执行的东西 —— 接受浏览器传来的 source,等于把"把它加进我的面板"变成"替我跑这个"。
+- **预览即实物。** 一个能力的 `source_preview` 就是落库时那个对象本身(同一个函数),
+  不是手写的相似品,两者不可能各自漂移。
+
+运行时加进来的目标列在同一个面板的**已添加**里,可以就地删除。它们存在
+`data/homenet.db`,永远不进 `config/`。
+
+---
+
+## 机器指标的两条路
+
+### 零凭据 —— node_exporter
+
+一次 `/metrics` 抓取就是一张标准机器卡:CPU 环、内存、磁盘、网络、运行时长,用的是和
+跑 push agent 的机器完全相同的 widget 与指标模板。
+
+![由 node_exporter 抓出的机器卡](docs/machine-card.png)
+
+`node_cpu_seconds_total` 和网络计数器只有作为速率才有意义,所以采集器保留上一次读数、
+报告差值 —— 一个目标的**第一次**抓取,CPU 与网络显示 `—`,而不是编一个 0 出来。这是
+**一个**能力而不是四个:把 CPU / 内存 / 磁盘 / 网络拆成四个能力,就会以同样的间隔把同一
+个端点抓四遍,只为一台机的那几个数,还会得到四张单指标卡片 —— 而面板本来就有一种正好
+画这一组的卡。
+
+### 凭据式 —— SSH(Linux)
+
+一台除了 sshd 什么都不开的机器,照样能产出同一张卡。一次会话跑一条**固定**命令 ——
+`cat /proc/stat`、`cat /proc/meminfo`、`df -kP /`、`cat /proc/net/dev`、
+`cat /proc/uptime`,用常量分隔符拼起来 —— 输出被解析成 push agent 的载荷形状,于是走
+同一套 map、模板和卡片。
+
+- 落库的 target 存的是 **`credential_id`,不是密钥**。明文只存在于采集器内部,从
+  `vault.decrypt()` 到 ssh2 消费掉它那一刻为止,之后所有引用立即丢弃。
+- **主机密钥首次信任,变了就是硬拒绝。** 检查发生在 `hostVerifier` 里,它在**认证之前**
+  中止握手 —— 所以在那个局域网地址上应答的冒充者,永远拿不到凭据。指纹用 OpenSSH 的
+  `SHA256:…` 格式,可以直接和 `ssh-keyscan` 对照。
+- 和 `node_metrics` 一样,这是**一个**能力(`ssh_metrics`)而不是三个:一次会话同时拿到
+  CPU、内存、磁盘和网络。
+
+Windows 已在目录中登记(`winrm_cpu` / `winrm_mem` / `winrm_disk`,当 OS 判定为 Windows
+且登录端口开着时提供),但保持 **pending**:发现面板会把它灰着列出来并注明原因,API 也
+拒绝落库,直到采集器写出来为止。
+
+---
+
+## 凭据金库
+
+![凭据面板](docs/credentials.png)
+
+配好主密钥、重启,**凭据**面板就能用了。名称、用户名、类型可以列出;密钥只进不出。
+
+### 1. 生成并配置 `VAULT_KEY`
+
+```bash
+openssl rand -base64 32          # 生成
+```
+
+写进宿主机的 `.env`(已 git-ignore;`docker-compose.yml` 里已经有
+`VAULT_KEY=${VAULT_KEY:-}` 把它透传进容器):
+
+```bash
+VAULT_KEY=<刚生成的那串>
+```
+
+然后重启容器。**这串东西要存在重建之后你依然拿得到的地方。**
+
+> **丢了 `VAULT_KEY`,就等于丢了所有已存凭据。** 它们无法从数据库里恢复 —— 这正是加密
+> 的意义。换掉主密钥则会把现有凭据永久锁死:面板在启动时就能发现不匹配,保持锁定状态;
+> 唯一的出路是删掉旧凭据、用新主密钥重新录入。
+
+### 2. "锁定"是什么意思
+
+没有 `VAULT_KEY`(未设、为空、全是空白,或短于 16 个字符)时金库**锁定**,而锁定绝不
+退化成明文:
+
+- 面板照常运行,只是不能存凭据;
+- 凭据面板会说明自己被锁,以及为什么;
+- 所有写入路径回 `503 vault not configured`;
+- 已有的密文就是读不出来而已。
+
+### 3. 它是怎么存的
+
+- **AES-256-GCM**(`node:crypto`,零依赖)。加密密钥是
+  `scrypt(VAULT_KEY, 每个安装独有的 salt)`,在启动时**只派生一次**;16 字节的 salt 在
+  首次解锁时生成,和密文存在一起,所以恢复备份时它跟着一起走。而必须永不重复的 IV,是
+  每条密文一个。
+- 首次解锁时会写入一条加密的**校验串**,之后每次启动都重新验一遍。没有它,用**错**的
+  主密钥启动看起来一切正常,直到某次真的去解一条凭据才暴露;更糟的是新凭据会用新密钥
+  写入,最终一个库里躺着两代密文,没有任何一把钥匙能全读出来。
+- 凭据表**根本没有明文列**。列表查询连密文列都不 `SELECT`,所以列表接口连"不小心"泄露
+  都做不到;也没有任何路由会以任何形式返回密钥 —— 明文不会、密文不会、错误信息里也
+  不会。唯一的读取方是 ssh 采集器,在内存里,在建连那一刻。
+- 删除一条还被某个 target 引用着的凭据会被 `409` 拒绝,并列出是谁在用它。
+
+凭据类型为 `ssh_password`、`ssh_key`、`winrm_password`(第三种现在就能存,等 WinRM
+采集器落地后启用)。
+
+### 4. 怎么用
+
+需要凭据的能力,显示的是一个**下拉选择器而不是名称输入框** —— 浏览器侧只看得到凭据
+名称,回传的是 id:
+
+![带凭据下拉的添加目标](docs/add-target-credential.png)
 
 ---
 
 ## 架构
 
-```text
-被监控机
-  ├─ Linux / Windows 推送 agent ──POST /api/push/:id(X-Push-Token)──┐  (机器侧不开入站端口)
-  └─ http / sql / exec 数据源 ────按间隔拉取──────────────────────────┤
-                                                                      ▼
-  collectors ─► normalize(JSONPath 映射 + 指标模板 ─► value / level / display)
-                                                                      │
-                       ┌──────────────────────────────┬──────────────┴───────────────┐
-                       ▼                               ▼                              ▼
-              snapshot(内存最新)               tsdb(SQLite)              Postgres(token 记账)
-                /api/snapshot                    /api/history                /api/token_detail
-                                         原始采样 + 5 分钟聚合桶
+整套设计就靠四个名词:
 
-  config/*.yaml ──(chokidar 监听 + ajv 校验)──► /api/config(ETag)
-                                                                      ▼
-                              web/(原生 JS)从 /api/config + /api/snapshot 渲染
+- **Target(目标)** — 一个被监控的东西:`id`、`source`(由哪个采集器跑、多久跑一次)、
+  `map`(JSONPath → 指标键)。它来自 `targets.yaml`,或者来自运行时加进来的用户存储 ——
+  存进去的文档**就是** YAML 里本该写的那个对象。
+- **Capability(能力)** — 发现结果在某台主机上能变成什么 target。能力目录
+  (`server/capabilities/catalog.js`)是唯一真源:哪些发现支撑哪个能力由它决定,
+  `{target, card}` 也由它构建,所以调用方看到的预览就是最终落库的东西。
+- **Collector(采集器)** — 产出某个 target 原始 JSON 的代码:`http`、`http_push`、
+  `sql`、`exec`、`tcp`、`tls`、`prometheus`、`ssh`、`demo`(外加发现探测本身,它从不
+  被调度)。
+- **Widget(卡片)** — 负责画出来的那张卡:`machine`、`service`、`info`、`token`、
+  `stack`、`history`。能力自带 widget 声明,这就是为什么加进来的目标一出现就配好了合适的卡。
+
+```text
+被监控机 / 服务
+  ├─ Linux / Windows 推送 agent ─POST /api/push/:id(X-Push-Token)─┐ (机器侧不开入站端口)
+  ├─ http / sql / exec / tcp / tls 数据源 ──按间隔拉取─────────────┤
+  ├─ node_exporter :9100/metrics ──prometheus 采集器───────────────┤ (零凭据)
+  └─ sshd :22 ──ssh 采集器,建连时解密凭据──────────────────────────┤
+                                                                    ▼
+  collectors ─► normalize(JSONPath 映射 + 指标模板 ─► value / level / display)
+                                                                    │
+         ┌──────────────────────┬────────────────────┴──────┬──────────────────────┐
+         ▼                      ▼                           ▼                      ▼
+   snapshot(内存最新)     tsdb(SQLite)         Postgres(token 记账)     widgets: machine /
+    /api/snapshot          /api/history           /api/token_detail       service / info /
+                    原始采样 + 5 分钟聚合桶                               token / stack
+
+  GET /api/discover ─► 探测(端口 · HTTP · TLS · node_exporter)
+        └─► 能力目录 ─► POST /api/user_targets ─► 用户存储(SQLite) ─┐
+                                                                     │
+  config/*.yaml(只读挂载)─(chokidar 监听 + ajv 校验)─► 文件配置    │
+                                                                     │
+                              有效配置 = 文件配置 ++ 用户行 ◄─────────┘
+                              (同一套 validate/crossValidate 关卡)
+                                                                    ▼
+                                          /api/config(ETag、version)
+                                                                    ▼
+                        web/(原生 JS)从 /api/config + /api/snapshot 渲染
+
+  POST /api/credentials ─► 金库:AES-256-GCM,密钥 = scrypt(VAULT_KEY, 本机 salt)
+                             └─► credentials 表(只有密文)─► ssh 采集器解密使用
 ```
+
+### 只读的 `config/` 与可写的 `data/`
+
+生产环境把 `config/` **只读**挂载,所以面板运行期间加进来的东西不可能写进 YAML。它们写
+进 `data/homenet.db` —— 那个本来就装着时序数据的可写卷:
+
+| 位置 | 内容 | 谁写的 |
+|---|---|---|
+| `config/*.yaml` | targets、layout、metrics、theme | 你,在宿主机上(热重载) |
+| `data/homenet.db` → `user_targets`、`user_cards` | 运行时加的目标及其卡片 | 添加目标面板 |
+| `data/homenet.db` → `credentials`、`vault_meta`、`ssh_known_hosts` | 加密后的密钥、金库 salt 与校验串、TOFU 主机密钥 | 凭据面板 / ssh 采集器 |
+| `data/homenet.db` → 指标表 | 原始采样 + 5 分钟聚合桶 | 调度器 |
+
+**有效配置**就是文件配置后面拼上用户行,并且过同一道 YAML 编辑要过的
+validate/crossValidate 关卡。由此得到两条性质:合并后校验不过就整体拒绝、上一份好配置
+继续在线;而当用户存储为**空**时,有效配置**就是**文件配置那个对象本身 —— 同一个引用、
+同一个 ETag —— 所以没动过的安装行为逐字节一致。
 
 ---
 
@@ -96,9 +263,22 @@ docker compose up -d --build
 
 不用 Docker:`npm install && npm start`(→ `http://127.0.0.1:3100`,改 `PORT` 换端口)。
 
+**在宿主机上部署更新:**
+
+```bash
+cd <repo> && git pull && docker compose up -d --build
+```
+
+只要 `server/` 或 `web/` 有改动就必须带 `--build` —— 前端是烤进镜像的。只动
+`agents/` 或 `docs/` 的提交,`git pull` 就够。[CHANGELOG](CHANGELOG.md) 里每一条都标了
+该用哪种。
+
 ---
 
-## 接入真实机器(四步)
+## 接入真实机器
+
+面板自带的 **＋ 添加目标** 流程已经覆盖可达性、端口、HTTP、证书和机器指标,全程不用碰
+文件。需要 push agent(GPU 机、NAS、网关)或需要自定义 `map` 时,再写 YAML:
 
 1. **把示例复制进你的私有配置**(`config/`、`.env` 已 git-ignore):
 
@@ -113,7 +293,7 @@ docker compose up -d --build
    ```yaml
    - id: machine-1
      name: "Machine 1"
-     color: auto                 # 或写 hex;auto = 按角色(GPU/主机/service)自动判定
+     color: auto                 # 或写 hex;auto = 按角色(GPU/host/service)自动判定
      source: { type: http_push, token_env: PUSH_TOKEN_MACHINE1, stale_after_s: 10 }
      map:
        gpu:        "$.gpus[0].util_pct"
@@ -124,7 +304,7 @@ docker compose up -d --build
 3. **在 `.env` 里设密钥**(变量名与 `token_env` 一致):
 
    ```bash
-   PUSH_TOKEN_MACHINE1=<your-token>       # 生成:openssl rand -hex 24
+   PUSH_TOKEN_MACHINE1=<your-token>       # 生成:openssl rand -hex 32
    ```
 
 4. **在机器上跑 agent**(脚本顶部填 hub 地址 / id / token),常驻循环每约 2 秒推送一次:
@@ -135,6 +315,39 @@ docker compose up -d --build
 
 ---
 
+## 环境变量
+
+下面全都是可选的 —— demo 一个都不需要。把 `.env.example` 复制成 `.env`,按需填写。
+
+| 变量 | 用途 |
+|---|---|
+| `VAULT_KEY` | 凭据金库主密钥(≥16 字符;`openssl rand -base64 32`)。不设 → 金库锁定,凭据既存不进也解不开。**丢了它 = 所有已存凭据作废。** |
+| `PG_DSN` | `sql` token 采集器用的只读 Postgres DSN。变量名由目标的 `dsn_env` 决定,`PG_DSN` 是自带示例里用的那个。 |
+| `PUSH_TOKEN_*` | 每个 `http_push` 目标一个共享密钥,变量名必须与该目标的 `token_env` 一致(`openssl rand -hex 32`)。 |
+| `TELEGRAM_BOT_TOKEN` | 可选,内置 `probe_telegram` exec 命令用。 |
+| `PORT` | 监听端口(默认 `3100`)。 |
+| `LOG_LEVEL` | Fastify 日志级别(默认 `warn`)。 |
+| `CONFIG_DIR` / `DATA_DIR` | 覆盖配置与数据库位置(默认 `./config`、`./data`)。 |
+| `RETENTION_DAYS` · `AGG_AFTER_DAYS` · `AGG_RETENTION_DAYS` · `PURGE_AFTER_DAYS` · `PUSH_GRACE_MS` | 时序分级与推送失效窗口的调节项;默认值就是上文描述的行为。 |
+
+LiteLLM 网关那几个变量(`LITELLM_PG_DSN`、`LITELLM_DB_CONTAINER`、
+`LITELLM_CONTAINERS`)属于**网关主机**,写在 `/etc/homenet-agent.env`,不在这里。见
+[`docs/AGENT_PROTOCOL.md`](docs/AGENT_PROTOCOL.md) §6.1。
+
+---
+
+## 版本
+
+`package.json` 的 `version` 字段是**唯一真源**。服务端启动时读一次,`/api/config` 带上
+它(所以用 `If-None-Match` 轮询的页面不用刷新也能拿到新版本),`/healthz` 也报它,页脚
+显示它。
+
+**发布约定:** 改 `package.json` 的 `version` **与**新增 [`CHANGELOG.md`](CHANGELOG.md)
+的章节标题,放在同一个提交里。两者不一致时,屏幕上显示的是 `package.json` 里的版本,
+该改的是 CHANGELOG。
+
+---
+
 ## 契约与协议
 
 - **推送协议** —— 机器→hub 的 JSON 契约、agent 要求与安装形态见
@@ -142,22 +355,27 @@ docker compose up -d --build
 - **服务 `/stats`** —— service 卡换真值的可选集成(`{ procs, sessions, skills }`),
   见 [`config.example/targets.yaml`](config.example/targets.yaml) 里禁用的
   `*_real_example` 段。
-- **LLM 网关采集** —— 网关卡 `extra.litellm.*` 所需的 agent 侧环境变量
-  (`LITELLM_PG_DSN`、`LITELLM_DB_CONTAINER`、`LITELLM_CONTAINERS`)见
+- **LLM 网关采集** —— 网关卡 `extra.litellm.*` 所需的 agent 侧环境变量见
   [`docs/AGENT_PROTOCOL.md`](docs/AGENT_PROTOCOL.md) §6.1。
 
 ---
 
 ## 安全
 
+- **发现与运行时目标** —— 只允许私网 RFC1918 IPv4(链路本地、前导零八位组一律拒绝),
+  端口集固定且调用方无法扩展,`source` 永远由服务端用常量构建。发现本身不写任何东西,
+  并发上限 3,同一个 IP 在 5 秒内重复请求直接返回上次的清单。
+- **凭据** —— AES-256-GCM 静态加密,主密钥由 `VAULT_KEY` 派生;没有明文列、没有任何
+  返回密钥的路由,金库锁定时也绝不退化成明文。SSH 主机密钥首次信任,密钥变更会在认证
+  之前中止握手。
 - **exec** 只跑内置白名单命令 + 校验过的参数(`ping_host` 要求私有 RFC1918 地址);
-  绝不接受任意命令字符串。
+  绝不接受任意命令字符串。SSH 采集器的远程命令同理 —— 它是文件里的一个常量。
 - **sql** 只读;SQL 仅来自 `queries/*.sql`;唯一绑定参数是白名单整数。绝不执行来自
   config 或客户端的 SQL。
 - **http_push** 校验 `X-Push-Token`;未知/错误 token 一律拒绝。
-- 密钥(`PG_DSN`、push token)放 `.env`;`config/`、`data/`、`.env` 均 git-ignore,
-  `config.example/` 可安全发布。**无内置鉴权** —— 若要暴露到可信局域网之外,请置于带
-  鉴权的反向代理之后。
+- 密钥(`PG_DSN`、push token、`VAULT_KEY`)放 `.env`;`config/`、`data/`、`.env` 均
+  git-ignore,`config.example/` 可安全发布。**无内置鉴权** —— 若要暴露到可信局域网之外,
+  请置于带鉴权的反向代理之后。
 
 ---
 

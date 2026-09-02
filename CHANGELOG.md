@@ -39,13 +39,17 @@ catalog is the one place that decides how a finding turns into something monitor
 > 被监控的东西"的唯一真源。
 
 **Deploying this release:** everything below is `server/`+`web/`, so it needs
-`docker compose up -d --build` on the host. Nothing new in `config/` and no new env —
-runtime-added targets live in `data/homenet.db`, which the compose file already mounts
-read-write.
+`docker compose up -d --build` on the host. Nothing new is required in `config/` —
+runtime-added targets and credentials live in `data/homenet.db`, which the compose file
+already mounts read-write. One **optional** new env: `VAULT_KEY`. Leave it unset and the
+panel behaves exactly as it did, minus credential storage; set it (`openssl rand -base64
+32`) to unlock the credential vault and the SSH capability.
 
 > **本次部署方式:** 以下全部是 `server/`+`web/` 改动,要在宿主机上
-> `docker compose up -d --build` 才生效。`config/` 无新增必填项,也不需要任何新 env ——
-> 运行时新增的目标存在 `data/homenet.db` 里,compose 早已把它挂成可写。
+> `docker compose up -d --build` 才生效。`config/` 无新增必填项 —— 运行时新增的目标与
+> 凭据都存在 `data/homenet.db` 里,compose 早已把它挂成可写。新增一个**可选** env:
+> `VAULT_KEY`。不设,面板行为和以前完全一样,只是不能存凭据;设了
+> (`openssl rand -base64 32`)才解锁凭据金库与 SSH 能力。
 
 ### Discovery → add → see (发现→加→看见)
 
@@ -64,26 +68,53 @@ read-write.
 |---|---|---|
 | `cb6aae9` | prometheus collector — one `/metrics` scrape becomes a standard machine card (CPU ring, memory, disk, network, uptime). The four `node_cpu/mem/disk/net` ideas collapse into ONE `node_metrics` capability: four targets would have scraped the same endpoint four times for one host's numbers | **yes** (server) |
 
+### Credentials: encrypted vault + SSH deep collection (凭据金库 + SSH 深度采集)
+
+Deep metrics for a host that runs no exporter and no agent — over SSH, with the password
+or key encrypted at rest. A locked vault (no `VAULT_KEY`) refuses writes rather than
+degrading to plaintext, so the feature is opt-in and its absence changes nothing.
+
+> **凭据金库 + SSH 深度采集。** 既没有 exporter 也没有 agent 的机器,现在也能拿到深度
+> 指标 —— 走 SSH,密码或私钥静态加密存放。金库未配置(无 `VAULT_KEY`)时拒绝写入而不是
+> 退化成明文,所以这是个纯可选能力,不启用就等于不存在。
+
+| Commit | Change | Rebuild |
+|---|---|---|
+| `48cd276` | credential vault — AES-256-GCM over `node:crypto`; key = `scrypt(VAULT_KEY, per-install salt)` derived once at boot; an encrypted verifier catches a WRONG key at startup instead of at first use (which would otherwise leave one database holding two generations of ciphertext). `POST/GET/DELETE /api/credentials` is a write-only door: no plaintext column, the listing never `SELECT`s the ciphertext, and no route returns a secret in any shape | **yes** (server+web) |
+| `48cd276` | `ssh` collector + `ssh_metrics` capability — one session, one **constant** remote command (`/proc/stat`, `/proc/meminfo`, `df -kP /`, `/proc/net/dev`, `/proc/uptime`), parsed into the push agent's payload shape so it reuses the same map, templates and machine card. The target stores `credential_id`, never a secret. Host keys are TOFU and a **changed** key aborts in `hostVerifier` — before authentication, so an impostor on that address never receives the credential. `ssh_cpu`/`ssh_mem`/`ssh_disk` collapse into ONE capability for the same reason `node_metrics` is one | **yes** (server+web) |
+
+### Version on screen (版本号上屏)
+
+| Commit | Change | Rebuild |
+|---|---|---|
+| `3c7273b` | `package.json`'s `version` becomes the single source of truth (it had sat at `1.0.0` since the first release, so "which version is running" was unanswerable on a live system). Read once at startup, exposed through `/api/config` and `/healthz`, shown in the page footer. `VERSION` is folded **into** `computeEtag`, without which a tab polling with `If-None-Match` would keep getting 304 after a deploy and show the old version until someone hard-refreshed | **yes** (server+web) |
+
 ### Fixes (修复)
 
 | Commit | Change | Rebuild |
 |---|---|---|
+| `eb6e4a3` | **chart**: a history line crossing a gap in the data was drawn as one straight segment between the samples either side, inventing a trend across a window where nothing was recorded. The line now breaks instead | **yes** (web) |
 | `016e7d3` | **exec**: `sysreport_local`'s `net` returned kbps while `normalize.js` documents that field as bytes/sec — an ~8x error with the wrong unit suffix. Dormant (no target maps it), fixed before the first one does | **yes** (server) |
 | `3ebd37c` `5f71da0` | private-IPv4 guard now refuses a leading-zero octet: `010.0.0.1` passed the old `\d{1,3}` check as 10.x while the resolver reads the leading zero as octal and dials 8.0.0.1. `exec.js` shares the guard instead of carrying its own copy | **yes** (server) |
 
 ### Config surface added this release
 
 - `targets[].source.type`: `tcp` / `tls` (each requires `host` + `port`), `prometheus`
-  (requires `url`)
+  (requires `url`), `ssh` (requires `host` + `credential_id`)
 - `interval` / `timeout` accept `h` and `d` (`"1h"` previously parsed as one **second**)
-- no new env; no new required field in `config/`
+- one new **optional** env: `VAULT_KEY` (≥16 chars; unset → the vault stays locked and
+  the panel runs exactly as before). No new required field in `config/`.
 
 ### Notes
 
 - Runtime-added targets are stored as the same object shape the YAML uses, so the
   scheduler, normalize, `publicConfig` and the whole frontend needed no changes.
-- First boot on an existing database creates two empty tables (`user_targets`,
-  `user_cards`). Rolling back to an earlier image leaves them in place, unread.
+- First boot on an existing database creates five empty tables (`user_targets`,
+  `user_cards`, `credentials`, `vault_meta`, `ssh_known_hosts`). Rolling back to an
+  earlier image leaves them in place, unread.
+- **Losing `VAULT_KEY` means losing every stored credential** — they cannot be recovered
+  from the database, which is the point. Changing it locks the existing ones out
+  permanently; the cure is to delete and re-enter them under the new key.
 
 ---
 
