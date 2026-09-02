@@ -23,6 +23,58 @@ on screen is the one from `package.json`, and this file is what needs fixing.
 
 ---
 
+## v2.4 — 2026-09-03
+
+**The management side of the panel now has a lock on it.** Discovery, adding and
+deleting runtime targets, and the whole credentials API sat behind nothing: anyone who
+could reach the port could write to them. They now require an admin session, and the
+default with no password configured is **401 on every one of them** — an unset env is a
+locked install, never an open one.
+
+> **管理面终于上锁了。** 发现主机、增删运行时目标、整个凭据 API,在此之前谁能连上端口
+> 谁就能调。现在它们要求管理员会话,而且没配密码时的默认行为是**全部 401** ——
+> env 忘了填意味着锁死,绝不意味着敞开。
+
+**Deploying this release:** `server/`+`web/`, so `docker compose up -d --build`.
+**Set `ADMIN_PASSWORD` when you deploy this** (`openssl rand -base64 24`, ≥8 chars) —
+without it the panel still shows every card exactly as before, but "＋ 添加目标" and
+"凭据" disappear and their endpoints answer 401. Viewing is unchanged and stays public
+unless you also set the optional `REQUIRE_LOGIN_TO_VIEW=1`.
+
+> **本次部署方式:** `server/`+`web/`,需要 `docker compose up -d --build`。
+> **部署时请一并设置 `ADMIN_PASSWORD`**(`openssl rand -base64 24`,≥8 字符)——
+> 不设的话看板照常显示所有卡片,但"＋ 添加目标"与"凭据"会消失,对应端点一律 401。
+> 只读浏览不受影响、默认仍然公开,除非额外打开可选的 `REQUIRE_LOGIN_TO_VIEW=1`。
+
+### Admin auth (管理鉴权)
+
+| Commit | Change | Rebuild |
+|---|---|---|
+| `86cf554` | password gate + signed session cookie. `POST /api/login` compares the password in constant time and drops it — the value, its length and any hash reach neither the response, the log line nor an error. The session is a signed cookie, not a server-side table: the HMAC key is `scrypt(ADMIN_PASSWORD, fixed salt)`, so **changing the password invalidates every outstanding session** with no revocation list, and a restart does not log everyone out (a per-boot random key would, on every rebuild). Logout still revokes server-side — deleting only the browser's copy would leave a cookie captured beforehand good for the rest of its 12 h. Cookie is HttpOnly + SameSite=Strict, and `Secure` follows the **request's** protocol so a direct LAN `http://` hit gets a cookie the browser will actually send back | **yes** (server+web) |
+| `86cf554` | login rate limit in two tiers — per client IP (`X-Forwarded-For` under `trustProxy`) and per socket peer. The second tier is what bounds an attacker rotating the header we chose to believe. Exponential backoff from the 6th failure, capped at 15 min; the gate is checked **before** the password, so a correct password during a lockout is still 429 | **yes** (server) |
+| `86cf554` | every management route gated: `GET /api/discover`, `POST/DELETE /api/user_targets`, and `POST/GET/DELETE /api/credentials`. Writes additionally check `Origin` (a missing `Origin` is allowed on purpose: no browser omits it on a cross-site request that could carry a cookie, so its absence means a non-browser caller with no ambient cookie to abuse). Optional `REQUIRE_LOGIN_TO_VIEW` extends the same gate to `/api/config`, `/api/snapshot`, `/api/history` and `/api/token_detail` | **yes** (server) |
+| `86cf554` | frontend session state — admin controls start hidden and are revealed by `/api/session`, so the header never flashes buttons the server would refuse; a 401 from a data poll flips the connection badge to "Login required" and brings the login entry back instead of leaving the page on "Disconnected". The password field is cleared on every outcome, including failure. Hiding is cosmetic and says so in the file: the server refuses either way | **yes** (web) |
+
+### Config surface added this release
+
+- two new **optional** envs: `ADMIN_PASSWORD` (≥8 chars; unset → every management
+  endpoint answers 401) and `REQUIRE_LOGIN_TO_VIEW` (default off → the board stays
+  public). No new required field in `config/`.
+- one new `layout.yaml` text key: `conn_locked` (falls back to `Login required`).
+
+### Notes
+
+- Nothing is stored for this: no user table, no session table on disk. The only
+  server-side state is an in-memory revocation map for logged-out sessions, pruned by
+  expiry, plus the rate limiter's bounded map. A restart forgets both — the same
+  exposure a restart already had, since the signing key comes from the password rather
+  than from boot.
+- `/healthz` reports `admin: { configured, require_login_to_view }` — booleans only,
+  nothing derived from the password.
+- Sessions last 12 h. Changing `ADMIN_PASSWORD` ends all of them immediately.
+
+---
+
 ## v2.3 — 2026-09-01
 
 **Add a machine by typing its IP.** Point the panel at a private IPv4 address and it
