@@ -110,6 +110,9 @@ async function submit() {
 
 async function logout() {
   try { await fetch('/api/logout', { method: 'POST' }); } catch { /* clear locally anyway */ }
+  // Drop the "已登录。" the modal is still holding: the next person to open it must not
+  // be told they are logged in by a leftover line.
+  setStatus('');
   await refreshSession();
   await onChange();
 }
