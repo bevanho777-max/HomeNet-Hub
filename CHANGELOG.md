@@ -23,6 +23,48 @@ on screen is the one from `package.json`, and this file is what needs fixing.
 
 ---
 
+## v2.7 — 2026-09-04
+
+**The per-project token card now splits by API key instead of by the client's `user`
+field.** v2.6 grouped on LiteLLM's end-user table, which is exact but only fills in for
+callers that bother to send `user` — in practice almost nobody does, so the card sat at
+one row waiting on changes to every client. Grouping on `api_key` needs no client
+cooperation at all: a project gets its own row the moment it gets its own virtual key,
+which is a credential it already has to configure anyway.
+
+Rows are labelled `(master key)` for traffic on the configured master key, `key:<8 hex>`
+for a minted key, and the literal (truncated) for anything else — health-check
+pseudo-keys and scanner probes stay visible rather than silently vanishing. Keys that
+produced no chat tokens at all are dropped: those are rejected probes, not usage.
+
+Readable aliases are deliberately not joined. LiteLLM keeps `key_alias` in a table a
+read-only role needs a second grant for, and that join still cannot name the master key
+— it is a config literal with no row there, and on a gateway where everything shares one
+credential that is the row carrying essentially all the traffic. Mint a couple of real
+keys first; the alias grant is worth adding after that, not before.
+
+> **每项目 token 卡改成按 API key 拆,不再按客户端传的 `user` 字段。** v2.6 用的是
+> LiteLLM 的 end-user 表,准是准,但只有主动传 `user` 的调用方才有数据 —— 实际上几乎
+> 没人传,于是卡停在一行,等着每个客户端都改一遍。按 `api_key` 分组完全不需要客户端
+> 配合:项目拿到自己的 virtual key 就自动有了自己的一行,而 key 本来就是它要配的东西。
+>
+> 行标签:走配置里主口令的流量显示 `(master key)`,签发出来的 key 显示 `key:<8位hex>`,
+> 其余字面量原样截断 —— 健康检查的伪 key 和扫描探测仍然可见,而不是被悄悄抹掉。
+> 完全没产生 chat token 的 key 会被滤掉:那是被拒的探测,不是用量。
+>
+> 可读的 alias 名是刻意不 join 的。LiteLLM 把 `key_alias` 放在另一张表,只读账号要再补
+> 一条授权才能读,而且那个 join 依然叫不出 master key 的名字 —— 它是配置里的字面量,
+> 那张表里根本没有它的行,偏偏在所有人共用一把口令的网关上,它就是几乎扛下全部流量的
+> 那一行。先发出几把真的 key,alias 的授权那时候才值得补。
+
+**Deploying this release:** `server/`+`web/`, so `docker compose up -d --build`.
+No database change — this release adds and revokes nothing.
+
+> **本次部署方式:** `server/`+`web/`,需要 `docker compose up -d --build`。
+> 数据库无需改动 —— 本次不新增也不撤销任何授权。
+
+---
+
 ## v2.6 — 2026-09-04
 
 **Token usage can now be split per project.** The token card answers "which model";

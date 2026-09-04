@@ -210,11 +210,12 @@ targets:
   # is that nothing interprets the result server-side, so a new table card is a
   # new .sql file + a layout card, with no code change.
   #
-  # This one rolls chat tokens up per end user — the OpenAI `user` field the
-  # client sends — so a project opts into its own row just by passing
-  # user:"<project>". It reads LiteLLM_DailyEndUserSpend, which a read-only role
-  # needs its OWN grant for (a grant on LiteLLM_DailyUserSpend does not cover it):
-  #   GRANT SELECT ON TABLE "LiteLLM_DailyEndUserSpend" TO <readonly_role>;
+  # This one rolls chat tokens up per api_key — which key the request came in
+  # on — so a project gets its own row as soon as it gets its own virtual key,
+  # with no change on the client beyond the credential it already configures.
+  # Rows are labelled (master key) / key:<8 hex>; turning those into readable
+  # aliases needs a second grant on LiteLLM_VerificationToken and is only worth
+  # it once you actually have several keys (see the query file).
   - id: project_tokens_example
     name: "Per-Project Tokens (real sql)"
     enabled: false

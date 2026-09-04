@@ -125,8 +125,8 @@ grid:
   #     tokens_total:   { label: "Tokens", format: compact }
   #     requests_total: { label: "Reqs",   format: number }
   #     tokens_7d:      { label: "7d",     format: compact }
-  #   empty_note: "No tagged traffic yet — clients need to send an OpenAI `user` field."
-  #   hint: "One row per client `user` tag. Chat models only — embedding/rerank excluded."
+  #   empty_note: "No chat traffic recorded yet."
+  #   hint: "One row per API key. Chat models only — embedding/rerank excluded."
 
   # §12-step4: generic info card — pure label/value list, no target needed.
   # Add any "info box" by adding a type:info card here; no code changes.
