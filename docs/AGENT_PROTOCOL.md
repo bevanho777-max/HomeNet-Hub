@@ -138,7 +138,16 @@ agent 对任何响应都不做分支处理,唯一职责是"采集→推送→睡
 - Claude 倒计时:读取现有 `claude-window.json`,算出 `remaining_min` 填入 `extra.claude`(吸收现 `claude-report.ps1` 职责,后者最终可退役)。
 - 推送:`Invoke-RestMethod -TimeoutSec 1 -Method Post -ContentType 'application/json; charset=utf-8' -Headers @{ 'X-Push-Token' = $Token }`,失败 `try/catch` 静默。
 
-> 注:`agents/` 下脚本注释一律用 **ASCII/英文**。中文注释在下载/转存链路上即便 BOM 完好也可能发生换行丢失导致行合并,ASCII-only 可规避该编码链路损伤。
+> 注:`agents/` 下脚本注释**允许 UTF-8 中文**(`homenet-agent.sh` 的现有风格就是中文,
+> litellm 采集那几段的取舍理由全写在注释里,强行 ASCII 化只会让它们变得没法读)。
+>
+> 这条原先是「一律 ASCII/英文」,理由是中文注释在下载/转存链路上即便 BOM 完好也可能
+> 丢换行导致行合并。该风险只存在于**经浏览器下载或跨系统转存**取脚本的场景;现在的部署
+> 路径是 `git clone` + `install(1)` 从仓库直接装到 `/opt/homenet-agent/`,不经过那条
+> 链路,所以约束本身已经不成立了。
+>
+> 仍然要守的是:**文件必须是无 BOM 的 UTF-8、LF 换行**。若确实要经浏览器/邮件/剪贴板
+> 转运脚本,装完先 `bash -n` 验一遍语法再重启服务。
 
 ## 6. 安装形态
 
