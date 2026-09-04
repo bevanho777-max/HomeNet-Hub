@@ -103,6 +103,9 @@ grid:
   #
   # LLM gateway: hit/success rates are higher_is_better rings, request counts are
   # plain cells (reqs_by_model borrows the parts renderer for its superscripts).
+  # The rings and the two request cells are chat-only; reqs_by_model stays all-model
+  # so embedding traffic remains visible, which is why its slots do not sum to the
+  # Chat Requests cell. reqs_5m_embed is collected but deliberately left out of items.
   # - target: gateway_litellm_example
   #   type: machine
   #   clickable: detail

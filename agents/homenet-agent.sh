@@ -114,6 +114,27 @@ uptime_json() {
 # 成功率分母用 api_requests:该表满足 api_requests = successful + failed(全表 465 行
 # 无一例外),分母本就含失败数,不需要额外修正。
 # 请求量按 model(实际部署名)拆,不按 model_group:27b 与 35b 溢出节点共用同一个 group。
+#
+# ── CHAT-ONLY 口径(v2.11)──────────────────────────────────────────────
+# cache_hit / success / reqs_today 只统计 **非 embedding** 行。理由是实测出来的:
+# 这台网关全库 16,711,548 次请求里 16,692,468 次(99.886%)是 mxbai-embed,而且
+# 它几乎全失败(成功 5,146 / 失败 16,686,876)—— RAG 侧的重试风暴。三个指标混算的
+# 后果:
+#   • success  全库 0.14%,chat 真实 92.01%。2026-08-20 卡上会显 0.4%,chat 实为
+#              95.1%;反过来 08-24/25 卡显 75%、chat 实为 66% —— 两个方向都失真,
+#              因为混合权重由 RAG 的重试次数决定,跟对话服务的健康度无关。
+#   • reqs_today 08-20 显 321,276,chat 实为 588(虚高 546 倍);平日也虚高 ~12%。
+#   • cache_hit 几乎不受影响(embedding 只占全库 prompt_tokens 的 0.066%,且
+#              cache_read 恒为 0,全库 79.95% vs 80.01%)—— 这里一并过滤是为了
+#              让三个数出自同一个子集,而不是因为它算错了。
+# embedding 没有被藏起来:reqs_by_model 的 emb 槽仍然按原样发,风暴期它就是"数字
+# 不对是因为 RAG"的那条线索。因此四个槽之和 ≠ reqs_today,这是刻意的。
+# 排除模式与 queries/project_tokens.sql 的 excluded_models 保持同一份。
+#
+# 桶存在性与"今天没有对话"是两回事,所以多带一个 reqs_any(全模型请求数)出去:
+# 北京 00:00-08:00 目标桶尚未创建 -> reqs_any 为空 -> reqs_today/by_model 整体省略、
+# 卡片显 "—";桶存在但当天只有 embedding 流量 -> reqs_any 有值而 chat 侧 SUM 为
+# NULL -> 解析层把 reqs_today 记 0(今天确实零次对话),by_model 照常发出 emb 槽。
 llm_sql() {
   cat <<'SQL'
 WITH t AS (
@@ -121,17 +142,30 @@ WITH t AS (
   WHERE date = to_char(now() AT TIME ZONE 'Asia/Shanghai','YYYY-MM-DD')
     AND api_key <> 'litellm-internal-health-check'
 ), llm AS (
-  SELECT * FROM t WHERE COALESCE(model,'') <> ''
+  SELECT *,
+         (lower(model) LIKE '%embed%'    -- text-embedding-*, mxbai-embed-*, nomic-embed-*
+          OR lower(model) LIKE '%bge%'   -- BAAI/bge-*(名字里不带 embed)
+          OR lower(model) LIKE '%gte-%'  -- 阿里 GTE;连字符避免误伤聊天模型名
+          OR lower(model) LIKE '%rerank%') AS is_emb
+  FROM t WHERE COALESCE(model,'') <> ''
+), chat AS (
+  SELECT * FROM llm WHERE NOT is_emb
 )
 SELECT 'S|'||COALESCE(ROUND(100.0*SUM(cache_read_input_tokens)/NULLIF(SUM(prompt_tokens),0),1)::text,'')
         ||'|'||COALESCE(ROUND(100.0*SUM(successful_requests)/NULLIF(SUM(api_requests),0),1)::text,'')
         ||'|'||COALESCE(SUM(api_requests)::text,'')
-FROM llm
+        ||'|'||COALESCE((SELECT SUM(api_requests) FROM llm)::text,'')
+FROM chat
 UNION ALL
+-- 四槽固定顺序 27b/35b/emb/other。is_emb 先判,免得将来出现名字里同时含 "bge" 和
+-- "27b" 的向量模型被归进 chat 槽;other 槽补发,之前算了却不发 —— 全库请求数第一的
+-- chat 模型 qwen3.6-27b-main-128k(11,548 次)就整个落在里面、卡上完全看不到。
+-- 27b/35b 的模式从写死的 %qwen3.8-27b% / %qwen3.6-35b% 放宽到 %27b% / %35b%,换
+-- 一个小版本号的部署名不会再静默掉进 other。
 SELECT 'M|'||tag||'|'||reqs::text FROM (
-  SELECT CASE WHEN model LIKE '%qwen3.8-27b%' THEN '27b'
-              WHEN model LIKE '%qwen3.6-35b%' THEN '35b'
-              WHEN model LIKE '%mxbai-embed%' THEN 'emb'
+  SELECT CASE WHEN is_emb              THEN 'emb'
+              WHEN model LIKE '%27b%'  THEN '27b'
+              WHEN model LIKE '%35b%'  THEN '35b'
               ELSE 'other' END AS tag,
          SUM(api_requests) AS reqs
   FROM llm GROUP BY 1
@@ -143,26 +177,32 @@ llm_isnum() { case "$1" in ''|*[!0-9.]*) return 1;; *) return 0;; esac; }
 
 # 输出 extra.litellm 的 JSON 片段(不含外层花括号),失败输出空串 → 字段整体省略。
 llm_collect() {
-  local raw stats logs ch sp rt r5 n c m1 m2 m3 out=""
+  local raw stats logs ch sp rt ra r5 r5e n ne c m1 m2 m3 m4 out=""
   [ -n "$LITELLM_PG_DSN" ] || return 0      # 未启用则整段跳过(主循环也有守卫,这里保证函数自洽)
   raw=$(llm_sql | timeout 6 docker exec -i "$LITELLM_DB_CONTAINER" \
           psql "$LITELLM_PG_DSN" -tAq 2>/dev/null) || raw=""
   stats=$(printf '%s\n' "$raw" | grep '^S|' | head -1)
   if [ -n "$stats" ]; then
-    ch=$(printf '%s' "$stats" | cut -d'|' -f2)
-    sp=$(printf '%s' "$stats" | cut -d'|' -f3)
-    rt=$(printf '%s' "$stats" | cut -d'|' -f4)
+    ch=$(printf '%s' "$stats" | cut -d'|' -f2)   # chat-only cache_hit
+    sp=$(printf '%s' "$stats" | cut -d'|' -f3)   # chat-only success
+    rt=$(printf '%s' "$stats" | cut -d'|' -f4)   # chat-only reqs_today
+    ra=$(printf '%s' "$stats" | cut -d'|' -f5)   # 全模型请求数,只用来判断今天的桶存不存在
     llm_isnum "$ch" && out="$out\"cache_hit_pct\":$ch,"
     llm_isnum "$sp" && out="$out\"success_pct\":$sp,"
-    llm_isnum "$rt" && out="$out\"reqs_today\":$rt,"
-    # 三个槽位固定顺序 27b/35b/emb。桶内没有该模型的请求记 0(而非缺失),避免小格错位;
-    # 但整个桶都不存在时(北京 00:00-08:00)连同 reqs_today 一起省略,不报成 0 0 0。
-    if llm_isnum "$rt"; then
+    # 桶存在(ra 有值)就一定发 reqs_today:当天只有 embedding 流量时 chat 侧 SUM 为
+    # NULL,那是"零次对话"而不是"没数据",记 0。桶整个不存在(北京 00:00-08:00)才
+    # 连同 by_model 一起省略,卡片显 "—"。
+    if llm_isnum "$ra"; then
+      llm_isnum "$rt" || rt=0
+      out="$out\"reqs_today\":$rt,"
+      # 四个槽位固定顺序 27b/35b/emb/other。桶内没有该类的请求记 0(而非缺失),避免小格错位。
       m1=$(printf '%s\n' "$raw" | awk -F'|' '$1=="M" && $2=="27b"{print $3; exit}')
       m2=$(printf '%s\n' "$raw" | awk -F'|' '$1=="M" && $2=="35b"{print $3; exit}')
       m3=$(printf '%s\n' "$raw" | awk -F'|' '$1=="M" && $2=="emb"{print $3; exit}')
-      llm_isnum "$m1" || m1=0; llm_isnum "$m2" || m2=0; llm_isnum "$m3" || m3=0
-      out="$out\"by_model\":{\"m1\":$m1,\"m1_label\":\"27b\",\"m2\":$m2,\"m2_label\":\"35b\",\"m3\":$m3,\"m3_label\":\"emb\"},"
+      m4=$(printf '%s\n' "$raw" | awk -F'|' '$1=="M" && $2=="other"{print $3; exit}')
+      llm_isnum "$m1" || m1=0; llm_isnum "$m2" || m2=0
+      llm_isnum "$m3" || m3=0; llm_isnum "$m4" || m4=0
+      out="$out\"by_model\":{\"m1\":$m1,\"m1_label\":\"27b\",\"m2\":$m2,\"m2_label\":\"35b\",\"m3\":$m3,\"m3_label\":\"emb\",\"m4\":$m4,\"m4_label\":\"other\"},"
     fi
   fi
   # 近 5 分钟入站 LLM 请求:走访问日志,天然不含 litellm→后端的健康探测(那些不是入站 HTTP)。
@@ -170,17 +210,26 @@ llm_collect() {
   # 多实例逐个累加(LITELLM_CONTAINERS 故意不加引号,靠分词取列表)。任何一个容器的日志取
   # 不到(没跑/改名/docker 报错)就整个字段省略,而不是报一个只含另一半流量的数 —— 少一个
   # 数看得出来是"—",少一半流量看起来像个正常的小数字,不会有人发现。
-  r5=0
+  #
+  # v2.11:与 SQL 侧同样改成 chat-only —— reqs_5m 只数对话端点,/v1/embeddings 单独
+  # 数进 reqs_5m_embed。当前实测 24h 内 242 次 /v1/responses、2 次 chat/completions、
+  # 1 次 embeddings,污染 <0.5%;但 2026-07-13 那种重试风暴是 1,760,051 次/天
+  # (≈6,100 次/5 分钟),那时 reqs_5m 会整个变成 RAG 计数器。两个数一起采、一起省略,
+  # 保持"要么都有要么都是 —"的既有约定。
+  r5=0; r5e=0
   for c in $LITELLM_CONTAINERS; do
     if logs=$(timeout 5 docker logs --since 5m "$c" 2>/dev/null); then
       n=$(printf '%s\n' "$logs" \
-        | grep -cE '"POST /v1/(chat/completions|embeddings|responses|completions)[^"]*" [0-9]{3}' || true)
-      if llm_isnum "$n"; then r5=$((r5 + n)); else r5=""; break; fi
+        | grep -cE '"POST /v1/(chat/completions|responses|completions)[^"]*" [0-9]{3}' || true)
+      ne=$(printf '%s\n' "$logs" \
+        | grep -cE '"POST /v1/embeddings[^"]*" [0-9]{3}' || true)
+      if llm_isnum "$n" && llm_isnum "$ne"; then r5=$((r5 + n)); r5e=$((r5e + ne));
+      else r5=""; break; fi
     else
       r5=""; break
     fi
   done
-  [ -n "$r5" ] && out="$out\"reqs_5m\":$r5,"
+  [ -n "$r5" ] && out="$out\"reqs_5m\":$r5,\"reqs_5m_embed\":$r5e,"
   [ -n "$out" ] && printf '"litellm":{%s}' "${out%,}"
 }
 

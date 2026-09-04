@@ -190,6 +190,47 @@ litellm 进程只记自己收到的请求 —— 网关跑了第二个实例(比
 的是 `LiteLLM_DailyUserSpend` 预聚合表,多个实例共用同一个库同一张表,记账本来就都在
 里面(按 model 分行),查询也没有按模型或实例过滤。
 
+#### chat-only 口径(v2.11 起)
+
+`cache_hit` / `success` / `reqs_today` / `reqs_5m` 四个数都**只统计对话流量**,
+embedding / rerank 模型在 agent 侧就被排掉(`embed` / `bge` / `gte-` / `rerank`,与
+`queries/project_tokens.sql` 的 `excluded_models` 是同一份模式)。
+
+原因是实测的:这台网关全库 16,711,548 次请求里 16,692,468 次(99.886%)是
+`mxbai-embed`,而且它几乎全失败(成功 5,146 / 失败 16,686,876)—— RAG 重试风暴。
+混算的结果是 `success` 报的其实是索引器的重试率而不是对话服务的健康度:
+
+| 日期 | 含 embedding | 只算 chat |
+|---|---|---|
+| 2026-07-13 | success 0.0% / reqs 1,760,282 | success 93.9% / reqs 231 |
+| 2026-08-20 | success 0.4% / reqs 321,276 | success 95.1% / reqs 588 |
+| 2026-08-25 | success 75.6% / reqs 1,151 | success 65.8% / reqs 821 |
+| 全库累计 | success 0.14% / reqs 16,711,548 | success 92.01% / reqs 19,080 |
+
+注意 08-25 是反方向的:那天失败的是 chat 侧,embedding 把它兑得好看了。两个方向都
+失真,因为混合权重由 RAG 的重试次数决定。`cache_hit` 是 token 加权的,embedding 只占
+全库 `prompt_tokens` 的 0.066% 且 `cache_read` 恒为 0,实际偏差 ≤0.7pp —— 一并过滤是
+为了让四个数出自同一个子集,不是因为它算错了。
+
+embedding **没有被藏起来**:
+
+- `reqs_by_model` 仍是全模型口径,`emb` 槽照发 —— 风暴期它就是"数字不对是因为 RAG"
+  的那条线索。因此四个槽之和 **不等于** `reqs_today`,这是刻意的。
+- 近 5 分钟的 embedding 量单独走 `reqs_5m_embed` 字段。默认不上卡(`layout.yaml` 的
+  `items` 里没有它),但会进 sqlite 时序,`/api/history` 里能对照 `reqs_5m` 复盘。
+
+`reqs_by_model` 的四个槽是 `27b` / `35b` / `emb` / `other`,按 `is_emb` → `%27b%` →
+`%35b%` → 兜底的顺序判。`other` 槽是 v2.11 补的:此前 SQL 里算了却不发,全库请求数
+第一的 chat 模型 `qwen3.6-27b-main-128k` 整个落在里面、卡上完全看不到(2026-07-13
+那天 226 次请求就是这么消失的)。同时 `27b` / `35b` 的模式从写死的
+`%qwen3.8-27b%` / `%qwen3.6-35b%` 放宽到 `%27b%` / `%35b%`,换个小版本号的部署名不会
+再静默掉进 `other`。
+
+桶存在性与"今天没有对话"是两回事,SQL 因此多带一个全模型请求数出来判断:北京
+00:00-08:00 目标桶尚未创建 → `reqs_today` / `reqs_by_model` 整体省略、卡上显 "—";
+桶存在但当天只有 embedding 流量 → `reqs_today` 记 0(确实零次对话),`by_model` 照常
+发出 `emb` 槽。
+
 > 若某机器只有普通用户权限(无 sudo),等价降级为 user service:`~/.config/systemd/user/` + `loginctl enable-linger <user>`(.25 待确认 linger 的事项与此同款)。
 
 ### 6.2 Windows — Task Scheduler 拉起常驻脚本

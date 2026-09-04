@@ -74,17 +74,30 @@ metrics:
   # Hit/success rates are "higher is better", so the threshold direction inverts:
   # yellow below warn, red below danger. With no traffic the query yields NULL ->
   # value=null -> the ring shows "—" and is never drawn as 0%.
+  # These three are CHAT-ONLY: the agent excludes embedding/rerank models before
+  # aggregating (see the gateway_litellm_example map in targets.yaml for why).
+  # Ring labels stay short on purpose — .ring-label has no width constraint, so a
+  # longer one wraps the three-ring row; the qualifier lives on the KV cells, which
+  # have the room.
   cache_hit:   { label: "Cache",   unit: "%", higher_is_better: true, thresholds: { warn: 60, danger: 30 } }
   success:     { label: "Success", unit: "%", higher_is_better: true, thresholds: { warn: 95, danger: 80 } }
-  reqs_today:  { label: "Requests" }
-  reqs_5m:     { label: "Last 5m" }
-  # Today's requests split per model. Borrows the parts renderer for its
-  # superscript labels, but request counts have no natural threshold: an empty
-  # `part_thresholds` keeps every segment "ok" (equal-width segments, no colouring).
+  reqs_today:  { label: "Chat Requests" }
+  reqs_5m:     { label: "Chat · Last 5m" }
+  # Collected but not on the card front (it is absent from layout.yaml's items). It
+  # still enters the timeseries, so a request spike can be attributed to the RAG
+  # indexer rather than to conversation. Add it to items to surface it.
+  reqs_5m_embed: { label: "Embed · Last 5m" }
+  # Today's requests split per model — all models, including embedding, which makes
+  # this cell the one place embedding traffic stays visible. It therefore does NOT
+  # sum to "Chat Requests". Borrows the parts renderer for its superscript labels,
+  # but request counts have no natural threshold: an empty `part_thresholds` keeps
+  # every segment "ok" (equal-width segments, no colouring). The 4th slot is the
+  # catch-all — without it, any model the first three patterns miss is computed and
+  # then silently dropped.
   reqs_by_model:
     label: "By Model"
     part_thresholds: {}
-    format: "{m1} {m2} {m3}"
+    format: "{m1} {m2} {m3} {m4}"
 
   # service-card scalar fields (no thresholds, shown verbatim)
   status:      { label: "Status" }

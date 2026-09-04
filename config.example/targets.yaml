@@ -304,10 +304,19 @@ targets:
       disk_bytes: { v: "$.disk.used_gb", max: "$.disk.total_gb" }
       net:        { rx: "$.net.rx_bps",  tx: "$.net.tx_bps" }
       loadavg:    { m1: "$.cpu.load[0]", m5: "$.cpu.load[1]", m15: "$.cpu.load[2]" }
+      # CHAT-ONLY. The agent excludes embedding/rerank models (embed/bge/gte-/rerank,
+      # the same pattern list as queries/project_tokens.sql) from all three numbers.
+      # Embedding traffic is machine-generated: huge in request count, trivial in
+      # tokens, and it fails in bursts when a re-index storms the backend — leaving it
+      # in makes `success` report the retry rate of your RAG indexer instead of the
+      # health of your chat service. It is still visible: by_model keeps an `emb` slot
+      # and the 5-minute embedding count ships as its own field. Consequently the
+      # by_model slots do NOT sum to reqs_today, by design.
       cache_hit:  "$.extra.litellm.cache_hit_pct"
       success:    "$.extra.litellm.success_pct"
       reqs_today: "$.extra.litellm.reqs_today"
       reqs_5m:    "$.extra.litellm.reqs_5m"
+      reqs_5m_embed: "$.extra.litellm.reqs_5m_embed"   # collected; add to items to show it
       reqs_by_model:                    # counts + the superscript label for each
         m1:       "$.extra.litellm.by_model.m1"
         m1_label: "$.extra.litellm.by_model.m1_label"
@@ -315,6 +324,8 @@ targets:
         m2_label: "$.extra.litellm.by_model.m2_label"
         m3:       "$.extra.litellm.by_model.m3"
         m3_label: "$.extra.litellm.by_model.m3_label"
+        m4:       "$.extra.litellm.by_model.m4"        # catch-all: anything the first
+        m4_label: "$.extra.litellm.by_model.m4_label"  # three patterns did not match
 
   # http: OpenClaw self-reported stats — PHASE-2 contract (authoritative real source).
   #   阶段2 以 OpenClaw 自报为唯一真源,替换 v1 过渡源(:3099/api/dashboard)。

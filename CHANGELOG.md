@@ -23,6 +23,55 @@ on screen is the one from `package.json`, and this file is what needs fixing.
 
 ---
 
+## v2.11 — 2026-09-05
+
+**网关卡改 chat-only:`success` 报的一直是 RAG 索引器的重试率,不是对话服务的健康度。**
+
+*No rebuild — `agents/` + `config/` only. Reinstall the agent on the gateway host and
+restart it; `config/` hot-reloads.*
+
+这台网关全库 16,711,548 次请求里 16,692,468 次(**99.886%**)是 `mxbai-embed`,而且它
+几乎全失败(成功 5,146 / 失败 16,686,876)—— RAG 侧的重试风暴。`success` /
+`reqs_today` / `cache_hit` 之前全模型混算,于是卡上那个数由 embedding 的重试次数决定:
+
+| 日期 | 含 embedding(旧) | 只算 chat(新) |
+|---|---|---|
+| 2026-07-13 | success **0.0%** · reqs 1,760,282 | success **93.9%** · reqs 231 |
+| 2026-08-20 | success **0.4%** · reqs 321,276 | success **95.1%** · reqs 588 |
+| 2026-08-25 | success 75.6% · reqs 1,151 | success **65.8%** · reqs 821 |
+| 全库累计 | success **0.14%** · reqs 16,711,548 | success **92.01%** · reqs 19,080 |
+
+注意 08-25 是**反方向**的:那天失败的是 chat 侧,embedding 把它兑得好看了 —— 两个方向
+都失真,因为混合权重跟对话服务无关。`cache_hit` 是 token 加权的,embedding 只占全库
+`prompt_tokens` 的 0.066% 且 `cache_read` 恒为 0,实际偏差 ≤0.7pp;一并过滤只是为了让
+四个数出自同一个子集,不是因为它算错了。
+
+排除模式复用 `queries/project_tokens.sql` 那一份(`embed` / `bge` / `gte-` / `rerank`),
+两处口径从此是同一个定义。
+
+**embedding 没有被藏起来。** `reqs_by_model` 仍是全模型,`emb` 槽照发 —— 风暴期它就是
+"数字不对是因为 RAG"的那条线索。四个槽之和因此**不等于** `Chat Requests`,这是刻意的。
+近 5 分钟的 embedding 量单独走新字段 `reqs_5m_embed`:默认不上卡,但进 sqlite 时序,
+`/api/history` 里能对照 `reqs_5m` 复盘一次暴涨到底来自哪边。
+
+**`reqs_by_model` 补上第四个槽 `other`。** 它此前在 SQL 里算了却从不发出,于是全库请求数
+第一的 chat 模型 `qwen3.6-27b-main-128k`(11,548 次)整个落在里面、卡上完全看不到 ——
+2026-07-13 那天 226 次请求就是这么消失的,而 `27b` 槽显示 0。同时 `27b` / `35b` 的匹配从
+写死的 `%qwen3.8-27b%` / `%qwen3.6-35b%` 放宽到 `%27b%` / `%35b%`,换个小版本号的部署名
+不会再静默掉进 `other`。`is_emb` 先判,免得将来名字里同时含 `bge` 和 `27b` 的向量模型
+被归进 chat 槽。
+
+**"没数据"和"今天零次对话"分开了。** SQL 多带一个全模型请求数出来判断桶存在性:北京
+00:00-08:00 目标桶尚未创建 → `reqs_today` / `reqs_by_model` 整体省略、卡上显 "—"(和以前
+一样);桶存在但当天只有 embedding 流量 → `reqs_today` 记 **0**(确实零次对话)而不是
+"—",`by_model` 照常发出 `emb` 槽。以前这两种情况在新口径下会被混成同一个"—"。
+
+卡面文案跟着改:`Requests` → `Chat Requests`,`Last 5m` → `Chat · Last 5m`。两个圆环的
+label 保持 `Cache` / `Success` 短词 —— `.ring-label` 没有宽度约束,写成 `Chat Success`
+会把三环那一行挤换行;口径写在有空间的 KV 项标题和 `docs/AGENT_PROTOCOL.md` 里。
+
+---
+
 ## v2.10 — 2026-09-04
 
 **Housekeeping release: one CSS rule that fixes a whole class of bug, and the docs
