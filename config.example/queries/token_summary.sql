@@ -9,6 +9,21 @@
 -- token target's `classify` block in targets.yaml — so the dashboard can
 -- re-categorize without ever touching this SQL.
 --
+-- OPTIONAL `net_tokens` — the ACTUALLY-NEW work behind `tokens`. A proxy bills a
+-- request's full replayed context as prompt tokens on every turn, so one long agentic
+-- session that resends a growing 50k-token history reads as tens of millions of tokens
+-- while the backend only ever processed the few new tokens per turn. Where your
+-- accounting records how much of the prompt came back from cache, emit:
+--
+--   (GREATEST(SUM(prompt_tokens) - SUM(cache_read_input_tokens), 0)
+--    + SUM(completion_tokens))::bigint AS net_tokens
+--
+-- (LiteLLM's "LiteLLM_DailyUserSpend" has exactly those three columns.) The card then
+-- shows today's net under today's total, and the detail modal gains a Net column with
+-- the all-time figure. Omit the column entirely — as this neutral example does, since
+-- the assumed schema has no cache accounting — and every net field comes back null and
+-- nothing is rendered; a missing measurement is never shown as a zero.
+--
 -- ADAPT the table/column names below to your real accounting schema. This
 -- example assumes a table:
 --   token_usage(ts timestamptz, model text, tokens bigint, requests bigint)

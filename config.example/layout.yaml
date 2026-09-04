@@ -68,10 +68,18 @@ grid:
     columns:
       model: "Model"
       tokens: "Tokens"
+      # Actually-new tokens: prompt minus the KV-cached prefix, plus completion — what
+      # the backend really had to process. The bracketed percentage is that as a share
+      # of the class's own total; a low one means the class is mostly replayed context.
+      # Shown only when the queries/ files supply a net_tokens column (this file's
+      # neutral examples do not — see queries/token_summary.sql).
+      net: "Net"
       requests: "Requests"
       share: "Share"
     labels:                              # §12-step2 patch: token card front labels
       today: "Today"                     # stat-box "today" prefix
+      net: "Net"                         # stat-box "actually-new" prefix (today only;
+                                         # the all-time figure lives in the modal table)
       requests_suffix: "req"             # stat-box request-count suffix
       total: "Total"                     # the total/aggregate column label
 

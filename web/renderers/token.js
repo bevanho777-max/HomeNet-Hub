@@ -36,12 +36,20 @@ export function renderToken(gridCard, target, snap) {
   const L = gridCard.labels || {};
   const todayLabel = L.today || 'Today';
   const reqLabel = L.requests_suffix || 'req';
+  // Today's actually-new tokens, directly under today's total so the two are read as
+  // a pair: a long agentic session replays its whole context every turn, so the total
+  // counts tens of millions while only the uncached remainder was computed. Rendered
+  // only when the query supplied net_tokens -- pivotTokens sends null otherwise, and
+  // a null must not become a "0" that reads like real data. The all-time counterpart
+  // lives in the detail modal's table, where there is room for it.
+  const netLabel = L.net || 'Net';
   const colHtml = cols.map((c) => `
     <div class="tk-col">
       <div class="tk-h" style="color:${esc(c.color)}">${esc(c.label)}</div>
       <div class="tk-div"></div>
       <div class="tk-all">${esc(c.all)}</div>
       <div class="tk-sub">${esc(todayLabel)} ${esc(c.today)}</div>
+      ${c.net_today != null ? `<div class="tk-sub">${esc(netLabel)} ${esc(c.net_today)}</div>` : ''}
       <div class="tk-sub">${esc(c.requests ?? 0)} ${esc(reqLabel)}</div>
     </div>`).join('');
 

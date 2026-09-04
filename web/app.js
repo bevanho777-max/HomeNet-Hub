@@ -412,8 +412,15 @@ async function loadTokenDetail() {
     drawTokenChart(j.series || { days: [], classes: [], matrix: {} });
     const col = tokenCardCfg().columns || {};
     const th = (k, fb) => esc(col[k] || fb);
-    tbl.innerHTML = `<table class="tbl"><thead><tr><th>${th('model', 'Model')}</th><th>${th('tokens', 'Tokens')}</th><th>${th('requests', 'Requests')}</th><th>${th('share', 'Share')}</th></tr></thead><tbody>${
-      (j.table || []).map((row) => `<tr><td><span class="sw" style="background:${esc(row.color)}"></span>${esc(row.label)}</td><td>${esc(row.tokens)}</td><td>${esc(row.requests)}</td><td>${esc(row.share)}%</td></tr>`).join('')
+    // The Net column appears only when the rows carried it (see token_detail.js) --
+    // an older queries/ file or the demo collector yields null, and a blank column
+    // would read as "zero new tokens" rather than "not measured".
+    const hasNet = (j.table || []).some((row) => row.net != null);
+    const netTh = hasNet ? `<th>${th('net', 'Net')}</th>` : '';
+    tbl.innerHTML = `<table class="tbl"><thead><tr><th>${th('model', 'Model')}</th><th>${th('tokens', 'Tokens')}</th>${netTh}<th>${th('requests', 'Requests')}</th><th>${th('share', 'Share')}</th></tr></thead><tbody>${
+      (j.table || []).map((row) => `<tr><td><span class="sw" style="background:${esc(row.color)}"></span>${esc(row.label)}</td><td>${esc(row.tokens)}</td>${
+        hasNet ? `<td>${esc(row.net ?? '—')}${row.net_pct != null ? ` (${esc(row.net_pct)}%)` : ''}</td>` : ''
+      }<td>${esc(row.requests)}</td><td>${esc(row.share)}%</td></tr>`).join('')
     }</tbody></table>`;
   } catch (e) {
     tbl.innerHTML = `<div class="note">Detail request failed</div>`;

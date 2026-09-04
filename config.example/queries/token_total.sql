@@ -13,6 +13,11 @@
 -- (v1 全量口径 → SUM(total_tokens); requests = COUNT(*)). Raw model names are
 -- returned AS-IS; classification is done by the target's `classify` block.
 --
+-- OPTIONAL `net_tokens`: the all-time counterpart of the same column in
+-- token_summary.sql (prompt minus the cached prefix, plus completion) — it feeds the
+-- Net column of the detail modal's table. See that file for the full reasoning. Omit
+-- it and the column is simply not rendered.
+--
 -- ADAPT table/column names. LiteLLM ships "LiteLLM_SpendLogs"(model text,
 --   total_tokens int, "startTime" timestamptz, ...).
 

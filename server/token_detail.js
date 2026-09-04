@@ -56,9 +56,15 @@ function classOf(model, compiled) {
  * Pivot raw rows into the by-model view, using config-driven classification.
  * Each row is classified by `row.model` (falls back to `row.model_class` for
  * backward compatibility with pre-bucketed queries).
- * @param {object[]} rows   [{ model|model_class, day, tokens, requests }]
+ * @param {object[]} rows   [{ model|model_class, day, tokens, requests, net_tokens? }]
  * @param {object}   opts   { speed, classify }
  * @returns { columns, spark, series, table, speed }
+ *
+ * `net_tokens` is OPTIONAL. Where a query supplies it (prompt minus the KV-cached
+ * prefix, plus completion) every column also carries the actually-new figure; where
+ * it does not -- the demo collector, an older queries/ file -- the net fields come
+ * back null and the card simply omits that line rather than reporting a zero it
+ * cannot distinguish from "no new tokens".
  */
 export function pivotTokens(rows, { speed = null, classify = null, totalLabel = null, totals = null } = {}) {
   const compiled = compileClassify(classify);
@@ -69,9 +75,13 @@ export function pivotTokens(rows, { speed = null, classify = null, totalLabel = 
   const dayIdx = new Map(days.map((d, i) => [d, i]));
 
   // per-class aggregates + per-day matrix
-  const byClass = new Map(classList.map((c) => [c.key, { all: 0, today: 0, requests: 0 }]));
+  const byClass = new Map(classList.map((c) => [c.key, { all: 0, today: 0, requests: 0, net: 0, netToday: 0 }]));
   const matrix = {};
   for (const c of classList) matrix[c.key] = days.map(() => 0);
+
+  // Whether the rows carried net_tokens at all. Tracked rather than assumed, because
+  // a missing column and a genuine zero must not render the same way.
+  let sawNet = false;
 
   for (const r of rows || []) {
     const cls = classOf(r.model ?? r.model_class, compiled);
@@ -83,22 +93,34 @@ export function pivotTokens(rows, { speed = null, classify = null, totalLabel = 
     if (d === today) agg.today += tok;
     const i = dayIdx.get(d);
     if (i != null) matrix[cls.key][i] += tok;
+    if (r.net_tokens != null) {
+      sawNet = true;
+      const net = Number(r.net_tokens) || 0;
+      agg.net += net;
+      if (d === today) agg.netToday += net;
+    }
   }
 
   // B4: cumulative all-time aggregates for the "all"/requests columns. When the
   // caller supplies `totals` (per-model all-time rows), classify + sum those;
   // otherwise fall back to the windowed byClass sums (previous behavior).
   const useTotals = Array.isArray(totals) && totals.length > 0;
-  const cumByClass = new Map(classList.map((c) => [c.key, { all: 0, requests: 0 }]));
+  const cumByClass = new Map(classList.map((c) => [c.key, { all: 0, requests: 0, net: 0 }]));
+  let sawCumNet = false;
   if (useTotals) {
     for (const r of totals) {
       const agg = cumByClass.get(classOf(r.model ?? r.model_class, compiled).key);
       agg.all += Number(r.tokens) || 0;
       agg.requests += Number(r.requests) || 0;
+      if (r.net_tokens != null) { sawCumNet = true; agg.net += Number(r.net_tokens) || 0; }
     }
   }
   const allOf = (key) => (useTotals ? cumByClass.get(key).all : byClass.get(key).all);
   const reqOf = (key) => (useTotals ? cumByClass.get(key).requests : byClass.get(key).requests);
+  // All-time net follows `all`: the cumulative query when there is one, else the
+  // window. Null when neither source carried the column.
+  const hasNetAll = useTotals ? sawCumNet : sawNet;
+  const netOf = (key) => (useTotals ? cumByClass.get(key).net : byClass.get(key).net);
 
   const columns = classList.map((c) => {
     const a = byClass.get(c.key);
@@ -106,16 +128,26 @@ export function pivotTokens(rows, { speed = null, classify = null, totalLabel = 
       key: c.key, label: c.label, color: c.color,
       all: compact(allOf(c.key)), today: compact(a.today), requests: reqOf(c.key),
       all_raw: allOf(c.key), today_raw: a.today,
+      net: hasNetAll ? compact(netOf(c.key)) : null,
+      net_today: sawNet ? compact(a.netToday) : null,
+      net_raw: hasNetAll ? netOf(c.key) : null,
+      net_today_raw: sawNet ? a.netToday : null,
     };
   });
   // total column — label is config-driven (token card labels.total), generic fallback
   const totAll = columns.reduce((s, c) => s + c.all_raw, 0);
   const totToday = columns.reduce((s, c) => s + c.today_raw, 0);
   const totReq = columns.reduce((s, c) => s + c.requests, 0);
+  const totNet = columns.reduce((s, c) => s + (c.net_raw || 0), 0);
+  const totNetToday = columns.reduce((s, c) => s + (c.net_today_raw || 0), 0);
   columns.push({
     key: 'total', label: totalLabel || 'Total', color: '#eef3fb',
     all: compact(totAll), today: compact(totToday), requests: totReq,
     all_raw: totAll, today_raw: totToday,
+    net: hasNetAll ? compact(totNet) : null,
+    net_today: sawNet ? compact(totNetToday) : null,
+    net_raw: hasNetAll ? totNet : null,
+    net_today_raw: sawNet ? totNetToday : null,
   });
 
   // daily totals (across classes), last 5 days → spark
@@ -139,6 +171,11 @@ export function pivotTokens(rows, { speed = null, classify = null, totalLabel = 
         label: c.label, color: c.color,
         tokens: compact(allOf(c.key)), requests: reqOf(c.key),
         share: totAll > 0 ? Math.round((allOf(c.key) / totAll) * 100) : 0,
+        // Cumulative actually-new tokens, plus what share of this class's own total
+        // that is -- the second number is the point: a low percentage means the class
+        // is mostly replayed context served from cache, not fresh work.
+        net: hasNetAll ? compact(netOf(c.key)) : null,
+        net_pct: hasNetAll && allOf(c.key) > 0 ? Math.round((netOf(c.key) / allOf(c.key)) * 100) : null,
       };
     });
 
