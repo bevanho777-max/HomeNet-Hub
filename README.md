@@ -32,7 +32,8 @@ you see the whole thing working before wiring up anything real.
   credential back out. SSH host keys are trust-on-first-use, and a changed key aborts
   the handshake *before* the credential is sent.
 - **Admin auth** — discovery, runtime targets and the credentials API sit behind an
-  **`ADMIN_PASSWORD`**. Unset means those endpoints answer `401`, never "open". Reading
+  admin password, set from the browser on first run or from `ADMIN_PASSWORD`. With
+  neither, those endpoints answer `401`, never "open". Reading
   the board stays public unless `REQUIRE_LOGIN_TO_VIEW` says otherwise.
 - **Hot-reload** — edit YAML on the host and the panel re-shapes in ~3 s. A bad edit is
   rejected and the last good config stays live (the panel never goes dark).
@@ -57,9 +58,13 @@ you see the whole thing working before wiring up anything real.
   tiered downsampling (raw samples for the recent days, folded into 5-minute aggregate
   buckets for about a month, each bucket keeping min/max so spikes are not flattened)
   over a covering index, which keeps long-range queries cheap; **Postgres** token
-  accounting with a cumulative all-time total plus a live tokens/sec.
+  accounting with a cumulative all-time total, a live tokens/sec, and a per-project
+  breakdown by API key.
 - **Themeable & resilient** — fonts/colors via `theme.yaml`; visibility-aware polling
   with a reconnect badge for flaky mobile networks.
+- **Set up in the browser** — a fresh install asks for an admin password on first load
+  (LAN only, once) and says out loud that its board is demo data, with one button to
+  clear it. No editor, no restart.
 - **Single container** — `docker compose up` and you're done.
 
 ---
@@ -146,6 +151,46 @@ Windows is catalogued (`winrm_cpu` / `winrm_mem` / `winrm_disk`, offered when th
 hint says Windows and a login port is open) but stays **pending** — discovery lists it
 greyed out with the reason, and the API refuses to materialise it, until the collector
 exists.
+
+---
+
+## LLM token accounting
+
+If you run a **LiteLLM** gateway, a read-only Postgres DSN turns its accounting tables
+into cards: a by-model token card (cumulative total, day trend, live tokens/sec) and a
+**per-project** table card.
+
+The per-project card groups by **`api_key`** — which key the request came in on. That is
+a deliberate choice among LiteLLM's three notions of "who":
+
+| | what it is | why not it |
+|---|---|---|
+| `user_id` | the owner of the key | everything on the proxy master key collapses into one row |
+| `end_user` | the OpenAI `user` field in the request body | precise, but only filled in for clients that actually send it — most send nothing |
+| **`api_key`** | **which key the call arrived on** | **always populated, needs no client cooperation** |
+
+So **a project gets its own row the moment it gets its own virtual key** — a credential
+it has to configure anyway. Until you mint per-project keys, expect one large
+`(master key)` row; that is the honest answer, not a broken card. Rows are labelled
+`(master key)`, `key:<8 hex>` for a minted key, and the literal (truncated) for anything
+else, so health-check pseudo-keys and scanner probes stay visible instead of vanishing.
+Keys that produced no chat tokens at all are dropped — those are rejected probes, not
+usage.
+
+**Embedding and rerank models are excluded.** On a gateway doing RAG they are >99% of
+requests and <0.1% of tokens; leaving them in makes the request column measure indexing
+runs instead of conversations. The exclusion list is a `VALUES` block at the top of
+[`config.example/queries/project_tokens.sql`](config.example/queries/project_tokens.sql)
+— add a row for any embedding family your gateway serves.
+
+Readable key aliases (`key_alias`) live in a table a read-only role needs a **separate**
+grant for, and that join still cannot name the master key — it is a config literal with
+no row there. Mint a couple of real keys first; the alias grant is worth adding after
+that, not before. The query file carries the exact `LEFT JOIN` and `GRANT` to use.
+
+> Every `sql` collector reads its SQL from a file under `queries/` — never from config
+> and never from the frontend — with at most one whitelisted integer parameter. See
+> [Security](#security).
 
 ---
 
@@ -240,9 +285,11 @@ fail-closed default the vault takes, for the same reason.
 | Endpoint | Gate |
 |---|---|
 | `GET /api/discover`, `GET /api/credentials` | admin session |
-| `POST`/`DELETE /api/credentials`, `POST`/`DELETE /api/user_targets` | admin session **+** same-origin check |
+| `POST`/`DELETE /api/credentials`, `POST`/`DELETE /api/user_targets`, `POST /api/demo/dismiss` | admin session **+** same-origin check |
 | `GET /api/config`, `/api/snapshot`, `/api/history`, `/api/token_detail`, `GET /api/user_targets` | public by default; admin session when `REQUIRE_LOGIN_TO_VIEW` is on |
 | `/healthz`, `/api/login`, `/api/logout`, `/api/session` | always reachable |
+| `POST /api/admin/setup` | same-origin **+** private client address **+** *only* while no admin exists; `409` forever after |
+| `POST /api/admin/password` | admin session **+** same-origin **+** the current password |
 | `POST /api/push/:targetId` | its target's `X-Push-Token`, unchanged |
 
 Reading the board stays public, because that is what an existing install already did and
@@ -284,7 +331,32 @@ you out.
 |---|---|
 | `admin_auth` row in `data/homenet.db` | **authoritative** once it exists — scrypt hash + random salt, no plaintext column |
 | `ADMIN_PASSWORD` | **bootstrap only.** Used to create that row on an install that has none. After that it is inert: it does not override the stored password, and editing it changes nothing |
-| neither | locked — every management endpoint answers `401` |
+| first-run wizard | the other way to create that row — see below |
+| neither, and never set up | locked — every management endpoint answers `401` |
+
+### First-run setup, and why it is so narrow
+
+`POST /api/admin/setup` is the one endpoint that can create a password without already
+having one, so it is the narrowest in the project:
+
+- **Only while nothing can already manage the install** — no `admin_auth` row *and* no
+  `ADMIN_PASSWORD`. Afterwards it answers `409` forever. There is no reset path over
+  HTTP by design; recovery is the escape hatch below, which needs access to the host.
+- **Only from the local network.** Someone who finds a fresh install exposed to the
+  internet must not be able to claim it before its owner does. The check does *not* use
+  the framework's client IP: with `trustProxy` on, that is the leftmost
+  `X-Forwarded-For` entry, which the caller writes. It uses the rightmost entry — the
+  one the nearest proxy added and the caller could not forge — and requires the socket
+  peer to be private as well. An unusual multi-proxy chain fails **closed**: use the
+  `ADMIN_PASSWORD` route instead.
+- **One at a time.** Two simultaneous requests yield exactly one `200`; the loser gets
+  `409`. The arbiter is the database's `ON CONFLICT DO NOTHING`, so it holds across
+  processes, not just within one.
+- **Rate limited on its own budget**, so a mistyped confirm box on a brand-new install
+  can never walk you toward the login lockout.
+
+The password takes the same path as the other two routes into that row — scrypt over a
+fresh random salt, straight into the database — and is never logged, echoed or returned.
 
 **Forgot the password?** That is what the escape hatch is for:
 
@@ -296,8 +368,10 @@ docker compose restart homenet-hub
 ```
 
 The next boot re-bootstraps the row from whatever `ADMIN_PASSWORD` currently says — which
-is the only reason that env var is still read after the first boot. Deleting the row
-also invalidates every session, since the signing secret goes with it.
+is the only reason that env var is still read after the first boot. With no
+`ADMIN_PASSWORD` set, deleting the row instead re-arms the **first-run wizard**, so you
+can set a new password from the browser. Either way, deleting the row invalidates every
+session, since the signing secret goes with it.
 
 ### How the session works
 
@@ -349,7 +423,7 @@ Four nouns carry the whole design:
 - **Collector** — the code that produces one target's raw JSON: `http`, `http_push`,
   `sql`, `exec`, `tcp`, `tls`, `prometheus`, `ssh`, `demo` (plus the discovery probe,
   which is never scheduled).
-- **Widget** — the card that draws it: `machine`, `service`, `info`, `token`, `stack`,
+- **Widget** — the card that draws it: `machine`, `service`, `info`, `token`, `table`, `stack`,
   `history`.
   A capability names its widget, which is why an added target arrives with a card that
   already fits it.
@@ -422,10 +496,44 @@ automatically.
 Run without Docker: `npm install && npm start` (→ `http://127.0.0.1:3100`, set `PORT`
 to change).
 
-**Before you add anything real**, set an `ADMIN_PASSWORD` in `.env`
-(`openssl rand -base64 24`). Without it the demo board still renders in full, but the
-management controls are hidden and their endpoints answer `401` — see
-[Admin auth](#admin-auth).
+### First run: set the admin password in the browser
+
+Open the panel **from the LAN** and a one-time box asks you to set an admin password.
+Set it and you are logged in — no `.env`, no restart.
+
+![First-run admin setup](docs/first-run-setup.png)
+
+It appears only while nothing can already manage the install (no `admin_auth` row and no
+`ADMIN_PASSWORD`), and only for a caller on a private address; afterwards the endpoint
+answers `409` forever. The env route still works: set `ADMIN_PASSWORD` before the first
+boot and the install is already configured, so the wizard never appears. Details and the
+recovery path: [Admin auth](#admin-auth).
+
+### From demo to yours
+
+The demo board announces itself, and can be cleared in one click.
+
+![Demo onboarding bar](docs/demo-bar.png)
+
+- **添加你的机器** opens the discovery panel — [Discover → add → see](#discover--add--see).
+- **清空演示** clears the example targets and cards for good. It is a management action:
+  it needs a session, it is confirmed, and it applies to **everyone** who opens this
+  install, not just your browser. The **×** on the right only hides the bar in your own
+  browser (`localStorage`) and changes nothing on the server.
+
+Clearing writes a flag rather than deleting files — `config.example/` ships inside the
+image and `config/` may be a read-only mount. Metric templates and the theme keep
+falling back (without them there is nothing to render your own cards *with*); only the
+demo board itself is emptied, and the demo targets stop being polled in the same step.
+What is left is an empty board that tells you how to add your first machine. An install
+that has its own `config/targets.yaml` was never on the demo board and never sees any of
+this.
+
+To bring the demo back, clear the flag on the host and restart:
+
+```bash
+sqlite3 data/homenet.db "DELETE FROM settings WHERE k='demo_dismissed';"
+```
 
 **Deploying an update on the host:**
 
@@ -489,7 +597,7 @@ and fill in what you use.
 | Variable | Purpose |
 |---|---|
 | `VAULT_KEY` | Credential-vault passphrase (≥16 chars; `openssl rand -base64 32`). Unset → the vault is locked and no credential can be stored or decrypted. **Losing it voids every stored credential.** |
-| `ADMIN_PASSWORD` | **Bootstrap** password for the management endpoints — discovery, the credentials API, and *writes* to runtime targets (8-256 chars; `openssl rand -base64 24`). Used once, to create the hashed `admin_auth` row on an install that has none; after that the database is authoritative and this var is inert. Unset **and** no row → those endpoints answer **401**, never "open". Delete the row to make it bootstrap again — that is the forgotten-password recovery. |
+| `ADMIN_PASSWORD` | **Bootstrap** password for the management endpoints — discovery, the credentials API, and *writes* to runtime targets (8-256 chars; `openssl rand -base64 24`). Used once, to create the hashed `admin_auth` row on an install that has none; after that the database is authoritative and this var is inert. **Optional since v2.8:** leave it unset and set the password from the browser on first run instead (LAN only). Unset **and** no row **and** never set up → those endpoints answer **401**, never "open". Delete the row to bootstrap again, or to re-arm the first-run wizard — that is the forgotten-password recovery. |
 | `REQUIRE_LOGIN_TO_VIEW` | `1`/`true`/`on` → viewing needs a session too (`/api/config`, `/api/snapshot`, `/api/history`, …). Default off: the board stays public and only management is gated. |
 | `PG_DSN` | Read-only Postgres DSN for a `sql` token collector. The name is whatever the target's `dsn_env` says; `PG_DSN` is the shipped example. |
 | `PUSH_TOKEN_*` | Shared secret per `http_push` target; the name must match that target's `token_env` (`openssl rand -hex 32`). |

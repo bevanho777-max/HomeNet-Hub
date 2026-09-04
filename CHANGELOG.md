@@ -23,6 +23,54 @@ on screen is the one from `package.json`, and this file is what needs fixing.
 
 ---
 
+## v2.10 — 2026-09-04
+
+**Housekeeping release: one CSS rule that fixes a whole class of bug, and the docs
+caught up to v2.9.**
+
+`el.hidden = true` now actually hides the element, everywhere. The browser's own
+`[hidden]{display:none}` lives in the UA stylesheet, which **any** author `display`
+beats on specificity — so every element this project gave a `display` to silently
+ignored its own `hidden` attribute. Five places had already hit this and patched it
+locally (`.addOpen`, `.addFoot`, `.credLocked`, `.histErr`, `.demoBar`); the ones nobody
+had hit yet were simply broken. `header.clock: false` was one of them: it set the
+attribute and the clock stayed on screen. There is now a single global
+`[hidden]{display:none!important}` and the five local copies are gone, so the next
+element to get a `display` cannot reintroduce the bug.
+
+Documentation is updated to v2.9 throughout: the first-run setup wizard and why its
+endpoint is so narrow, the demo bar and what "清空演示" actually does, changing the admin
+password from the UI, and the per-project token card — why it groups by API key rather
+than by user, why embeddings are excluded, and why rows only appear once you mint
+per-project keys. Two new screenshots, the endpoint gate table and the environment table
+brought current, and `ADMIN_PASSWORD` correctly described as optional since v2.8.
+
+> **收尾发布:一条 CSS 规则根治一类 bug,文档补齐到 v2.9。**
+>
+> `el.hidden = true` 现在真的能隐藏元素了,所有地方都是。浏览器自带的
+> `[hidden]{display:none}` 在 UA 样式表里,**任何**作者样式的 `display` 都能凭优先级
+> 压过它 —— 所以本项目里每个被写了 `display` 的元素,都在悄悄无视自己的 `hidden` 属性。
+> 已经有五处踩到并各自打了本地补丁(`.addOpen`、`.addFoot`、`.credLocked`、`.histErr`、
+> `.demoBar`);没人踩到的那些就是坏的。`header.clock: false` 就是其中之一:属性设上了,
+> 时钟照样显示。现在只有一条全局的 `[hidden]{display:none!important}`,五处本地副本删掉,
+> 于是下一个拿到 `display` 的元素不可能再把这个 bug 带回来。
+>
+> 文档整体补齐到 v2.9:首次运行向导以及它的端点为什么条件这么窄、演示引导条和
+> 「清空演示」到底做了什么、在界面里改管理密码、以及每项目 token 卡 —— 为什么按 API key
+> 而不是按 user 分组、为什么排除 embedding、为什么要发出分项目的 key 之后才会分行。
+> 新增两张截图,端点闸门表和环境变量表更新到位,`ADMIN_PASSWORD` 也正确地标注为
+> 自 v2.8 起可选。
+
+**Deploying this release:** `web/` only, but the frontend is baked into the image, so it
+still needs `docker compose up -d --build`. No server code changed — `/api/config` is
+byte-identical to v2.9, ETag included. No database change.
+
+> **本次部署方式:** 只动了 `web/`,但前端是烤进镜像的,所以仍然需要
+> `docker compose up -d --build`。服务端代码一行没改 —— `/api/config` 与 v2.9 逐字节
+> 一致,连 ETag 都一样。数据库无需改动。
+
+---
+
 ## v2.9 — 2026-09-04
 
 **A fresh install now says that its board is a demo, and can clear it in one click.**
