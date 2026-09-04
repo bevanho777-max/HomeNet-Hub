@@ -10,9 +10,10 @@ import { renderInfo } from './renderers/info.js';
 import { renderTable } from './renderers/table.js';
 import { initHistory, historyRefresh } from './renderers/history.js';
 import { initMachineDetail, openMachineModal, closeMachineModal, bindMachineModal } from './renderers/machine_detail.js';
-import { bindAddTarget, closeAddPanel } from './renderers/add_target.js';
+import { bindAddTarget, closeAddPanel, openAddPanel } from './renderers/add_target.js';
 import { bindCredentials, closeCredPanel } from './renderers/credentials.js';
-import { bindSession, refreshSession, sessionLost, closeLoginPanel, closeSetupPanel, maybeOpenSetup } from './renderers/session.js';
+import { bindSession, refreshSession, sessionLost, closeLoginPanel, closeSetupPanel, maybeOpenSetup, isAuthed, openLoginPanel } from './renderers/session.js';
+import { bindDemoBar, applyDemoBar, emptyBoardHtml } from './renderers/demo.js';
 import { esc, statusLevel } from './renderers/common.js';
 
 const FAST_MS = 1500;     // snapshot poll (machine/GPU rhythm)
@@ -185,8 +186,21 @@ function render() {
     else if (gc.type === 'info') cards.push(renderInfo(gc, target, snap));
     else if (gc.type === 'table') cards.push(renderTable(gc, target, snap));
   }
-  mountCards('grid', cards);
-  layoutStacks();
+  // P2: an empty grid is a normal state now — it is what a cleared demo board looks
+  // like, and what a fresh install looks like before the first target is added. Say so
+  // instead of leaving a blank page that reads as a failed load. mountCards persists
+  // card DOM between renders, so the placeholder is written only once the card list is
+  // genuinely empty and cleared again the moment anything exists.
+  if (!cards.length) {
+    $('#grid').innerHTML = emptyBoardHtml(isAuthed());
+  } else {
+    mountCards('grid', cards);
+    layoutStacks();
+  }
+
+  // The banner reads the same config payload everything else does, so it appears and
+  // disappears on the same tick the board does.
+  applyDemoBar(CONFIG, isAuthed());
 
   $('#rawjson').textContent = JSON.stringify(lastSnap, null, 2);
 }
@@ -468,6 +482,23 @@ bindSession({
   onChange: async () => {
     closeAddPanel();
     closeCredPanel();
+    await configTick(false);
+    await snapTick();
+  },
+});
+// P2 onboarding bar. "添加你的机器" is the existing add-target panel, not a second
+// path — one flow to learn, and it already carries discovery. "清空演示" refreshes
+// through the same configTick every other change uses, so the demo cards leave the
+// screen by the normal render path rather than a bespoke teardown.
+bindDemoBar({
+  onAdd: () => openAddPanel(),
+  // Logged out, both buttons lead to the same place: openLoginPanel already redirects
+  // to the first-run wizard when that is what this install actually needs (P1).
+  needsLogin: () => openLoginPanel(),
+  onCleared: async () => {
+    // The etag changed server-side, but this tab is holding the old one; clearing it
+    // guarantees the next fetch is a 200 with the emptied board rather than a 304.
+    CONFIG_ETAG = null;
     await configTick(false);
     await snapTick();
   },

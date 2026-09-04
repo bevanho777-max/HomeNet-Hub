@@ -8,17 +8,31 @@ import { EventEmitter } from 'node:events';
 import { loadConfig, publicConfig, CONFIG_DIR } from './loader.js';
 
 export class ConfigStore extends EventEmitter {
-  constructor() {
+  /**
+   * @param {{isDemoDismissed?: () => boolean}} [opts]
+   *   Read fresh on every load rather than captured once, because the flag can be set
+   *   while the process is running (POST /api/demo/dismiss) and the very next load has
+   *   to see it. A missing or throwing reader means "not dismissed" — the demo board is
+   *   the visible, recoverable state, and a config load must not fail over a flag.
+   */
+  constructor({ isDemoDismissed } = {}) {
     super();
     this.current = null;       // last good full config
     this.lastError = null;     // { at, errors[] } of the most recent failed reload
     this._watcher = null;
     this._debounce = null;
+    this._isDemoDismissed = typeof isDemoDismissed === 'function' ? isDemoDismissed : () => false;
+  }
+
+  _loadOpts() {
+    let demoDismissed = false;
+    try { demoDismissed = !!this._isDemoDismissed(); } catch { demoDismissed = false; }
+    return { demoDismissed };
   }
 
   // Initial load. A bad config at boot is fatal (nothing good to fall back to).
   start() {
-    this.current = loadConfig();
+    this.current = loadConfig(this._loadOpts());
     this._log('loaded', `etag=${this.current.etag}${this.current.usingFallback ? ' (config.example fallback)' : ''}`);
     this._watch();
     return this.current;
@@ -30,9 +44,19 @@ export class ConfigStore extends EventEmitter {
     return {
       etag: this.current?.etag || null,
       usingFallback: !!this.current?.usingFallback,
+      demoMode: !!this.current?.onExampleBoard && !this.current?.demoDismissed,
       lastError: this.lastError,
     };
   }
+
+  /**
+   * Reload now, for a reason that is not a file change. The demo-dismiss endpoint is
+   * the only caller: the flag it writes lives in the database, so chokidar has nothing
+   * to notice and the board would otherwise keep serving the demo until the next YAML
+   * edit or restart. Goes through the SAME _reload as a file change, so the validation
+   * gate and the 'change' event behave identically.
+   */
+  reload(reason = 'manual') { this._reload(reason); }
 
   _watch() {
     // Watch config/ (real edits) and tolerate it not existing yet.
@@ -52,7 +76,7 @@ export class ConfigStore extends EventEmitter {
 
   _reload(path) {
     try {
-      const next = loadConfig();
+      const next = loadConfig(this._loadOpts());
       const changed = next.etag !== this.current?.etag;
       this.current = next;
       this.lastError = null;

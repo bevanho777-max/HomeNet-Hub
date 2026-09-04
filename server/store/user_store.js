@@ -21,6 +21,8 @@ import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 const ID_RE = /^[a-zA-Z0-9_]+$/;   // same pattern targets.yaml's schema enforces
+/** settings key: the operator has cleared the shipped demo board for good. */
+export const DEMO_DISMISSED = 'demo_dismissed';
 
 export class UserStore {
   constructor(dbPath) {
@@ -47,6 +49,15 @@ export class UserStore {
       );
       -- cards are read in one ordered sweep; the index keeps that off a sort
       CREATE INDEX IF NOT EXISTS idx_user_cards_pos ON user_cards(position, id);
+      -- Small durable flags that belong to THIS install rather than to a target or a
+      -- card. First tenant: demo_dismissed. It lives here rather than in a new store
+      -- because it is the same kind of thing the two tables above hold — a decision the
+      -- operator made at runtime, which config/ (mounted read-only) cannot record.
+      CREATE TABLE IF NOT EXISTS settings (
+        k          TEXT PRIMARY KEY,
+        v          TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
     `);
     this._sel = {
       targets: this.db.prepare('SELECT id, doc, enabled FROM user_targets ORDER BY id'),
@@ -72,6 +83,39 @@ export class UserStore {
     const targets = this.listTargets().map((r) => ({ ...r.doc, id: r.id, enabled: r.enabled }));
     const cards = this.listCards().map((r) => r.doc);
     return { targets, cards };
+  }
+
+  // ── settings ──────────────────────────────────────────────────────
+  /** @returns {string|null} */
+  getSetting(k) {
+    const r = this.db.prepare('SELECT v FROM settings WHERE k = ?').get(k);
+    return r ? r.v : null;
+  }
+
+  setSetting(k, v) {
+    this.db.prepare(`
+      INSERT INTO settings (k, v, updated_at) VALUES (?, ?, ?)
+      ON CONFLICT(k) DO UPDATE SET v = excluded.v, updated_at = excluded.updated_at
+    `).run(k, String(v), Date.now());
+    return { k };
+  }
+
+  /**
+   * Has the operator dismissed the shipped demo board?
+   *
+   * Read on EVERY config load, including at boot before anything else is wired, so it
+   * must never throw: a database that cannot be read here has to mean "not dismissed"
+   * (the demo board, which is the safe, visible state) rather than an exception on the
+   * path that assembles the panel's entire configuration.
+   */
+  isDemoDismissed() {
+    try { return this.getSetting(DEMO_DISMISSED) === '1'; } catch { return false; }
+  }
+
+  /** Idempotent by construction: the value is a constant, not a counter. */
+  dismissDemo() {
+    this.setSetting(DEMO_DISMISSED, '1');
+    return { dismissed: true };
   }
 
   countAll() {

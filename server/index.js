@@ -36,18 +36,20 @@ const DATA_DIR = process.env.DATA_DIR || join(ROOT, 'data');
 const PORT = Number(process.env.PORT || 3100);
 
 // ── wiring ──────────────────────────────────────────────────────────
-const config = new ConfigStore();
+// Slice 2: runtime-added targets/cards live in the same db file and are merged onto
+// the file config by EffectiveStore below.
+// P2: it also holds the `demo_dismissed` flag, and the config loader reads that flag on
+// EVERY load — which is why the store is built before ConfigStore rather than after it.
+const userStore = new UserStore(join(DATA_DIR, 'homenet.db'));
+const config = new ConfigStore({ isDemoDismissed: () => userStore.isDemoDismissed() });
 config.start(); // fatal if initial config is invalid
 
 const snapshot = new Snapshot();
 const tsdb = new Tsdb(join(DATA_DIR, 'homenet.db'));
 
-// Slice 2: runtime-added targets/cards live in the same db file and are merged onto
-// the file config here. Everything downstream (scheduler, publicConfig, frontend)
-// reads `effective.get()`, not the raw file config — that is the ONLY read-point
-// change this slice makes. With an empty user store buildEffective returns the file
+// Everything downstream (scheduler, publicConfig, frontend) reads `effective.get()`,
+// not the raw file config. With an empty user store buildEffective returns the file
 // object itself, so the two are the same reference and the etag is untouched.
-const userStore = new UserStore(join(DATA_DIR, 'homenet.db'));
 // Slice 2e: credentials live in the same file, encrypted. The vault is opened once at
 // startup against VAULT_KEY; with no key it stays locked and every write path refuses,
 // which is the whole point — a locked vault must not silently fall back to plaintext.
@@ -456,6 +458,31 @@ app.get('/api/session', async (req) => ({
   // box's "not configured" message, same as before this endpoint existed.
   setup_available: setupAvailable(req),
 }));
+
+// ── clear the shipped demo board ────────────────────────────────────
+// A fresh `docker compose up` boots on config.example/, so the first thing anyone sees
+// is somebody else's machines. This is the one button that makes that stop, for good.
+//
+// It writes a flag rather than deleting anything: config.example/ ships in the image and
+// is not ours to remove, and config/ may be a read-only mount. The loader then keeps
+// falling back for metric templates and theme — without those there is nothing to render
+// a user's own card WITH — but empties the example board itself.
+//
+// Idempotent: the value is a constant, so calling it twice is calling it once. It is a
+// management action (ADMIN_WRITE = session + same-origin) because it changes what every
+// visitor to this install sees, not just the caller's own browser.
+app.post('/api/demo/dismiss', ADMIN_WRITE, async () => {
+  const already = userStore.isDemoDismissed();
+  userStore.dismissDemo();
+  // chokidar cannot see a database write, so nothing would reload on its own: ask for
+  // the reload explicitly. It goes through the same validation gate as a YAML edit, and
+  // the 'change' listener above rebuilds the effective config and reschedules the
+  // collectors — the demo targets stop being polled as well as stop being drawn.
+  config.reload('demo dismissed');
+  if (already) return { ok: true, dismissed: true, changed: false };
+  console.log('[demo] demo board dismissed; config.example targets/layout will no longer be served');
+  return { ok: true, dismissed: true, changed: true };
+});
 
 app.get('/api/config', VIEW, async (req, reply) => {
   const pub = publicConfig(effective.get());

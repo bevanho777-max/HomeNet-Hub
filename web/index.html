@@ -31,6 +31,17 @@
     </div>
   </header>
 
+  <!-- P2:演示引导条。只在服务端说 demo_mode 时出现(= 还在用 config.example 回退
+       且没被清空过)。「关闭」只是本地 localStorage 的便利,「清空演示」才是服务端
+       持久操作 —— 两者故意不共用一个状态。 -->
+  <section id="demoBar" class="demoBar" hidden>
+    <span class="demoDot"></span>
+    <span id="demoText" class="demoText">演示数据 —— 这些是示例机器,不是你的。</span>
+    <button type="button" id="demoAdd" class="addBtn primary">添加你的机器</button>
+    <button type="button" id="demoClear" class="addBtn">清空演示</button>
+    <button type="button" id="demoHide" class="demoHide" title="关闭这条提示">×</button>
+  </section>
+
   <!-- service pill row (status_bar.targets) -->
   <section id="services" class="chips"></section>
 

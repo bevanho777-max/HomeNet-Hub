@@ -116,6 +116,48 @@ html, body {
 .tzrow.day   { color: var(--yellow); }
 .tzrow.night { color: var(--blue); }
 
+/* ---------- 演示引导条(P2) ---------- */
+/* 只在服务端 demo_mode 时出现。用琥珀色而不是红色:这不是错误,是"这还不是你的板子"。 */
+.demoBar {
+  display: flex; align-items: center; flex-wrap: wrap; gap: var(--s3);
+  margin: 0 var(--s6) var(--s3); padding: 10px var(--s4);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--yellow) 9%, var(--glass));
+  border: 1px solid color-mix(in srgb, var(--yellow) 32%, transparent);
+  font-size: 13px;
+}
+/* An author `display` on the element beats the UA stylesheet's [hidden]{display:none},
+   so without this the bar ignores its own hidden attribute and shows on every install —
+   including the ones that have a real config/ and no demo to warn about. */
+.demoBar[hidden] { display: none; }
+.demoBar .demoDot {
+  width: 8px; height: 8px; border-radius: 50%; flex: none;
+  background: var(--yellow); box-shadow: 0 0 8px var(--yellow);
+  animation: breathe 2.6s ease-in-out infinite;
+}
+.demoBar .demoText { flex: 1 1 240px; color: var(--text); }
+.demoBar .demoText.busy { color: var(--muted); }
+.demoBar .demoText.bad  { color: var(--red); }
+/* 关闭键推到最右,和两个动作键之间留出距离 —— 免得"关掉提示"和"清空演示"挨在一起。 */
+.demoBar .demoHide {
+  margin-left: var(--s2); flex: none;
+  background: none; border: none; color: var(--muted2);
+  font-size: 17px; line-height: 1; cursor: pointer; padding: 2px 6px; border-radius: 6px;
+}
+.demoBar .demoHide:hover { color: var(--text); background: var(--glass2); }
+
+/* ---------- 空板(清空演示后 / 全新实例) ---------- */
+/* 空网格是正常状态,不是加载失败 —— 所以写成邀请,而不是错误。 */
+.emptyBoard {
+  grid-column: 1 / -1;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: var(--s2); padding: 64px var(--s4); text-align: center;
+  border: 1px dashed var(--hair2); border-radius: var(--radius);
+  background: var(--card-bg);
+}
+.emptyBoard .emptyTitle { font-size: 15px; font-weight: 600; letter-spacing: 0.5px; }
+.emptyBoard .emptyHint  { font-size: 12.5px; color: var(--muted2); line-height: 1.6; }
+
 /* ---------- 服务健康条 ---------- */
 .chips { display: flex; flex-wrap: wrap; gap: var(--s2); padding: 0 var(--s6) var(--s2); }
 .chip {

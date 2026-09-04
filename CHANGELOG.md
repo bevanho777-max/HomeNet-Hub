@@ -23,6 +23,54 @@ on screen is the one from `package.json`, and this file is what needs fixing.
 
 ---
 
+## v2.9 — 2026-09-04
+
+**A fresh install now says that its board is a demo, and can clear it in one click.**
+`docker compose up` falls back to `config.example/`, so the first thing anyone sees is
+somebody else's machines — with nothing on screen saying so, and no way to get rid of
+them short of learning the YAML layout. There is now a banner that says what the board
+is, a button that opens the existing add-target flow, and a button that clears the demo
+for good.
+
+Clearing writes a flag rather than deleting anything: `config.example/` ships inside the
+image and `config/` may be a read-only mount. The loader then keeps falling back for
+metric templates and theme — without those there is nothing to render your own card
+*with* — and empties only the demo board itself: the example targets, their cards, the
+status bar, and the history pane. The collectors are rescheduled in the same step, so the
+example targets stop being polled as well as stop being drawn. What is left is an empty
+board that says how to add your first machine, plus anything you have already added.
+
+Two dismissals that deliberately do not share state: the banner's **×** hides it in your
+browser only (`localStorage`), while **清空演示** is a management action — it needs a
+session, it is confirmed, and it applies to everyone who opens this install. An install
+with a real `config/` was never on the demo board and never sees any of this.
+
+> **新装的实例现在会说清楚"这块板子是演示",并且一键就能清掉。** `docker compose up`
+> 会回退到 `config.example/`,所以打开第一眼看到的是别人的机器 —— 而屏幕上没有任何
+> 说明,想去掉还得先学会 YAML 布局。现在有一条横幅说明这块板子是什么,一个按钮直接
+> 打开原有的添加目标流程,还有一个按钮把演示彻底清掉。
+>
+> 清空写的是一个标志位,而不是删文件:`config.example/` 打包在镜像里,`config/` 还可能
+> 是只读挂载。清空之后 loader 仍然为指标模板和主题回退 —— 没有它们,你自己的卡片根本
+> 没东西可渲染 —— 只清掉演示板本身:示例目标、它们的卡片、状态栏、以及历史面板。
+> 采集器在同一步重新调度,所以示例目标不只是不再显示,而是真的不再被轮询。剩下的是一块
+> 空板,上面写着怎么添加你的第一台机器,以及你自己已经加过的东西。
+>
+> 两种"关掉"故意不共用状态:横幅上的 **×** 只在你这个浏览器里隐藏(`localStorage`),
+> 而**清空演示**是管理操作 —— 要登录、要确认,而且对所有打开这个实例的人都生效。
+> 已经有真实 `config/` 的实例从来就不在演示板上,这一切都不会出现。
+
+**Deploying this release:** `server/`+`web/`, so `docker compose up -d --build`.
+No database change — the flag's table is created on demand. An install with its own
+`config/` sees no behaviour change at all; `/api/config` gains one boolean, `demo_mode`,
+and is otherwise byte-identical.
+
+> **本次部署方式:** `server/`+`web/`,需要 `docker compose up -d --build`。
+> 数据库无需改动 —— 存标志位的表按需创建。已有自己 `config/` 的实例行为完全不变;
+> `/api/config` 多了一个布尔字段 `demo_mode`,其余逐字节一致。
+
+---
+
 ## v2.8 — 2026-09-04
 
 **A fresh install can now get its admin password from the browser instead of from a text

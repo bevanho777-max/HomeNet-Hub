@@ -71,15 +71,61 @@ export function applyDefaults(targets) {
 }
 
 /**
+ * Empty out the SHIPPED DEMO CONTENT of a fallback document, in place.
+ *
+ * Only ever applied to a document that actually came from config.example/ — a real
+ * config/targets.yaml is the operator's own work and dismissing the demo must never
+ * touch it. That is why each half checks its own `fallback` flag rather than a single
+ * global one: an install with a real targets.yaml but no layout.yaml gets its demo grid
+ * cleared and its own targets left alone.
+ *
+ * What is removed is the demo BOARD: the example targets, the example cards, the status
+ * bar that names them, and the history pane that selects them. `header` and `text` stay,
+ * because they are page chrome and a title-less panel just looks broken.
+ *
+ * `history` in particular MUST go rather than be left as-is: it carries
+ * selectable_targets naming demo targets that no longer exist, and crossValidate refuses
+ * exactly that. Blanking the grid but keeping history would produce a config that fails
+ * its own validation gate on the next load — a panel that dismisses the demo and then
+ * refuses to start.
+ */
+function stripDemoContent(targets, layout) {
+  if (targets.fallback) {
+    targets.doc = { ...targets.doc, targets: [] };
+  }
+  if (layout.fallback) {
+    const { header, text } = layout.doc || {};
+    layout.doc = {
+      ...(header ? { header } : {}),
+      ...(text ? { text } : {}),
+      grid: [],
+      status_bar: { targets: [] },
+      // Not `null`: the layout schema has no `history` requirement, and omitting it is
+      // how "there is no history pane" is already spelled everywhere else.
+    };
+  }
+}
+
+/**
  * Load + validate the full config.
+ * @param {{demoDismissed?: boolean}} [opts]  when demoDismissed, the SHIPPED example
+ *   targets/layout are loaded and then emptied (see stripDemoContent). metrics and
+ *   theme still fall back in full — without metric templates and colors there is
+ *   nothing to render a user's own card WITH.
  * @throws Error with `.errors: string[]` on validation failure (caller keeps old config).
  * @returns {{ metrics, targets, layout, etag, sources: Record<string,string> }}
  */
-export function loadConfig() {
+export function loadConfig({ demoDismissed = false } = {}) {
   const metrics = readYaml(FILES.metrics);
   const targets = readYaml(FILES.targets);
   const layout = readYaml(FILES.layout);
   const theme = readYamlOptional(OPTIONAL_FILES.theme); // §12-step6
+
+  // The demo board is the fallback content, so "is this install still on the demo" is
+  // "did targets or layout come from config.example". Computed BEFORE stripping, since
+  // stripping is what makes the answer stop being visible in the document.
+  const onExampleBoard = targets.fallback || layout.fallback;
+  if (demoDismissed) stripDemoContent(targets, layout);
 
   const errors = [];
   for (const [kind, m] of [['metrics', metrics], ['targets', targets], ['layout', layout]]) {
@@ -113,6 +159,14 @@ export function loadConfig() {
     etag,
     sources: { metrics: metrics.path, targets: targets.path, layout: layout.path, theme: theme.path },
     usingFallback: metrics.fallback || targets.fallback || layout.fallback || theme.fallback,
+    // Two separate facts, deliberately not collapsed into one:
+    //   onExampleBoard — this install has never had its own targets/layout;
+    //   demoDismissed  — the operator has cleared the demo for good.
+    // The banner is offered on the first AND NOT the second; health reporting wants
+    // both, and a single boolean would make "dismissed" indistinguishable from
+    // "the operator wrote a real config".
+    onExampleBoard,
+    demoDismissed: !!demoDismissed,
   };
 }
 
@@ -160,6 +214,11 @@ export function publicConfig(cfg) {
       grid: cfg.layout.grid || [],
       history: cfg.layout.history || null,
     },
+    // P2: the frontend offers the "this is demo data" banner on this and nothing else.
+    // A boolean, and only ever true while BOTH halves hold — still on the shipped
+    // example board, and not yet dismissed. An install with a real config/ has never
+    // been on the example board and so never sees it.
+    demo_mode: !!cfg.onExampleBoard && !cfg.demoDismissed,
     etag: cfg.etag,
   };
 }
