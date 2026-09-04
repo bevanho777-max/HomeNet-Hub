@@ -7,6 +7,7 @@ import { renderToken } from './renderers/token.js';
 import { renderService } from './renderers/service.js';
 import { renderStack } from './renderers/stack.js';
 import { renderInfo } from './renderers/info.js';
+import { renderTable } from './renderers/table.js';
 import { initHistory, historyRefresh } from './renderers/history.js';
 import { initMachineDetail, openMachineModal, closeMachineModal, bindMachineModal } from './renderers/machine_detail.js';
 import { bindAddTarget, closeAddPanel } from './renderers/add_target.js';
@@ -182,6 +183,7 @@ function render() {
       return { target: { ...t, color: autoColor(t, s, 'service') }, snap: s };
     }, metrics));
     else if (gc.type === 'info') cards.push(renderInfo(gc, target, snap));
+    else if (gc.type === 'table') cards.push(renderTable(gc, target, snap));
   }
   mountCards('grid', cards);
   layoutStacks();

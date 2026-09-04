@@ -203,6 +203,30 @@ targets:
     map:
       token_speed: "$.token_speed"
 
+  # sql + `shape: table`: the generic form of the sql collector — run the
+  # queries/ file and hand its rows to a type:table card untouched, instead of
+  # running them through the by-model token pivot. Same door as every other
+  # query (queries/ only, read-only DSN, statement_timeout); the only difference
+  # is that nothing interprets the result server-side, so a new table card is a
+  # new .sql file + a layout card, with no code change.
+  #
+  # This one rolls chat tokens up per end user — the OpenAI `user` field the
+  # client sends — so a project opts into its own row just by passing
+  # user:"<project>". It reads LiteLLM_DailyEndUserSpend, which a read-only role
+  # needs its OWN grant for (a grant on LiteLLM_DailyUserSpend does not cover it):
+  #   GRANT SELECT ON TABLE "LiteLLM_DailyEndUserSpend" TO <readonly_role>;
+  - id: project_tokens_example
+    name: "Per-Project Tokens (real sql)"
+    enabled: false
+    color: "#4fe3d0"
+    source:
+      type: sql
+      driver: postgres
+      dsn_env: "PG_DSN"               # ← same read-only DB account as the token card
+      query_file: "queries/project_tokens.sql"
+      shape: table                    # rows passed through as-is (no pivot)
+      interval: "5m"                  # a daily aggregate cannot move faster than this
+
   # http_push: the machine pushes its own report to the Hub (no inbound access
   # needed). `token_env` names the .env variable holding that target's shared
   # secret (sent as X-Push-Token); `stale_after_s` is how long a silent host stays

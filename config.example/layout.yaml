@@ -110,6 +110,24 @@ grid:
   #   items: [mem_bytes, disk_bytes, reqs_today, reqs_5m, reqs_by_model, net]
   #   header_right: uptime
 
+  # Generic table card — one row per row the target's query returned, no pivot.
+  # `columns` is an ordered map of row-key → "Label", or → { label, format }
+  # where format is compact (1.2M) / number (1,234,567) / text; omitted, the
+  # renderer infers it from the value. Pairs with a `shape: table` sql target
+  # (see project_tokens_example in targets.yaml). Commented out because this file
+  # ships in demo mode and that target is disabled — uncomment both together.
+  #
+  # - target: project_tokens_example
+  #   type: table
+  #   title: "Per-Project Tokens · chat only"
+  #   columns:
+  #     project:        "Project"
+  #     tokens_total:   { label: "Tokens", format: compact }
+  #     requests_total: { label: "Reqs",   format: number }
+  #     tokens_7d:      { label: "7d",     format: compact }
+  #   empty_note: "No tagged traffic yet — clients need to send an OpenAI `user` field."
+  #   hint: "One row per client `user` tag. Chat models only — embedding/rerank excluded."
+
   # §12-step4: generic info card — pure label/value list, no target needed.
   # Add any "info box" by adding a type:info card here; no code changes.
   - type: info

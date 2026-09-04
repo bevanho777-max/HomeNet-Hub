@@ -62,6 +62,10 @@ const sourceSchema = {
     driver: { type: 'string' },
     dsn_env: { type: 'string' },
     query_file: { type: 'string' },
+    // shape: how the collector interprets the query's rows. Omitted (default) =
+    // the by-model token pivot. 'table' = generic row passthrough for a type:table
+    // card — the query file still goes through the same queries/-only door.
+    shape: { enum: ['table'] },
     speed_query_file: { type: 'string' }, // B3 optional 2nd query → token_speed scalar
     speed_samples: { type: 'number', default: 10 }, // B3 whitelisted sample count
     total_query_file: { type: 'string' }, // B4 optional cumulative all-time query (slow-cycle cached)
@@ -163,7 +167,7 @@ const gridCard = {
   required: ['type'],
   properties: {
     target: { type: 'string' },
-    type: { enum: ['machine', 'token', 'service', 'history', 'info', 'stack'] },
+    type: { enum: ['machine', 'token', 'service', 'history', 'info', 'stack', 'table'] },
     children: { type: 'array', items: { type: 'string' } }, // B12: stack child target ids
     direction: { enum: ['row', 'column'] }, // B12: stack layout direction (default column)
     min_row_width: { type: 'number' }, // B12-row: min px width to lay row out (else children×180)
@@ -189,7 +193,25 @@ const gridCard = {
     // §12-step2: externalized card-local labels (all optional strings)
     hint: { type: 'string' },
     detail_title: { type: 'string' },
-    columns: { type: 'object', additionalProperties: { type: 'string' } },
+    // columns: ordered map of row-key → label. A table card may give an object
+    // instead, { label, format } — format picks how a cell is rendered
+    // (compact/number/text); omitted, the renderer infers it from the value.
+    columns: {
+      type: 'object',
+      additionalProperties: {
+        anyOf: [
+          { type: 'string' },
+          {
+            type: 'object',
+            required: ['label'],
+            properties: { label: { type: 'string' }, format: { enum: ['compact', 'number', 'text'] } },
+            additionalProperties: true,
+          },
+        ],
+      },
+    },
+    // table card: what to show instead of rows when the query returns none.
+    empty_note: { type: 'string' },
     // §12-step2 patch: token card front labels { today, requests_suffix, total }
     labels: { type: 'object', additionalProperties: { type: 'string' } },
     // §12-step6: max class boxes on the token card front (default 3); modal shows all
@@ -198,6 +220,8 @@ const gridCard = {
   // data-bound cards need a target; info cards may be static (no target)
   allOf: [
     { if: { properties: { type: { enum: ['machine', 'token', 'service', 'history'] } } }, then: { required: ['target'] } },
+    // A table card is nothing without its target's rows and a column map to name them.
+    { if: { properties: { type: { const: 'table' } } }, then: { required: ['target', 'columns'] } },
     { if: { properties: { type: { const: 'stack' } } }, then: { required: ['children', 'items'] } }, // B12; items required (B12-addendum)
   ],
   additionalProperties: true,

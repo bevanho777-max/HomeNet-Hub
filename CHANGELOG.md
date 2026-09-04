@@ -23,6 +23,58 @@ on screen is the one from `package.json`, and this file is what needs fixing.
 
 ---
 
+## v2.6 — 2026-09-04
+
+**Token usage can now be split per project.** The token card answers "which model";
+this one answers "whose traffic". A new `Per-Project Tokens` card lists one row per
+client — cumulative chat tokens, request count, and the last 7 days — read from
+LiteLLM's daily end-user aggregate. Two things make it honest. It groups by
+**end user** (the OpenAI `user` field the client sends), not by key owner: LiteLLM
+keeps those in two different tables, and a caller passing `user: "billing"` shows up
+in the end-user one and nowhere else, so a project opts into its own row without
+anyone minting it a key. And it **excludes embedding and rerank models**, which on a
+gateway doing RAG are >99% of requests and <0.1% of tokens — leaving them in makes
+the request column measure indexing runs instead of conversations.
+
+Expect a short card at first. Rows exist only for clients that actually send `user`;
+the receiving end is simply in place ahead of the callers.
+
+Underneath it is a general mechanism, not a one-off: a `shape: table` sql source hands
+its rows to the frontend untouched, and a `type: table` card names and formats the
+columns from `layout.yaml`. Another table card is another `.sql` file plus a layout
+block — no code.
+
+> **Token 用量现在能按项目拆开了。** Token 卡回答"哪个模型",这张卡回答"谁在用"。
+> 新的 `Per-Project Tokens` 卡每个客户端一行 —— chat token 累计、请求数、近 7 天 ——
+> 数据来自 LiteLLM 的每日 end-user 聚合表。两点让它说的是实话。它按 **end user**
+> (客户端传的 OpenAI `user` 字段)分组,而不是按 key 的所有者:LiteLLM 把这两者
+> 记在不同的表里,一个传了 `user: "billing"` 的调用只会出现在 end-user 那张表,
+> 所以项目不需要谁给它发 key 就能自己长出一行。它还**排除 embedding 与 rerank 模型**
+> —— 在跑 RAG 的网关上这类流量占请求数 >99%、占 token <0.1%,不排的话请求数那一列
+> 量的就是索引任务而不是对话。
+>
+> 一开始卡上行数会很少。只有真的传了 `user` 的客户端才有行;这只是接收端先就位、
+> 等客户端来打 id。
+>
+> 底下是一套通用机制而不是一次性代码:`shape: table` 的 sql 源把查询结果原样交给前端,
+> `type: table` 卡在 `layout.yaml` 里决定列名与数字格式。再加一张表格卡 = 一个 `.sql`
+> 文件加一段 layout,不用改代码。
+
+**Deploying this release:** `server/`+`web/`, so `docker compose up -d --build`.
+**The read-only DB role needs one new grant**, or the card reports the error instead of
+rows — a grant on `LiteLLM_DailyUserSpend` does not cover the end-user table:
+
+```sql
+GRANT SELECT ON TABLE "LiteLLM_DailyEndUserSpend" TO <your_readonly_role>;
+```
+
+> **本次部署方式:** `server/`+`web/`,需要 `docker compose up -d --build`。
+> **只读数据库账号需要补一条授权**,否则卡上显示的是报错而不是数据 —— 对
+> `LiteLLM_DailyUserSpend` 的授权并不覆盖 end-user 那张表(上面那条 SQL,
+> 要在 psql 里跑,不是 bash 命令)。
+
+---
+
 ## v2.5 — 2026-09-03
 
 **The admin password can now be changed from the panel, and it no longer lives in an

@@ -303,6 +303,23 @@ h2:empty { display: none; } /* 堆叠卡外框无标题时不留空行 */
 .lv-cool { color: var(--cyan); text-shadow: 0 0 14px color-mix(in srgb, var(--cyan) 45%, transparent); }
 .note { margin-top: var(--s3); font-size: 11px; color: var(--muted2); line-height: 1.5; }
 
+/* ---------- 表格卡(type:table) ---------- */
+/* The modal already has a .tbl; this is the in-card variant — same visual
+   language, tighter, and it scrolls sideways instead of widening the card. */
+.card .tbl-wrap { margin-top: var(--s3); }
+/* table-layout:fixed is what keeps the card honest: the figure columns get a
+   guaranteed share of the width instead of being pushed off the right edge by a
+   long identity value, which then truncates in place with an ellipsis. */
+.card .tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; table-layout: fixed; }
+.card .tbl th, .card .tbl td { text-align: left; padding: 6px 5px; border-bottom: 1px solid var(--hair);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.card .tbl th { color: var(--muted2); font-weight: 500; font-size: 10px; text-transform: uppercase; letter-spacing: 0.3px; }
+.card .tbl th.num, .card .tbl td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.card .tbl th:first-child, .card .tbl td:first-child { width: 36%; padding-left: 0; }
+.card .tbl th:last-child, .card .tbl td:last-child { padding-right: 0; }
+.card .tbl tbody tr:last-child td { border-bottom: none; }
+.card .tbl td:first-child { color: var(--muted); }
+
 /* ---------- 历史双屏 ---------- */
 .history { margin: 0 var(--s6) var(--s5); border-radius: var(--radius); padding: var(--s4); position: relative;
   background: linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.012) 30%), var(--card-bg);

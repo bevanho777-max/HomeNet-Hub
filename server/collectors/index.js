@@ -87,6 +87,15 @@ export class Scheduler {
     const { snapshot, tsdb, env } = this.ctx;
     try {
       const type = target.source.type;
+      // A `shape: table` sql target is the generic one: run its queries/ file and
+      // hand the rows to the frontend as-is. No pivot, no per-purpose logic here —
+      // which columns are shown, and under what labels, is a layout decision.
+      // (pg returns bigint as a string; the renderer coerces.)
+      if (type === 'sql' && target.source.shape === 'table') {
+        const rows = await collectSqlRows(target.source, env, target.source.query_file);
+        snapshot.update(target.id, { online: true, metrics: {}, extra: { rows } });
+        return;
+      }
       if (type === 'sql') {
         const rows = await collectSql(target.source, env, SNAPSHOT_TOKEN_DAYS);
         // B3: optional 2nd query → token_speed scalar (same security envelope).
