@@ -15,12 +15,13 @@ import { esc } from './common.js';
 
 const $ = (s) => document.querySelector(s);
 
-let state = { authenticated: false, configured: false };
+let state = { authenticated: false, configured: false, setupAvailable: false };
 let onChange = () => {};
 let busy = false;
 
 export const isAuthed = () => state.authenticated;
 export const isConfigured = () => state.configured;
+export const isSetupAvailable = () => state.setupAvailable;
 
 const setStatus = (html, cls = '') => {
   const el = $('#loginStatus');
@@ -55,7 +56,14 @@ export async function refreshSession() {
     const r = await fetch('/api/session', { cache: 'no-store' });
     if (r.ok) {
       const j = await r.json();
-      state = { authenticated: !!j.authenticated, configured: !!j.configured };
+      state = {
+        authenticated: !!j.authenticated,
+        configured: !!j.configured,
+        // Only ever true on an install with no admin at all, asked from the LAN. The
+        // server decides this; the frontend never infers it from `configured` alone,
+        // because a public caller on that same install must not be shown the wizard.
+        setupAvailable: !!j.setup_available,
+      };
     }
   } catch { /* offline: keep what we had, the server still decides on every call */ }
   apply();
@@ -210,6 +218,10 @@ export function closePasswdPanel() {
 }
 
 export function openLoginPanel() {
+  // On an install with no password, logging in cannot succeed by construction. If this
+  // caller is allowed to run first-run setup, send them there instead of to a box whose
+  // only possible outcome is "not configured".
+  if (!state.configured && state.setupAvailable) return openSetupPanel();
   $('#loginModal').classList.add('open');
   clearPass();
   if (!state.configured) {
@@ -227,9 +239,106 @@ export function closeLoginPanel() {
   clearPass();
 }
 
+// ── first-run setup ────────────────────────────────────────────────
+// Shown once, on an install that has no admin password, to a caller on the LAN. Same
+// two rules as every other password box here: the value goes only into the request
+// body, and every path out of a submit clears both fields.
+const setSetupStatus = (html, cls = '') => {
+  const el = $('#setupStatus');
+  if (el) { el.className = `addStatus ${cls}`; el.innerHTML = html; }
+};
+
+function clearSetupFields() {
+  for (const id of ['#setupPass', '#setupConfirm']) {
+    const el = $(id);
+    if (el) el.value = '';
+  }
+}
+
+export function openSetupPanel() {
+  $('#setupModal')?.classList.add('open');
+  clearSetupFields();
+  setSetupStatus('这台机器还没有管理员密码。设一个之后才能发现主机、添加目标与管理凭据。'
+    + '只能在局域网里设,且只能设这一次。');
+  setTimeout(() => $('#setupPass')?.focus(), 0);
+}
+
+export function closeSetupPanel() {
+  $('#setupModal')?.classList.remove('open');
+  clearSetupFields();
+  setSetupStatus('');
+}
+
+async function submitSetup() {
+  if (busy) return;
+  const pass = $('#setupPass').value;
+  const confirm = $('#setupConfirm').value;
+
+  // Both checked again on the server, which is the only place that decides. These two
+  // just save a round trip — and the mismatch branch still clears the boxes, because a
+  // mistyped password left in the DOM is the same exposure as a submitted one.
+  if (!pass) return setSetupStatus('请输入管理密码。', 'bad');
+  if (pass !== confirm) {
+    clearSetupFields();
+    return setSetupStatus('两次输入不一致,已清空重填。', 'bad');
+  }
+
+  busy = true;
+  $('#setupSubmit').disabled = true;
+  setSetupStatus('正在设置…', 'busy');
+  try {
+    const r = await fetch('/api/admin/setup', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ password: pass, confirm }),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (r.ok) {
+      setSetupStatus('已设置,并且已登录。', 'ok');
+      await refreshSession();
+      closeSetupPanel();
+      await onChange();
+    } else if (r.status === 409) {
+      // Someone else got there first, or this install was already configured. Either
+      // way the wizard is over — re-read the state so the login entry takes its place.
+      setSetupStatus('这台机器已经配置过管理员了,请改用登录。', 'bad');
+      await refreshSession();
+    } else if (r.status === 403) {
+      setSetupStatus('设置管理员密码只能在局域网内完成。', 'bad');
+    } else if (r.status === 429) {
+      setSetupStatus(`尝试过于频繁,请 ${Number(j.retry_after_s) || 60} 秒后再试。`, 'bad');
+    } else {
+      setSetupStatus(esc(String(j.reason || '设置失败。')), 'bad');
+    }
+  } catch (e) {
+    setSetupStatus(`请求失败:${esc(String(e?.message || e))}`, 'bad');
+  } finally {
+    clearSetupFields();   // always — success, rejection, or network failure
+    busy = false;
+    $('#setupSubmit').disabled = false;
+  }
+}
+
+/**
+ * Offer the wizard on load, once, when the server says this caller may run it. Called
+ * after the first refreshSession so it acts on a real answer rather than the default
+ * state. Opening it is not a security decision — the server refuses the POST either way.
+ */
+export function maybeOpenSetup() {
+  if (state.configured || !state.setupAvailable) return false;
+  openSetupPanel();
+  return true;
+}
+
 export function bindSession(opts = {}) {
   onChange = opts.onChange || (() => {});
   $('#loginOpen').onclick = openLoginPanel;
+  $('#setupClose').onclick = closeSetupPanel;
+  $('#setupModal').onclick = (e) => { if (e.target.id === 'setupModal') closeSetupPanel(); };
+  $('#setupSubmit').onclick = submitSetup;
+  for (const id of ['#setupPass', '#setupConfirm']) {
+    $(id).onkeydown = (e) => { if (e.key === 'Enter') submitSetup(); };
+  }
   $('#loginClose').onclick = closeLoginPanel;
   $('#loginModal').onclick = (e) => { if (e.target.id === 'loginModal') closeLoginPanel(); };
   $('#loginSubmit').onclick = submit;

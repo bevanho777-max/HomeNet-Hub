@@ -23,6 +23,67 @@ on screen is the one from `package.json`, and this file is what needs fixing.
 
 ---
 
+## v2.8 — 2026-09-04
+
+**A fresh install can now get its admin password from the browser instead of from a text
+editor.** Until now the only way to unlock the management endpoints was to write
+`ADMIN_PASSWORD` into `.env` and restart — fine for the person who built the thing, a
+cliff for anyone else. A brand-new install now shows a one-time "set the admin password"
+box on first load, and setting it logs you straight in.
+
+Nothing about the fail-closed contract moved. The endpoint that creates the password is
+the narrowest one in the project:
+
+- **It exists only while nothing can already manage the install** — no `admin_auth` row
+  and no `ADMIN_PASSWORD`. After that it answers `409` forever. There is no reset path
+  over HTTP, deliberately; recovery is still `DELETE FROM admin_auth;` and a restart,
+  which needs access to the host.
+- **It only answers callers on the local network.** Someone who finds a fresh install
+  exposed to the internet must not be able to claim it before its owner does. The check
+  does *not* use the framework's client IP: with `trustProxy` on, that is the leftmost
+  `X-Forwarded-For` entry, which the caller writes. It uses the rightmost entry — the one
+  the nearest proxy added and the caller could not forge — and requires the socket peer
+  to be private as well.
+- **One at a time.** Two simultaneous requests produce exactly one `200`; the loser gets
+  `409`. The real arbiter is the database's `ON CONFLICT DO NOTHING`, so it holds across
+  processes and not just within one.
+- Rate limited on its own budget, so a mistyped confirm box on a new install can never
+  walk anyone toward the login lockout.
+
+The password takes the same path as the other two ways that row is created — scrypt over
+a fresh random salt, straight into the database. It is never logged, echoed, or returned.
+Setting `ADMIN_PASSWORD` still works exactly as before and simply means the wizard never
+appears.
+
+> **新装的实例现在可以在浏览器里设管理员密码,不用再去编辑器里改文件。** 在此之前解锁
+> 管理端点的唯一办法是往 `.env` 里写 `ADMIN_PASSWORD` 再重启 —— 对自己搭的人没问题,
+> 对别人是道坎。全新实例第一次打开时会出现一次性的"设置管理员密码"框,设完直接登录。
+>
+> fail-closed 的约定一条没动。创建密码的这个端点是全项目条件最窄的一个:
+>
+> - **只在"还没有任何东西能管理这台机器"时存在** —— 既没有 `admin_auth` 行,也没有
+>   `ADMIN_PASSWORD`。设过之后永远返回 `409`。HTTP 上没有重置路径,这是故意的;
+>   找回密码仍然是 `DELETE FROM admin_auth;` 加重启,那需要机器本身的访问权。
+> - **只接受局域网内的调用方。** 谁要是发现一台暴露在公网上的新实例,不能让他抢在
+>   主人前面把管理员占了。这个判断**没有**用框架给的 client IP:开了 `trustProxy` 之后
+>   那是 `X-Forwarded-For` 最左边一项,而那一项是调用方自己写的。用的是最右边一项 ——
+>   最近一跳代理自己加的、调用方伪造不了的那个 —— 并且要求 socket 对端也是私网地址。
+> - **同一时刻只允许一个。** 两个并发请求恰好只有一个 `200`,另一个 `409`。真正裁决的是
+>   数据库的 `ON CONFLICT DO NOTHING`,所以跨进程也成立,不只是进程内。
+> - 限速用自己独立的额度,所以新装机上把确认框打错几次,绝不会把人推向登录的锁定。
+>
+> 密码走的是那一行本来就有的两条创建路径同一条:新随机盐上的 scrypt,直接进数据库。
+> 不记日志、不回显、不返回。设了 `ADMIN_PASSWORD` 的行为和以前完全一样,只是向导不出现。
+
+**Deploying this release:** `server/`+`web/`, so `docker compose up -d --build`.
+An install that already has an admin password sees no change at all — same login box,
+same everything. No database change.
+
+> **本次部署方式:** `server/`+`web/`,需要 `docker compose up -d --build`。
+> 已经设过管理员密码的实例完全没有变化 —— 还是那个登录框,一切照旧。数据库无需改动。
+
+---
+
 ## v2.7 — 2026-09-04
 
 **The per-project token card now splits by API key instead of by the client's `user`

@@ -13,9 +13,10 @@ import { VERSION } from './version.js';
 import { CredStore, validateCredential, CRED_TYPES } from './store/cred_store.js';
 import { openVault } from './vault.js';
 import {
-  createAuth, LoginLimiter, parseCookies, serializeCookie, clearCookie, checkOrigin,
-  COOKIE_NAME,
+  createAuth, setupAdminPassword, LoginLimiter, parseCookies, serializeCookie, clearCookie,
+  checkOrigin, COOKIE_NAME,
 } from './auth.js';
+import { checkPrivateClient, forwardedClientAddr } from './net_guard.js';
 import { AdminStore } from './store/admin_store.js';
 import { Snapshot } from './store/snapshot.js';
 import { Tsdb, RANGE_SEC } from './store/sqlite.js';
@@ -60,11 +61,26 @@ const vault = openVault(process.env.VAULT_KEY, credStore);
 // bootstraps that row on an install that has none — see auth.js for the priority order
 // and the delete-the-row escape hatch.
 const adminStore = new AdminStore(join(DATA_DIR, 'homenet.db'));
-const auth = createAuth(adminStore, process.env.ADMIN_PASSWORD);
+// `let`, not `const`: the first-run setup endpoint creates the admin_auth row at
+// RUNTIME, and this binding is how the whole process learns about it without a restart.
+// Every handler below reads through this name rather than capturing the object, so
+// re-creating it here takes effect on the next request.
+let auth = createAuth(adminStore, process.env.ADMIN_PASSWORD);
+// One first-run setup at a time. The database's ON CONFLICT DO NOTHING is what actually
+// decides the winner (see auth.js); this flag just stops a second concurrent caller from
+// paying for a scrypt derivation before losing.
+let setupInFlight = false;
 // One limiter for BOTH the login form and the change-password form. They gate the same
 // secret, so giving them separate budgets would simply hand an attacker twice the
 // attempts by alternating between the two endpoints.
 const loginLimiter = new LoginLimiter();
+// Setup gets its OWN limiter rather than sharing the login one. The two bound different
+// things: the login limiter prices GUESSES at a secret, and must not be walked toward a
+// lockout by someone mistyping the confirm box on a brand-new install. This one prices
+// scrypt derivations on an endpoint that is reachable before any password exists — so it
+// counts every attempt, not just failures. It is also the only limiter whose lockout can
+// never strand anyone: once setup succeeds the endpoint is 409 forever anyway.
+const setupLimiter = new LoginLimiter();
 const REQUIRE_LOGIN_TO_VIEW = /^(1|true|yes|on)$/i.test(String(process.env.REQUIRE_LOGIN_TO_VIEW || '').trim());
 // The scheduler is built after the vault so the ssh collector can reach it through ctx.
 const scheduler = new Scheduler({ snapshot, tsdb, env: process.env, vault, credStore });
@@ -175,6 +191,37 @@ async function requireAdmin(req, reply) {
   if (!v.ok) return reply.code(401).send({ error: 'authentication required', reason: v.reason });
 }
 
+/**
+ * Is this request coming from the local network?
+ *
+ * Only the first-run setup endpoint asks. It deliberately does NOT use `req.ip`:
+ * `trustProxy: true` makes that the LEFTMOST X-Forwarded-For entry, which is whatever
+ * the original caller typed. See forwardedClientAddr in net_guard.js for why the
+ * rightmost entry is the one that cannot be forged.
+ *
+ * Both halves must be private: the forwarding chain's last unforgeable hop AND the
+ * actual socket peer. Behind a reverse proxy the peer is the proxy (private), and the
+ * chain supplies the client; on a direct LAN hit the two are the same address. A public
+ * caller fails the first, and a request that somehow reaches the port from outside the
+ * LAN fails the second.
+ */
+function clientIsPrivate(req) {
+  const peer = req.socket?.remoteAddress;
+  const p = checkPrivateClient(peer);
+  if (!p.ok) return { ok: false, reason: p.reason };
+  const c = checkPrivateClient(forwardedClientAddr(req.headers?.['x-forwarded-for'], peer));
+  if (!c.ok) return { ok: false, reason: c.reason };
+  return { ok: true, ip: c.ip };
+}
+
+/**
+ * First-run setup is available only when NOTHING can already manage this install:
+ * no admin_auth row and no ADMIN_PASSWORD that would create one. `auth.configured`
+ * covers both — the env var bootstraps the row at startup, so an install with the env
+ * var set is already configured by the time any request arrives.
+ */
+const setupAvailable = (req) => !auth.configured && clientIsPrivate(req).ok;
+
 /** Belt to SameSite=Strict's braces, on state-changing requests only. */
 async function requireSameOrigin(req, reply) {
   const o = checkOrigin(req);
@@ -210,6 +257,91 @@ app.get('/healthz', async () => ({
   // Whether an admin password exists and whether the board is private. Booleans only.
   admin: { ...auth.status(), require_login_to_view: REQUIRE_LOGIN_TO_VIEW },
 }));
+
+// ── first-run admin setup ───────────────────────────────────────────
+// The one endpoint that can create an admin password without already having one. Every
+// other management route is fail-closed against exactly this, so the conditions are
+// narrow on purpose and each is checked again here rather than trusted from the caller:
+//
+//   1. NOT ALREADY CONFIGURED. Checked before the work and enforced again by the
+//      database's ON CONFLICT DO NOTHING. Once configured it is 409 forever — there is
+//      no reset path through HTTP, by design. Recovery stays `DELETE FROM admin_auth;`
+//      plus a restart, which requires access to the host.
+//   2. FROM THE LOCAL NETWORK. Someone who finds a fresh install exposed to the
+//      internet must not be able to claim it before its owner does. A LAN requirement
+//      is not perfect (a hostile device on the LAN beats you to it) but it removes the
+//      entire internet from the race.
+//   3. RATE LIMITED, counting every attempt — this is the only endpoint that runs
+//      scrypt for an unauthenticated caller.
+//   4. SAME-ORIGIN, like every other state-changing route.
+//
+// The password reaches exactly one place, setupAdminPassword(), and is dropped there.
+// No branch below puts it, its length, or anything derived from it in a response or a
+// log line.
+app.post('/api/admin/setup', async (req, reply) => {
+  const o = checkOrigin(req);
+  if (!o.ok) return reply.code(403).send({ error: 'forbidden', reason: o.reason });
+
+  // Answered before the network check so an already-configured install gives the same
+  // 409 to everyone, rather than leaking "you are on the wrong network" to a caller who
+  // could not have used the endpoint regardless.
+  if (auth.configured) {
+    return reply.code(409).send({ error: 'already configured', reason: 'admin is already configured' });
+  }
+
+  const net = clientIsPrivate(req);
+  if (!net.ok) {
+    app.log.warn(`[auth:DENY] first-run setup refused from non-private client (${net.reason})`);
+    return reply.code(403).send({
+      error: 'forbidden',
+      reason: 'first-run setup must be done from the local network',
+    });
+  }
+
+  const clientKey = net.ip;
+  const peerKey = req.socket?.remoteAddress || 'unknown';
+  const gate = setupLimiter.check(clientKey, peerKey);
+  if (!gate.ok) {
+    reply.header('Retry-After', String(gate.retryAfterS));
+    return reply.code(429).send({ error: 'too many attempts', retry_after_s: gate.retryAfterS });
+  }
+  // Counted up front, on every attempt: the cost being bounded here is the scrypt
+  // derivation below, which a rejected attempt pays for just the same as a good one.
+  setupLimiter.fail(clientKey, peerKey);
+
+  if (setupInFlight) {
+    return reply.code(409).send({ error: 'busy', reason: 'a setup is already in progress' });
+  }
+  setupInFlight = true;
+  try {
+    const r = await setupAdminPassword(adminStore, req.body?.password, req.body?.confirm);
+    if (!r.ok) {
+      if (r.code === 'already_configured') {
+        return reply.code(409).send({ error: 'already configured', reason: r.reason });
+      }
+      return reply.code(400).send({ error: r.code, reason: r.reason });
+    }
+    // Re-create the gate so it picks up the row that now exists. Re-reading rather than
+    // patching state by hand: whatever is in the database is what every later request
+    // will be judged against, including the signing secret this session is about to be
+    // signed with.
+    auth = createAuth(adminStore, process.env.ADMIN_PASSWORD);
+    if (!auth.configured) {
+      // Should be unreachable — the row was just written. Fail closed rather than
+      // pretend, so nobody ends up holding a "success" with no way back in.
+      return reply.code(500).send({ error: 'setup failed', reason: 'admin row could not be read back' });
+    }
+    const sess = auth.issue();
+    reply.header('set-cookie', serializeCookie(sess.value,
+      { secure: isSecureReq(req), maxAgeS: sess.maxAgeS }));
+    app.log.warn(`[auth] admin configured via first-run setup from ${clientKey}`);
+    console.log('[auth] admin configured via first-run setup;'
+      + ' the database is authoritative from here and ADMIN_PASSWORD changes nothing.');
+    return { ok: true, authenticated: true, expires_at: sess.expiresAt };
+  } finally {
+    setupInFlight = false;
+  }
+});
 
 // ── admin login ─────────────────────────────────────────────────────
 // The password never leaves this handler: it is compared in constant time and dropped.
@@ -319,6 +451,10 @@ app.post('/api/admin/password', ADMIN_WRITE, async (req, reply) => {
 app.get('/api/session', async (req) => ({
   authenticated: auth.configured ? sessionOf(req).ok : false,
   configured: auth.configured,
+  // Whether the first-run wizard is offerable to THIS caller: unconfigured AND on the
+  // LAN. A public caller on an unconfigured install sees false and is shown the login
+  // box's "not configured" message, same as before this endpoint existed.
+  setup_available: setupAvailable(req),
 }));
 
 app.get('/api/config', VIEW, async (req, reply) => {

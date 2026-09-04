@@ -12,7 +12,7 @@ import { initHistory, historyRefresh } from './renderers/history.js';
 import { initMachineDetail, openMachineModal, closeMachineModal, bindMachineModal } from './renderers/machine_detail.js';
 import { bindAddTarget, closeAddPanel } from './renderers/add_target.js';
 import { bindCredentials, closeCredPanel } from './renderers/credentials.js';
-import { bindSession, refreshSession, sessionLost, closeLoginPanel } from './renderers/session.js';
+import { bindSession, refreshSession, sessionLost, closeLoginPanel, closeSetupPanel, maybeOpenSetup } from './renderers/session.js';
 import { esc, statusLevel } from './renderers/common.js';
 
 const FAST_MS = 1500;     // snapshot poll (machine/GPU rhythm)
@@ -480,6 +480,7 @@ document.addEventListener('keydown', (e) => {
   closeAddPanel();
   closeCredPanel();
   closeLoginPanel();
+  closeSetupPanel();
 });
 
 // B15 §4: relax the snapshot cadence on touch / narrow devices to save battery
@@ -505,6 +506,10 @@ function stopTimers() {
 // The session comes first: with REQUIRE_LOGIN_TO_VIEW on, configTick's answer depends
 // on it, and either way the header must not flash admin buttons the server would refuse.
 refreshSession()
+  // A fresh install with no admin password gets the one-time wizard here, before the
+  // board loads: with REQUIRE_LOGIN_TO_VIEW on, configTick's 401 is the only thing that
+  // would otherwise happen, and "locked" with no way to unlock reads as broken.
+  .then(() => { maybeOpenSetup(); })
   .then(() => configTick(true))
   .then(() => {
     snapTick();

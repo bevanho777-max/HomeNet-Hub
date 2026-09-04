@@ -360,6 +360,47 @@ export function createAuth(store, envPassword) {
   };
 }
 
+// ── first run ───────────────────────────────────────────────────────
+/**
+ * Create the admin_auth row from a password chosen in the UI, on an install that has
+ * none. This is the THIRD and last way that row can come into existence, and it is
+ * deliberately the same write as the other two: scrypt over a fresh random salt, then
+ * `store.bootstrap`, which is INSERT ... ON CONFLICT DO NOTHING.
+ *
+ * That conflict clause is the real race-breaker, not the caller's in-process flag. Two
+ * requests (or two processes sharing the database file) can both pass a "not configured
+ * yet" check and both arrive here; exactly one INSERT reports `changes === 1`, and the
+ * other is told the install is already configured. The flag upstream only saves the
+ * loser from paying for a scrypt derivation first.
+ *
+ * Deriving asynchronously — unlike the startup bootstrap, which may block because
+ * nothing else is running yet — because this one is reachable by an HTTP request, and
+ * ~100ms of key derivation on the event loop per request is a lever worth not handing out.
+ *
+ * The password is read, hashed, and dropped. No branch of this function returns it,
+ * logs it, or puts anything derived from it into the result.
+ *
+ * @param {{bootstrap:Function}} store  AdminStore
+ * @param {unknown} password
+ * @param {unknown} confirm
+ * @returns {Promise<{ok:true} | {ok:false, code:string, reason:string}>}
+ */
+export async function setupAdminPassword(store, password, confirm) {
+  const v = validatePassword(password);
+  if (!v.ok) return { ok: false, code: 'invalid_password', reason: v.reason };
+  // Compared here as well as in the browser, because the browser's copy of this rule is
+  // a convenience and this one is the rule.
+  if (typeof confirm !== 'string' || password !== confirm) {
+    return { ok: false, code: 'mismatch', reason: 'the two passwords do not match' };
+  }
+  const salt = newSalt();
+  const passwordHash = await hash(password, salt);
+  if (!store.bootstrap({ passwordHash, salt })) {
+    return { ok: false, code: 'already_configured', reason: 'admin is already configured' };
+  }
+  return { ok: true };
+}
+
 /**
  * Same-origin check for state-changing requests, working WITH SameSite=Strict rather
  * than instead of it.

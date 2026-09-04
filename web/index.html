@@ -54,6 +54,28 @@
 
   <!-- admin login (admin-auth): same modal shell. The field is type=password, is never
        populated from a response, and is cleared on every submit outcome. -->
+  <!-- 首次运行:服务端还没有管理员密码,而且请求来自局域网。这个框只在那一刻存在 ——
+       一旦设过密码,后端一律 409,前端也不会再拿到 setup_available。两个框都是
+       password 类型,任何一条路径出去都清空,和登录/改密同一条规矩。 -->
+  <div class="modal-mask" id="setupModal">
+    <div class="modal addModal">
+      <div class="modal-head">
+        <h2>设置管理员密码</h2>
+        <button class="modal-close" id="setupClose">关闭</button>
+      </div>
+      <div class="addBar">
+        <input id="setupPass" class="addInput" type="password" autocomplete="new-password"
+               placeholder="管理密码(至少 8 位)" />
+      </div>
+      <div class="addBar">
+        <input id="setupConfirm" class="addInput" type="password" autocomplete="new-password"
+               placeholder="再输一次" />
+        <button type="button" id="setupSubmit" class="addBtn primary">设置</button>
+      </div>
+      <div id="setupStatus" class="addStatus"></div>
+    </div>
+  </div>
+
   <div class="modal-mask" id="loginModal">
     <div class="modal addModal">
       <div class="modal-head">
