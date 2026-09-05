@@ -83,6 +83,28 @@ export class Scheduler {
     console.log(`[scheduler] scheduled ${this.timers.length} polled + ${this.pushTargets.size} push target(s)`);
   }
 
+  /**
+   * 'litellm_keys': map each row's `raw_key` (a sha256 key digest, which is what
+   * LiteLLM's spend table stores) to the alias the key was minted under, and write it
+   * over the row's `project` label. Rows whose digest has no alias — a key that was
+   * deleted since, or one minted without a name — keep whatever label the query already
+   * produced, which is a short hash. That fallback is the point: usage from a revoked
+   * key must stay visible rather than vanish because its name is gone.
+   *
+   * `raw_key` is ALWAYS deleted afterwards, resolved or not. The board is public by
+   * default; a full key digest has no business on it, and it is only in the row so this
+   * function can read it.
+   */
+  async _resolveNames(target, rows) {
+    if (target.source?.resolve_names !== 'litellm_keys' || !Array.isArray(rows)) return;
+    const names = this.ctx.litellmKeys ? await this.ctx.litellmKeys.aliasMap() : new Map();
+    for (const row of rows) {
+      const digest = row?.raw_key;
+      if (typeof digest === 'string' && names.has(digest)) row.project = names.get(digest);
+      if (row && 'raw_key' in row) delete row.raw_key;
+    }
+  }
+
   async _poll(target, metrics) {
     const { snapshot, tsdb, env } = this.ctx;
     try {
@@ -93,6 +115,11 @@ export class Scheduler {
       // (pg returns bigint as a string; the renderer coerces.)
       if (type === 'sql' && target.source.shape === 'table') {
         const rows = await collectSqlRows(target.source, env, target.source.query_file);
+        // `resolve_names` is the one decoration this generic path performs, and it is
+        // config-gated by an enum so it stays a named capability rather than
+        // per-target logic. Everything else about the row still reaches the frontend
+        // exactly as the query wrote it.
+        await this._resolveNames(target, rows);
         snapshot.update(target.id, { online: true, metrics: {}, extra: { rows } });
         return;
       }

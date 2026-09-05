@@ -227,6 +227,14 @@ targets:
       query_file: "queries/project_tokens.sql"
       shape: table                    # rows passed through as-is (no pivot)
       interval: "5m"                  # a daily aggregate cannot move faster than this
+      # Replace the query's raw_key (a sha256 key digest, which is all the spend table
+      # stores) with the alias the key was minted under, read from LiteLLM's /key/list
+      # and cached 30s. Needs LITELLM_MASTER_KEY; without it the rows keep the short-hash
+      # labels the query produced and nothing else changes. A digest with no alias — a
+      # key deleted since — also keeps its hash label, so its usage stays visible instead
+      # of vanishing with its name. The digest is deleted before the row leaves the
+      # server: this board is public by default.
+      resolve_names: litellm_keys
 
   # http_push: the machine pushes its own report to the Hub (no inbound access
   # needed). `token_env` names the .env variable holding that target's shared

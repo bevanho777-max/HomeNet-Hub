@@ -99,11 +99,17 @@ labelled AS (
       WHEN COALESCE(raw_key, '') = ''            THEN '(unattributed)'
       ELSE left(raw_key, 16)
     END AS project,
-    day, tokens, requests, prompt_tokens, cache_read_tokens, completion_tokens
+    raw_key, day, tokens, requests, prompt_tokens, cache_read_tokens, completion_tokens
   FROM chat
 )
 SELECT
   project,
+  -- The raw digest, for the server ONLY: `resolve_names: litellm_keys` on this target
+  -- looks each one up in LiteLLM's key API and overwrites `project` with the alias the
+  -- key was minted under, then DELETES this column before the row reaches a browser.
+  -- Grouping is by raw_key rather than by the label so two different keys can never be
+  -- merged by a label collision — and so a digest survives to be looked up at all.
+  raw_key,
   COALESCE(SUM(tokens),   0)::bigint                                      AS tokens_total,
   -- ACTUALLY-NEW tokens: the prompt minus the prefix that came back from KV cache,
   -- plus the completion. LiteLLM bills a request's full replayed context as prompt
@@ -120,7 +126,7 @@ SELECT
   MIN(day)::text                                                          AS first_day,
   MAX(day)::text                                                          AS last_day
 FROM labelled
-GROUP BY project
+GROUP BY project, raw_key
 -- Drop keys that produced no chat tokens at all. On an internet-facing gateway
 -- these are rejected probes and scanner noise — dozens of rows that would bury
 -- the handful that represent real projects. They are failures, not usage.

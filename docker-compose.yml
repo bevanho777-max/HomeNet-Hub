@@ -24,6 +24,14 @@ services:
       - PUSH_TOKEN_M24=${PUSH_TOKEN_M24:-}   # machine 24 self-monitor agent
       - PUSH_TOKEN_M27=${PUSH_TOKEN_M27:-}   # machine 27 push agent
       - PUSH_TOKEN_NAS75=${PUSH_TOKEN_NAS75:-}  # NAS 75 push agent
+      # LiteLLM's key-management API: names the key digests the spend table stores, and
+      # mints/revokes client keys from the admin panel. Unset -> the client manager says
+      # so and everything else, the Per-Project card included, keeps working on digests.
+      - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY:-}
+      # Default http://litellm:4000 — the compose service name on the external
+      # litellm_default network below, NOT 127.0.0.1: inside this container localhost is
+      # the hub itself. Only set this if the proxy lives somewhere else.
+      - LITELLM_BASE_URL=${LITELLM_BASE_URL:-}
     volumes:
       - ./config:/app/config:ro          # YAML config, read-only mount (edit on host → chokidar hot-reload)
       - ./data:/app/data                 # SQLite timeseries volume (persisted)

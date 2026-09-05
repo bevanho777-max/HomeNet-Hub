@@ -21,13 +21,14 @@ import { AdminStore } from './store/admin_store.js';
 import { Snapshot } from './store/snapshot.js';
 import { Tsdb, RANGE_SEC } from './store/sqlite.js';
 import { Scheduler } from './collectors/index.js';
-import { collectSql, clearQueryCache } from './collectors/sql.js';
+import { collectSql, collectSqlRows, clearQueryCache } from './collectors/sql.js';
 import { demoTokenRows } from './collectors/demo.js';
 import { pivotTokens, TOKEN_RANGE_DAYS } from './token_detail.js';
 import { discoverTarget } from './collectors/discovery.js';
 import { UserStore } from './store/user_store.js';
 import { EffectiveStore } from './config/effective.js';
 import { materialize, originOf } from './capabilities/catalog.js';
+import { createLitellmKeys, NAME_RE } from './litellm_keys.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..');
@@ -84,8 +85,14 @@ const loginLimiter = new LoginLimiter();
 // never strand anyone: once setup succeeds the endpoint is 409 forever anyway.
 const setupLimiter = new LoginLimiter();
 const REQUIRE_LOGIN_TO_VIEW = /^(1|true|yes|on)$/i.test(String(process.env.REQUIRE_LOGIN_TO_VIEW || '').trim());
+// LiteLLM's key API, used for two things only: naming the digests the spend table
+// stores, and minting/revoking client keys from the admin panel. Unconfigured is a
+// supported state, not an error — the manager page says so and every other feature,
+// including the Per-Project card, keeps working on digests alone.
+const litellmKeys = createLitellmKeys();
 // The scheduler is built after the vault so the ssh collector can reach it through ctx.
-const scheduler = new Scheduler({ snapshot, tsdb, env: process.env, vault, credStore });
+const scheduler = new Scheduler({ snapshot, tsdb, env: process.env, vault, credStore, litellmKeys });
+console.log(`[litellm] key API ${litellmKeys.configured ? `enabled (${litellmKeys.status().base_url})` : `off — ${litellmKeys.reason}`}`);
 console.log(`[vault] ${vault.locked ? `locked — ${vault.reason}` : 'unlocked'}`
   + ` (${credStore.count()} credential(s) stored)`);
 // Never the password, never anything derived from it — only whether one is configured.
@@ -258,6 +265,8 @@ app.get('/healthz', async () => ({
   vault: { ...vault.status(), credentials: credStore.count() },
   // Whether an admin password exists and whether the board is private. Booleans only.
   admin: { ...auth.status(), require_login_to_view: REQUIRE_LOGIN_TO_VIEW },
+  // Same rule as the vault: configured-or-not and the reason, never the master key.
+  litellm: litellmKeys.status(),
 }));
 
 // ── first-run admin setup ───────────────────────────────────────────
@@ -618,6 +627,159 @@ app.delete('/api/credentials/:id', ADMIN_WRITE, async (req, reply) => {
   }
   const out = credStore.remove(id);
   return { ok: true, ...out, id };
+});
+
+// ── clients: LiteLLM virtual keys + their chat usage ────────────────
+//
+// One row per key a client authenticates with, named by the alias it was minted under,
+// with the usage that key produced joined on from the read-only spend table.
+//
+// WHAT NEVER CROSSES THIS BOUNDARY. `LiteLLM_DailyUserSpend.api_key` accounts REJECTED
+// requests too, under whatever string the caller sent — on this gateway that column
+// already holds scanner junk, pasted shell fragments and other services' live tokens.
+// So the row set is built from the digests LiteLLM's key API returned (plus the master
+// key's own sentinel), and any usage keyed by something else is folded into a single
+// anonymous count. An unrecognised api_key value is never echoed, in any field.
+//
+// The plaintext of a minted key is returned by POST exactly once and is never stored,
+// cached or logged — see litellm_keys.js.
+const CLIENT_USAGE_QUERY = 'queries/client_usage.sql';
+const MASTER_SENTINEL = 'litellm_proxy_master_key';
+const DIGEST_RE = /^[0-9a-f]{64}$/;
+const ZERO_USAGE = {
+  tokens_total: 0, net_total: 0, requests_total: 0, tokens_today: 0, requests_today: 0, last_day: null,
+};
+
+const litellmOff = (reply) => {
+  reply.code(503);
+  return {
+    error: 'litellm key api not configured',
+    reason: litellmKeys.reason,
+    hint: 'set LITELLM_MASTER_KEY in .env and recreate the container',
+  };
+};
+
+// Usage by api_key, as numbers. pg returns bigint as a string; the frontend should not
+// have to know that, and neither should the arithmetic below.
+async function clientUsage() {
+  const tt = tokenTarget();
+  if (!tt || tt.source?.type !== 'sql') return new Map();
+  const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
+  try {
+    const rows = await collectSqlRows(tt.source, process.env, CLIENT_USAGE_QUERY);
+    return new Map((rows || []).map((r) => [String(r.raw_key ?? ''), {
+      tokens_total: num(r.tokens_total), net_total: num(r.net_total),
+      requests_total: num(r.requests_total), tokens_today: num(r.tokens_today),
+      requests_today: num(r.requests_today), last_day: r.last_day || null,
+    }]));
+  } catch (e) {
+    // Usage is the decoration, the key list is the substance. A dead DB must not empty
+    // the manager page — it shows the keys with no numbers instead.
+    console.warn('[clients] usage query failed:', String(e?.message || e).slice(0, 200));
+    return new Map();
+  }
+}
+
+app.get('/api/clients', ADMIN, async () => {
+  const status = litellmKeys.status();
+  if (!litellmKeys.configured) return { litellm: status, clients: [], unattributed: null };
+
+  let keys = [];
+  let error = null;
+  try { keys = await litellmKeys.list(); } catch (e) { error = String(e?.message || e).slice(0, 300); }
+
+  const usage = await clientUsage();
+  const known = new Set(keys.map((k) => k.token));
+  const take = (id) => usage.get(id) || { ...ZERO_USAGE };
+
+  const clients = keys.map((k) => ({
+    id: k.token,
+    name: k.name || `key:${k.token.slice(0, 8)}`,
+    named: !!k.name,
+    masked: k.masked,
+    created_at: k.created_at,
+    revoked: false,
+    system: false,
+    usage: take(k.token),
+  }));
+
+  // The proxy master key: real traffic, but not a minted key — it cannot be renamed or
+  // revoked through this API, so it is flagged and the UI hides its delete button.
+  if (usage.has(MASTER_SENTINEL)) {
+    clients.push({
+      id: MASTER_SENTINEL, name: '(master key)', named: false, masked: null,
+      created_at: null, revoked: false, system: true, usage: take(MASTER_SENTINEL),
+    });
+  }
+
+  // Keys that were deleted but whose spend rows survive. Shown so usage never silently
+  // disappears, identified by a short prefix of a digest we can still recognise as one.
+  let other = { requests: 0, tokens: 0, keys: 0 };
+  for (const [id, u] of usage) {
+    if (known.has(id) || id === MASTER_SENTINEL) continue;
+    if (DIGEST_RE.test(id) && u.tokens_total > 0) {
+      clients.push({
+        id, name: `key:${id.slice(0, 8)}`, named: false, masked: null,
+        created_at: null, revoked: true, system: false, usage: u,
+      });
+      continue;
+    }
+    // Everything else is a rejected-auth artefact. Counted, never named.
+    other.keys += 1;
+    other.requests += u.requests_total;
+    other.tokens += u.tokens_total;
+  }
+
+  clients.sort((a, b) => (b.usage.tokens_total - a.usage.tokens_total) || a.name.localeCompare(b.name));
+  return { litellm: status, error, clients, unattributed: other.keys ? other : null };
+});
+
+app.post('/api/clients', ADMIN_WRITE, async (req, reply) => {
+  if (!litellmKeys.configured) return litellmOff(reply);
+  const name = String(req.body?.name ?? '').trim();
+  // A name is a label: it becomes part of a key value that gets pasted into config files
+  // and shows on a public board. Reject rather than sanitise, so what the operator typed
+  // is what they see.
+  if (!NAME_RE.test(name)) {
+    reply.code(400);
+    return { error: 'rejected', reason: '名字只能用字母、数字、空格和 . _ -,2–40 个字符' };
+  }
+  try {
+    const existing = await litellmKeys.list({ force: true });
+    if (existing.some((k) => (k.name || '').toLowerCase() === name.toLowerCase())) {
+      reply.code(409);
+      return { error: 'a client with that name already exists', name };
+    }
+    const made = await litellmKeys.generate(name);
+    // The one and only time the plaintext exists here. Not logged — this line prints the
+    // name and nothing else, deliberately.
+    console.log(`[clients] minted a key for "${name}"`);
+    return { name: made.name, id: made.token, key: made.key };
+  } catch (e) {
+    reply.code(e?.code === 'upstream' ? 502 : 500);
+    return { error: 'could not create the key', reason: String(e?.message || e).slice(0, 300) };
+  }
+});
+
+app.delete('/api/clients/:id', ADMIN_WRITE, async (req, reply) => {
+  if (!litellmKeys.configured) return litellmOff(reply);
+  const id = String(req.params.id || '');
+  // Only a digest is deletable. The master key is a config literal with no row to
+  // delete, and refusing it here means a stray request cannot take the gateway's own
+  // credential out from under every client on it.
+  if (!DIGEST_RE.test(id)) {
+    reply.code(400);
+    return { error: 'not a deletable key id', hint: 'the master key is configured in litellm, not minted here' };
+  }
+  try {
+    const out = await litellmKeys.remove(id);
+    if (!out.deleted) { reply.code(404); return { error: 'no such key', id }; }
+    console.log(`[clients] revoked key ${id.slice(0, 8)}…`);
+    return { ok: true, id, deleted: out.deleted };
+  } catch (e) {
+    reply.code(e?.code === 'upstream' ? 502 : 500);
+    return { error: 'could not delete the key', reason: String(e?.message || e).slice(0, 300) };
+  }
 });
 
 // ── user targets (slice 2b) ─────────────────────────────────────────

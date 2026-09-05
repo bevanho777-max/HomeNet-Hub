@@ -38,7 +38,7 @@ function clearPass() {
 /** Show/hide every admin control from the one piece of state. */
 function apply() {
   const admin = !!state.authenticated;
-  for (const id of ['#addOpen', '#credOpen', '#passwdOpen', '#logoutBtn']) {
+  for (const id of ['#addOpen', '#credOpen', '#cliOpen', '#passwdOpen', '#logoutBtn']) {
     const el = $(id);
     if (el) el.hidden = !admin;
   }

@@ -66,6 +66,12 @@ const sourceSchema = {
     // the by-model token pivot. 'table' = generic row passthrough for a type:table
     // card — the query file still goes through the same queries/-only door.
     shape: { enum: ['table'] },
+    // Opt-in row decoration for `shape: table`. 'litellm_keys' means: the query also
+    // returns a `raw_key` column holding a LiteLLM key digest, and the collector should
+    // replace that row's display label with the human alias the key was minted under
+    // (and drop the digest before the row leaves the server). An enum, not a free
+    // string, so config can only ask for a resolver that exists.
+    resolve_names: { enum: ['litellm_keys'] },
     speed_query_file: { type: 'string' }, // B3 optional 2nd query → token_speed scalar
     speed_samples: { type: 'number', default: 10 }, // B3 whitelisted sample count
     total_query_file: { type: 'string' }, // B4 optional cumulative all-time query (slow-cycle cached)

@@ -369,6 +369,18 @@ h2:empty { display: none; } /* 堆叠卡外框无标题时不留空行 */
 .card .tbl tbody tr:last-child td { border-bottom: none; }
 .card .tbl td:first-child { color: var(--muted); }
 
+/* 客户端面板:一次性 key 展示框。红框是刻意的 —— 这段文本关掉就再也拿不回来,
+   视觉上必须比周围任何东西都更"现在就处理我"。.cliKey 用等宽并允许折行,
+   因为 key 比这个框宽,截断或横向滚动都会让人复制到半截。 */
+.cliNew { margin: var(--s3) 0; padding: var(--s3); border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--lv-danger) 55%, transparent);
+  background: color-mix(in srgb, var(--lv-danger) 8%, transparent);
+  display: flex; flex-direction: column; gap: 4px; }
+.cliKeyRow { display: flex; gap: var(--s2); align-items: center; margin-top: var(--s2); }
+.cliKey { flex: 1; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px;
+  word-break: break-all; user-select: all; color: var(--text);
+  background: rgba(0,0,0,0.35); padding: 6px 8px; border-radius: 8px; }
+
 /* ---------- 历史双屏 ---------- */
 .history { margin: 0 var(--s6) var(--s5); border-radius: var(--radius); padding: var(--s4); position: relative;
   background: linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.012) 30%), var(--card-bg);

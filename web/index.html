@@ -15,6 +15,7 @@
            默认显示再隐藏,页面就不会先闪一下未登录时点不动的按钮。 -->
       <button type="button" id="addOpen" class="addOpen" hidden>＋ 添加目标</button>
       <button type="button" id="credOpen" class="addOpen" hidden>凭据</button>
+      <button type="button" id="cliOpen" class="addOpen" hidden>客户端</button>
       <button type="button" id="loginOpen" class="addOpen" hidden>管理登录</button>
       <button type="button" id="passwdOpen" class="addOpen" hidden>改密</button>
       <button type="button" id="logoutBtn" class="addOpen" hidden>登出</button>
@@ -152,6 +153,44 @@
       <div id="credStatus" class="addStatus"></div>
       <div class="addSection">已存凭据</div>
       <div id="credList"></div>
+    </div>
+  </div>
+
+  <!-- 客户端(LiteLLM 虚拟 key)管理。每个客户端一把 key,面板按名字显示用量。
+       明文 key 只在创建那一次返回,之后 litellm 只留摘要,谁都拿不回来 —— 所以
+       #cliNew 那个框是唯一能复制它的地方,关掉就没了。 -->
+  <div class="modal-mask" id="cliModal">
+    <div class="modal addModal">
+      <div class="modal-head">
+        <h2>客户端</h2>
+        <button class="modal-close" id="cliClose">关闭</button>
+      </div>
+      <div id="cliOff" class="credLocked" hidden>
+        <b>未配置 LITELLM_MASTER_KEY</b>
+        <span class="addMuted">连不上 litellm 的 key 接口(<span id="cliOffWhy"></span>),
+          无法新建或撤销客户端 key。</span>
+        <span class="addMuted">在宿主机 .env 里设 LITELLM_MASTER_KEY 后
+          <code>docker compose up -d</code> 重建容器即可。用量卡不受影响,只是显示短哈希而不是名字。</span>
+      </div>
+      <div id="cliForm">
+        <div class="credGrid">
+          <label>名字<input id="cliName" class="addInput" type="text" maxlength="40"
+                 placeholder="openclaw" autocomplete="off" /></label>
+        </div>
+        <div class="addFoot"><button type="button" id="cliCreate" class="addBtn primary">创建 key</button></div>
+      </div>
+      <div id="cliStatus" class="addStatus"></div>
+      <div id="cliNew" class="cliNew" hidden>
+        <b>这是唯一一次显示这把 key</b>
+        <span class="addMuted">关掉这个框就再也拿不回来了 —— litellm 只保存它的摘要。</span>
+        <div class="cliKeyRow">
+          <code id="cliNewKey" class="cliKey"></code>
+          <button type="button" id="cliCopy" class="addBtn">复制</button>
+        </div>
+      </div>
+      <div class="addSection">客户端与用量</div>
+      <div id="cliList"></div>
+      <div id="cliFoot" class="addMuted"></div>
     </div>
   </div>
 

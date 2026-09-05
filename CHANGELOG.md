@@ -49,6 +49,47 @@ on screen is the one from `package.json`, and this file is what needs fixing.
 
 ---
 
+## v2.14 — 2026-09-05
+
+**客户端管理:每个客户端一把 key,卡上按名字看用量。**
+
+*Rebuild required — `server/` + `web/` changed. 另需在 `.env` 里加 `LITELLM_MASTER_KEY`。*
+
+Per-Project Tokens 卡此前只能显 `key:57f0a7fc` 这种短哈希,因为 LiteLLM 的记账表
+`LiteLLM_DailyUserSpend.api_key` 存的就是 key 的 sha256 摘要 —— 名字在另一张只读角色看
+不到的表里,而 master key 干脆没有行。这一版从 proxy 自己的管理 API 取名字,于是有了一
+整套客户端管理。
+
+**新增「客户端」管理页**(登录后可见,与凭据面板同一套壳):
+
+- **新建** —— 输名字 → 调 `/key/generate`。LiteLLM 支持自定义 key 值,所以生成的是
+  `sk-homenet-<名字>-<随机后缀>` 这种一眼能认出归属的串,而不是随机 16 位。
+  **明文只在创建时返回一次**,之后 litellm 只留摘要,谁都拿不回来 —— 面板用一个红框说
+  明这件事,并且不写日志、不进任何存储。
+- **列表** —— 名字 + 总量/净增/请求数/今日请求 + 删除。master key 标成「网关自己的 key」
+  且不可删(它是 litellm 的配置字面量,不是这里铸的);已删除但仍有历史用量的 key 标
+  「已撤销」,用量继续显示 —— 撤销不该让账消失。
+- **撤销** —— 调 `/key/delete`。
+
+**Per-Project Tokens 卡改成按名字显示。** 新增 target 配置 `resolve_names: litellm_keys`:
+查询多返回一列 `raw_key`(摘要),采集器查 `/key/list` 换成别名写回 `project` 列,
+**然后把摘要删掉再交给前端**。查不到名字的行保留短哈希标签。
+
+**一个安全边界值得单独说。** `api_key` 那一列在对外网关上是个垃圾场:每个被拒的请求都按
+调用方送来的字符串记账。这台机器上它已经存着扫描器噪声、别人粘错的 shell 片段,以及
+**其他服务的真实凭据**(实测有一个 Telegram bot token 和一个 Tavily key)。所以
+`/api/clients` 的行集来自 LiteLLM key 接口返回的摘要 + master key 的哨兵值,**任何认不出
+的 api_key 值一律不回显**,只折成一个匿名计数(当前 53 个、1834 次请求)。
+
+**环境变量 `LITELLM_MASTER_KEY`**(compose 已透传)。没配也能跑:管理页显示「未配置」、
+卡回落成短哈希、其它一切不变 —— 与金库锁定时的行为一致。`LITELLM_BASE_URL` 默认
+`http://litellm:4000`,即 compose 上那个外部网络的服务名;**不是 127.0.0.1** —— hub 在自己
+的容器里,localhost 是它自己(实测过)。
+
+全部接口 behind `ADMIN`(会话)/ `ADMIN_WRITE`(会话 + 同源):未登录 401,跨源写 403。
+
+---
+
 ## v2.13.1 — 2026-09-05
 
 **页脚版本号不再落后:`package.json` 改成从宿主挂载读,配置类发布不用为了一个字符串 rebuild。**

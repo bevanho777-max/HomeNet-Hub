@@ -12,6 +12,7 @@ import { initHistory, historyRefresh } from './renderers/history.js';
 import { initMachineDetail, openMachineModal, closeMachineModal, bindMachineModal } from './renderers/machine_detail.js';
 import { bindAddTarget, closeAddPanel, openAddPanel } from './renderers/add_target.js';
 import { bindCredentials, closeCredPanel } from './renderers/credentials.js';
+import { bindClients, closeClientsPanel } from './renderers/clients.js';
 import { bindSession, refreshSession, sessionLost, closeLoginPanel, closeSetupPanel, maybeOpenSetup, isAuthed, openLoginPanel } from './renderers/session.js';
 import { bindDemoBar, applyDemoBar, emptyBoardHtml } from './renderers/demo.js';
 import { esc, statusLevel } from './renderers/common.js';
@@ -482,6 +483,13 @@ bindAddTarget({
 bindCredentials({
   onChanged: async () => { await configTick(false); await snapTick(); },
 });
+// Minting or revoking a client key changes what the Per-Project card can put a name to,
+// so it refreshes through the same path. The card resolves names server-side on its own
+// 5m poll, so a brand-new key shows as a hash until that lands — the panel is the
+// authoritative view in the meantime, which is where the operator already is.
+bindClients({
+  onChanged: async () => { await configTick(false); await snapTick(); },
+});
 // admin-auth: logging in or out changes what this tab may see AND what it may show, so
 // both directions refresh the board through the same two ticks everything else uses.
 // Logging out also closes any admin panel left open behind the modal.
@@ -489,6 +497,7 @@ bindSession({
   onChange: async () => {
     closeAddPanel();
     closeCredPanel();
+    closeClientsPanel();
     await configTick(false);
     await snapTick();
   },
