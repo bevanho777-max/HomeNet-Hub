@@ -5,12 +5,38 @@ All notable changes since the initial release (`bf92853`).
 Deploy on the host with:
 
 ```bash
-cd <repo> && git pull && docker compose up -d --build
+cd <repo> && git pull
+
+# server/ or web/ changed  →  rebuild the image
+docker compose up -d --build
+
+# only config/ changed (a bare version bump counts)  →  no rebuild.
+# The YAML hot-reloads on its own; this is only to move the footer version.
+docker compose restart homenet-hub
 ```
 
-**Rebuild note:** `--build` is required whenever `server/` or `web/` changed (the
-frontend is baked into the image). Commits that only touch `agents/` or `docs/`
-need `git pull` alone. Each entry below is tagged accordingly.
+**Which one:** `--build` is required whenever `server/` or `web/` changed — the frontend
+is baked into the image. Commits that only touch `agents/` or `docs/` need `git pull`
+alone. Each entry below is tagged accordingly.
+
+**Why `restart` and not `up -d` for a config release.** Since v2.13.1 the version string
+is read from a bind-mounted `package.json` rather than the copy baked into the image, so
+a no-rebuild release *can* move the footer — but only if the process restarts, and only
+if the container re-reads the file. Both of those need `restart`:
+
+- `VERSION` is read **once at import**, so a running process keeps reporting the old
+  number no matter what the file says.
+- `docker compose up -d` recreates the container **only when the compose file, image or
+  env changed**. After a config-only release it prints `Container homenet-hub Running`
+  and does nothing.
+- A single-file bind mount binds an **inode**. An in-place rewrite is seen immediately;
+  `git pull` writes a new file and renames over the old one, so the container keeps
+  serving the *previous* contents until it is restarted. (Measured, not assumed — in a
+  throwaway container: in-place edit → visible at once; rename-replace → still the old
+  bytes; `docker restart` → the new ones.)
+
+So: `--build` after a code release, `restart` after a config release, and `git pull`
+alone only when nothing needs to reach the running container.
 
 **Releasing:** bump `version` in `package.json` and add the matching section heading
 here, in the same commit. The panel reads that field at startup and shows it in the

@@ -538,12 +538,26 @@ sqlite3 data/homenet.db "DELETE FROM settings WHERE k='demo_dismissed';"
 **Deploying an update on the host:**
 
 ```bash
-cd <repo> && git pull && docker compose up -d --build
+cd <repo> && git pull
+
+# server/ or web/ changed  →  rebuild the image
+docker compose up -d --build
+
+# only config/ changed (a bare version bump counts)  →  no rebuild.
+# The YAML hot-reloads by itself; this is only to move the footer version.
+docker compose restart homenet-hub
 ```
 
 `--build` is required whenever `server/` or `web/` changed — the frontend is baked into
 the image. Changes confined to `agents/` or `docs/` need `git pull` alone. Every
 [CHANGELOG](CHANGELOG.md) entry is tagged with which it needs.
+
+A config-only release wants `restart`, not `up -d`. Since v2.13.1 `package.json` is
+bind-mounted rather than read from the image, so the footer version *can* move without a
+rebuild — but `VERSION` is read once at import, `up -d` does not recreate a container
+whose compose file, image and env are all unchanged (it just prints
+`Container homenet-hub Running`), and a single-file bind mount binds an inode, so the
+rename `git pull` performs is invisible until the container restarts.
 
 ---
 

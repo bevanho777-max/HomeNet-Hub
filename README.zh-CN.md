@@ -464,12 +464,29 @@ sqlite3 data/homenet.db "DELETE FROM settings WHERE k='demo_dismissed';"
 **在宿主机上部署更新:**
 
 ```bash
-cd <repo> && git pull && docker compose up -d --build
+cd <repo> && git pull
+
+# 改了 server/ 或 web/  →  重建镜像
+docker compose up -d --build
+
+# 只改了 config/(只 bump 版本号也算)  →  不用重建。
+# YAML 本身会热重载,这一步只是让页脚的版本号跟上。
+docker compose restart homenet-hub
 ```
 
 只要 `server/` 或 `web/` 有改动就必须带 `--build` —— 前端是烤进镜像的。只动
 `agents/` 或 `docs/` 的提交,`git pull` 就够。[CHANGELOG](CHANGELOG.md) 里每一条都标了
 该用哪种。
+
+**纯 config 发布要用 `restart`,不是 `up -d`。** v2.13.1 起 `package.json` 改成挂载进容器
+而不是从镜像里读,所以不重建也能让页脚追上版本号 —— 但有三个条件都得靠 `restart` 满足:
+
+- `VERSION` 是 **import 时读一次**,进程不重启就一直报旧号,文件写成什么都没用。
+- `docker compose up -d` **只在 compose 文件、镜像或 env 变了时**才重建容器。纯 config
+  发布之后它只会打印 `Container homenet-hub Running`,什么也不做。
+- 单文件 bind mount 绑的是 **inode**:就地改写立刻可见,而 `git pull` 是写新文件再改名
+  覆盖,容器会继续读到**旧内容**,直到重启。(实测过,不是推断:一次性容器里就地改写 →
+  当场可见;rename 覆盖 → 仍是旧字节;`docker restart` → 新的。)
 
 ---
 
