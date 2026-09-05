@@ -27,6 +27,27 @@ services:
     volumes:
       - ./config:/app/config:ro          # YAML config, read-only mount (edit on host → chokidar hot-reload)
       - ./data:/app/data                 # SQLite timeseries volume (persisted)
+      # The version string, and ONLY that. server/version.js reads `.version` out of
+      # /app/package.json at startup and takes nothing else from it; deps were resolved
+      # by `npm install` at BUILD time and live in the image's node_modules, so mounting
+      # the host file changes no dependency, script or install behaviour.
+      #
+      # Why: without this the version is baked into the image, so a release that only
+      # touches config/ or agents/ — which needs no rebuild — leaves the footer showing
+      # the previous version. That drifted twice (v2.11, v2.13) before this mount.
+      #
+      # Two things this file DOES still decide at runtime: `"type": "module"` (Node reads
+      # the nearest package.json to pick the module goal) and the `imports`/`exports`
+      # fields. Keep them intact — a host package.json that loses `"type": "module"` will
+      # stop the container from booting, where the baked copy could not be broken from
+      # outside. version.js itself is already defensive: unreadable file or a version that
+      # is not a plain semver-ish string → the version simply goes unreported.
+      #
+      # A single-file bind mount binds an INODE. An in-place rewrite (what an editor or a
+      # version bump does) is seen immediately; a replace-and-rename (git checkout) is not
+      # picked up until the container is recreated. Either way VERSION is read once at
+      # import, so the footer only moves after the process restarts.
+      - ./package.json:/app/package.json:ro
     extra_hosts: []                      # LAN direct, nothing special
     networks:
       - default

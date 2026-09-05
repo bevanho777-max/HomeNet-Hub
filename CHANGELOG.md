@@ -23,6 +23,39 @@ on screen is the one from `package.json`, and this file is what needs fixing.
 
 ---
 
+## v2.13.1 — 2026-09-05
+
+**页脚版本号不再落后:`package.json` 改成从宿主挂载读,配置类发布不用为了一个字符串 rebuild。**
+
+*No rebuild — `docker compose up -d` 重建容器即可(挂上新 volume,几秒)。*
+
+`server/version.js` 在启动时读 `/app/package.json` 的 `version`,而 Dockerfile 是
+`COPY package.json ./` —— 版本号被烤进镜像。于是任何**不需要 rebuild** 的发布(只改
+`config/` 或 `agents/`)都会留下页脚显示旧版本:v2.11 和 v2.13 各发生过一次,tag 是新的、
+屏幕是旧的,而本文件开头就写着「`package.json` 是权威,屏幕上显示的是它」。
+
+修法是一行 compose 挂载:
+
+```yaml
+- ./package.json:/app/package.json:ro
+```
+
+**不影响任何依赖。** 依赖是构建时 `npm install` 解析并烤进镜像 `node_modules` 的,运行时
+不会再读 `dependencies`;`version.js` 也只取 `.version` 一个字段,其余一概不碰。
+
+**两件仍由这个文件在运行时决定的事**,改它的时候要留意:`"type": "module"`(Node 靠最近的
+package.json 判断模块类型)和 `imports`/`exports`。宿主上的 package.json 若丢了
+`"type": "module"`,容器会起不来 —— 这是新引入的耦合,烤在镜像里的那份没法从外面弄坏。
+`version.js` 本身已经是防御性的:文件读不到、或 version 不是普通 semver 字符串,就不报版本
+而不是崩掉。
+
+**注意生效时机。** 单文件 bind mount 绑的是 inode:就地改写(编辑器、版本号 bump)容器立刻
+看得到;replace-and-rename(`git checkout`)要等容器重建。而 `VERSION` 是 import 时读一次,
+所以页脚只在**进程重启后**才动 —— 以后只改 `config/` 的发布,配置本身照旧热重载,想让页脚
+一起追上就再跑一次 `docker compose restart homenet-hub`。
+
+---
+
 ## v2.13 — 2026-09-05
 
 **Per-Project Tokens 卡也加上"净增":每个 key 的账面量里有多少是真算过的。**
