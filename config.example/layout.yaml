@@ -134,8 +134,19 @@ grid:
   #   columns:
   #     project:        "Project"
   #     tokens_total:   { label: "Tokens", format: compact }
+  #     # Actually-new tokens: prompt minus the KV-cached prefix, plus completion.
+  #     # Requires the net_total column from queries/project_tokens.sql.
+  #     #
+  #     # FOUR figure columns is what a 300px-min card holds. The table is
+  #     # table-layout:fixed with the identity column pinned at 36%, so a fifth column
+  #     # shrinks every figure to ~16% and an 8-character token count truncates under
+  #     # the ellipsis — measured, not guessed. For the same reason the net is its own
+  #     # column rather than "616M (21%)" inside the Tokens cell: the combined value is
+  #     # wider than either number alone and truncates sooner. Compare across the row.
+  #     # tokens_7d / tokens_30d are still returned by the query — swap one in here if
+  #     # recency matters more to you than request counts.
+  #     net_total:      { label: "Net",    format: compact }
   #     requests_total: { label: "Reqs",   format: number }
-  #     tokens_7d:      { label: "7d",     format: compact }
   #   empty_note: "No chat traffic recorded yet."
   #   hint: "One row per API key. Chat models only — embedding/rerank excluded."
 

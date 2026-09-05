@@ -70,7 +70,14 @@ chat AS (
     d.api_key                                       AS raw_key,
     d.date::date                                    AS day,
     (d.prompt_tokens + d.completion_tokens)::bigint AS tokens,
-    d.api_requests::bigint                          AS requests
+    d.api_requests::bigint                          AS requests,
+    -- Carried through raw (not pre-combined) so the GREATEST below can be applied
+    -- to the PROJECT's sums rather than per (key x date x model) row. Clamping each
+    -- row first would quietly change the answer if any single row ever reported more
+    -- cache reads than prompt tokens; clamping the sum is the stated definition.
+    d.prompt_tokens::bigint                         AS prompt_tokens,
+    d.cache_read_input_tokens::bigint               AS cache_read_tokens,
+    d.completion_tokens::bigint                     AS completion_tokens
   FROM "LiteLLM_DailyUserSpend" d
   WHERE NOT EXISTS (
     SELECT 1 FROM excluded_models x WHERE lower(d.model) LIKE x.pattern
@@ -92,12 +99,21 @@ labelled AS (
       WHEN COALESCE(raw_key, '') = ''            THEN '(unattributed)'
       ELSE left(raw_key, 16)
     END AS project,
-    day, tokens, requests
+    day, tokens, requests, prompt_tokens, cache_read_tokens, completion_tokens
   FROM chat
 )
 SELECT
   project,
   COALESCE(SUM(tokens),   0)::bigint                                      AS tokens_total,
+  -- ACTUALLY-NEW tokens: the prompt minus the prefix that came back from KV cache,
+  -- plus the completion. LiteLLM bills a request's full replayed context as prompt
+  -- tokens on every turn, so one long agentic session that resends a growing 50k
+  -- history reads as tens of millions of tokens while the backend only ever processed
+  -- the handful of new ones. On 2026-09-04 that gap was 18.81M vs 0.47M -- 2.5% -- for
+  -- a single model. Without this column the card measures how much context moved, and
+  -- reads as if it measured how much work was done.
+  (GREATEST(COALESCE(SUM(prompt_tokens), 0) - COALESCE(SUM(cache_read_tokens), 0), 0)
+   + COALESCE(SUM(completion_tokens), 0))::bigint                         AS net_total,
   COALESCE(SUM(requests), 0)::bigint                                      AS requests_total,
   COALESCE(SUM(tokens) FILTER (WHERE day > CURRENT_DATE - 7),  0)::bigint AS tokens_7d,
   COALESCE(SUM(tokens) FILTER (WHERE day > CURRENT_DATE - 30), 0)::bigint AS tokens_30d,

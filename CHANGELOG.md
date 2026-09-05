@@ -23,6 +23,39 @@ on screen is the one from `package.json`, and this file is what needs fixing.
 
 ---
 
+## v2.13 — 2026-09-05
+
+**Per-Project Tokens 卡也加上"净增":每个 key 的账面量里有多少是真算过的。**
+
+*No rebuild — `config/` + `queries/` only. 热重载即可。*
+
+延续 v2.12 的口径,这次落到按 key 的表上。`queries/project_tokens.sql` 每行多算一个
+`net_total = GREATEST(SUM(prompt_tokens) − SUM(cache_read_input_tokens), 0)
++ SUM(completion_tokens)`,仍是 chat 口径(embed/bge/gte-/rerank 照旧排除)。
+`GREATEST` 作用在**项目的合计**上而不是逐行,以匹配定义 —— 所以 CTE 里把三个原始列
+透传下去,而不是提前合并。
+
+线上实测:
+
+| Project | Tokens | 净增 | 占比 |
+|---|---:|---:|---:|
+| (master key) | 618.27M | **127.72M** | 20.7% |
+| key:f8c96d72 | 231.1K | 33.1K | 14.3% |
+| key:57f0a7fc | 21.4K | 21.4K | 99.8% |
+| litellm-internal | 620 | 294 | 47.4% |
+
+master key 单日口径更极端:2026-09-04 是 24.11M → 803.9K(**3.33%**),因为那天几乎全是
+一条长会话在重放同一段 5 万 token 的上下文。
+
+**`7d` 列让位给了 `净增`。** 这张卡放不下五列 —— 实测 `table-layout:fixed` 把首列固定的
+36% 之外均分给四个数字格(每格约 16%),`618.27M` 会被截成 `618…`,连表头 `TOKENS` 都
+变成 `TOK…`。同理也没把净增塞进 Tokens 格写成 `618.27M (21%)`:那比两个独立数字更宽,
+截得更早。`tokens_7d` / `tokens_30d` 仍由查询返回,想换回来改一行 layout 即可。
+
+`server/` 与 `web/` 零改动 —— table 渲染器本来就是全配置驱动的,加一列不需要碰代码。
+
+---
+
 ## v2.12 — 2026-09-05
 
 **Token 卡加"实际新增":总量里有多少是真算过的,多少只是被重放的缓存上下文。**
