@@ -423,6 +423,11 @@ h2:empty { display: none; } /* 堆叠卡外框无标题时不留空行 */
 .modal .tbl th, .modal .tbl td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--hair); }
 .modal .tbl th { color: var(--muted2); font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
 .modal .tbl .sw { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 8px; vertical-align: middle; }
+/* 弹窗表格的数字列右对齐 + 等宽数字,和卡面那张表读起来一致(.card .tbl 早有同款规则,
+   .modal .tbl 之前没有,因为在此之前弹窗里只有 token 那张全是短数字的表)。 */
+.modal .tbl th.num, .modal .tbl td.num { text-align: right; font-variant-numeric: tabular-nums; }
+/* "查看全部(共 N)" —— 这条是行动号召,和 hint 那种常驻说明区分开,所以给它正文色。 */
+.card .tblMore { color: var(--text); font-weight: 500; }
 
 /* ---------- 原始 JSON ---------- */
 .raw { margin: 0 var(--s6) var(--s6); }

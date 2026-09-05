@@ -10,6 +10,7 @@ import { renderInfo } from './renderers/info.js';
 import { renderTable } from './renderers/table.js';
 import { initHistory, historyRefresh } from './renderers/history.js';
 import { initMachineDetail, openMachineModal, closeMachineModal, bindMachineModal } from './renderers/machine_detail.js';
+import { openTableModal, closeTableModal, bindTableModal } from './renderers/table_detail.js';
 import { bindAddTarget, closeAddPanel, openAddPanel } from './renderers/add_target.js';
 import { bindCredentials, closeCredPanel } from './renderers/credentials.js';
 import { bindClients, closeClientsPanel } from './renderers/clients.js';
@@ -72,6 +73,10 @@ function mountCards(containerId, cards) {
 // routing lives with the card definition rather than being re-derived from the layout.
 function openCardModal(c) {
   if (c.kind === 'machine') openMachineModal(c.key, `${c.title} Detail`);
+  // A table card only becomes clickable when it has rows the front could not fit, and it
+  // carries them on the card object — so this modal opens from data already in hand
+  // rather than a second fetch.
+  else if (c.kind === 'table') openTableModal(c);
   else openTokenModal(c.key);
 }
 
@@ -472,6 +477,7 @@ function drawTokenChart(series) {
 $('#tokenModalClose').onclick = closeTokenModal;
 $('#tokenModal').onclick = (e) => { if (e.target.id === 'tokenModal') closeTokenModal(); };
 bindMachineModal();
+bindTableModal();
 // Slice 3: the add-target panel refreshes the board through the same two ticks a
 // hot-reload would use, rather than reaching into the renderers itself. A new target
 // changes the config etag, so configTick fetches instead of 304-ing.
@@ -498,6 +504,7 @@ bindSession({
     closeAddPanel();
     closeCredPanel();
     closeClientsPanel();
+    closeTableModal();
     await configTick(false);
     await snapTick();
   },

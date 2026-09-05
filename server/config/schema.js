@@ -216,6 +216,23 @@ const gridCard = {
         ],
       },
     },
+    // table card: the modal's column map, same shape as `columns`. Omitted, the modal
+    // derives its own from whatever the rows carry — see web/renderers/table_detail.js
+    // for why that derivation has a denylist rather than trusting the query.
+    detail_columns: {
+      type: 'object',
+      additionalProperties: {
+        anyOf: [
+          { type: 'string' },
+          {
+            type: 'object',
+            required: ['label'],
+            properties: { label: { type: 'string' }, format: { enum: ['compact', 'number', 'text'] } },
+            additionalProperties: true,
+          },
+        ],
+      },
+    },
     // table card: what to show instead of rows when the query returns none.
     empty_note: { type: 'string' },
     // §12-step2 patch: token card front labels { today, requests_suffix, total }

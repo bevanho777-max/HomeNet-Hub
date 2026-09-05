@@ -49,6 +49,36 @@ on screen is the one from `package.json`, and this file is what needs fixing.
 
 ---
 
+## v2.15 — 2026-09-05
+
+**table 卡:放不下的行不再消失,点开看全部。**
+
+*Rebuild required — `web/` + `server/config/schema.js` changed.*
+
+`type: table` 的卡此前把查询返回的每一行都画出来,行数一多就把自己撑得比邻居高;而卡宽只
+放得下四列,`7d`/`30d`/首末日期这些查询本来就返回的列根本没地方显示。
+
+- **卡面只留前 N 行**(`front_max`,默认 6 —— 默认卡高放得下的行数)。超过 N 时卡片变成
+  可点,底部出一行 `查看全部（共 N）`。**没超过就不可点、不出提示**,和其它没有细节可看
+  的卡一致。
+- **点开弹窗给全部行 + 全部列**,复用 token / 机器卡那个 `.modal` 壳(它本来就是
+  `max-height:90vh; overflow:auto`,滚动是白拿的)。新增 `detail_columns` 配置声明弹窗的
+  列;Per-Project 卡由此补齐了 `7d` / `30d` / `首次` / `最近`。
+- **纯 view,不需要登录、不发请求。** 弹窗用的就是卡片渲染时那份快照的行,挂在卡对象上
+  传过去 —— 所以它和卡面永远不会不一致,也不可能显示公开面板没有的东西。
+
+**列的两级信任。** `columns` / `detail_columns` 里声明的列是有人在 layout.yaml 里做的决定,
+原样渲染。没声明 `detail_columns` 时弹窗会从行里**推导**列 —— 那是没人做过的决定,所以推
+导出来的列要再过两关:按**列名**(`key`/`api_key`/`token`/`password_hash` 等整词结尾)和按
+**值的形状**(`sk-` 前缀、32 位以上连续十六进制)。值检查只作用于推导列,不动声明列 ——
+把操作者亲手选的列悄悄抹掉,等于和他正看着的卡片唱反调。
+
+开发中这条规则的第一版把 `token` 当子串匹配,会连 `tokens_total`、`tokens_7d` 一起藏掉 ——
+正好是这张卡最重要的列。改成整词结尾后测过:`tokens_total` / `net_total` 放行,
+`raw_key` / `api_key` / `key_digest` 拦截。
+
+---
+
 ## v2.14 — 2026-09-05
 
 **客户端管理:每个客户端一把 key,卡上按名字看用量。**

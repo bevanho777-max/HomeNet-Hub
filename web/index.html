@@ -211,6 +211,19 @@
     </div>
   </div>
 
+  <!-- table detail modal:type:table 卡点开后的全量视图。数据来自卡片已经渲染过的那份
+       快照,不发请求 —— 所以它和卡面同一个安全口径,也不需要登录。.modal 本身
+       max-height:90vh + overflow:auto,滚动是白拿的。 -->
+  <div class="modal-mask" id="tableModal">
+    <div class="modal">
+      <div class="modal-head">
+        <h2 id="tableModalTitle"></h2>
+        <button class="modal-close" id="tableModalClose">关闭</button>
+      </div>
+      <div id="tableModalBody"></div>
+    </div>
+  </div>
+
   <!-- machine detail modal (§6): same shell as the token modal, History's chart inside -->
   <div class="modal-mask" id="machineModal">
     <div class="modal">

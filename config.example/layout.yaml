@@ -147,6 +147,24 @@ grid:
   #     # recency matters more to you than request counts.
   #     net_total:      { label: "Net",    format: compact }
   #     requests_total: { label: "Reqs",   format: number }
+  #   # Rows kept on the card front. Over this many and the card becomes clickable, grows
+  #   # a "查看全部（共 N）" line, and opens a modal with every row and every column.
+  #   # At or under it the card stays inert, like any other card with nothing more to show.
+  #   # Default is 6 — what fits at the default card height.
+  #   front_max: 4
+  #   # The modal's columns. The front is width-limited to four; the windows and dates the
+  #   # query already returns go here. Declaring this also switches the modal off its
+  #   # derive-from-the-rows fallback, which is the safer mode: that fallback has to guess,
+  #   # and it guesses with a denylist (see web/renderers/table_detail.js).
+  #   detail_columns:
+  #     project:        "Project"
+  #     tokens_total:   { label: "Tokens", format: compact }
+  #     net_total:      { label: "Net",    format: compact }
+  #     requests_total: { label: "Reqs",   format: number }
+  #     tokens_7d:      { label: "7d",     format: compact }
+  #     tokens_30d:     { label: "30d",    format: compact }
+  #     first_day:      { label: "First",  format: text }
+  #     last_day:       { label: "Last",   format: text }
   #   empty_note: "No chat traffic recorded yet."
   #   hint: "One row per API key. Chat models only — embedding/rerank excluded."
 
