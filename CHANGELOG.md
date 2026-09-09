@@ -103,7 +103,7 @@ chrome,不是演示内容。
 同理,面板上那句**结果**(「密码错误。」)不会被改写成另一种语言:它是当时报出来的事实。
 
 **实配翻译**(同步到私有仓 `homenet-config`):六台机器的 `name_en`(`GPU · 机器 26` →
-`GPU · Box 26` 等)、token 卡与 Per-Project 卡的「净增 / 实际新增 / 首次 / 最近」,以及
+`GPU · Machine 26` 等)、token 卡与 Per-Project 卡的「净增 / 实际新增 / 首次 / 最近」,以及
 Per-Project 那句中英混排的 `hint`。`config.example` 本来就是全英文,所以那边加的 `_en` 是
 **示范用的镜像值** + 一段约定说明,让示例文件本身就是这个特性的参考。
 
