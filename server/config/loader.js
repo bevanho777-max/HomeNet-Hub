@@ -94,10 +94,14 @@ function stripDemoContent(targets, layout) {
     targets.doc = { ...targets.doc, targets: [] };
   }
   if (layout.fallback) {
-    const { header, text } = layout.doc || {};
+    // `text_en` travels with `text` for the same reason `text` survives at all: it is page
+    // chrome, not demo content, and dropping only the English half would leave an EN
+    // viewer's cleared board falling back to whatever `text` says.
+    const { header, text, text_en } = layout.doc || {};
     layout.doc = {
       ...(header ? { header } : {}),
       ...(text ? { text } : {}),
+      ...(text_en ? { text_en } : {}),
       grid: [],
       status_bar: { targets: [] },
       // Not `null`: the layout schema has no `history` requirement, and omitting it is
@@ -193,11 +197,18 @@ export function computeEtag(merged) {
  * never urls, dsns, or token env names.
  */
 export function publicConfig(cfg) {
+  // A WHITELIST, not a blocklist: whatever is added to targets.yaml stays server-side
+  // unless it is named here. `name_en` / `badge_en` are the display text an English viewer
+  // sees, so they have to be named — everything else about the target still does not
+  // leave. Both are emitted only when set, so a config without them serves the same
+  // bytes it served before.
   const targets = (cfg.targets.targets || []).map((t) => ({
     id: t.id,
     name: t.name || t.id,
+    ...(t.name_en ? { name_en: t.name_en } : {}),
     color: t.color || null,
     badge: t.badge || null,
+    ...(t.badge_en ? { badge_en: t.badge_en } : {}),
     enabled: t.enabled !== false,
     type: t.source?.type || null,
   }));
@@ -210,6 +221,11 @@ export function publicConfig(cfg) {
     targets,
     layout: {
       text: cfg.layout.text || {},
+      // Also a whitelist (see `targets` above): `text_en` is the EN half of the chrome
+      // labels and has to be named here or an English viewer silently falls back to
+      // `text` for every one of them. Emitted only when set, so a config without it
+      // serves the same bytes it served before.
+      ...(cfg.layout.text_en ? { text_en: cfg.layout.text_en } : {}),
       status_bar: cfg.layout.status_bar || { targets: [] },
       grid: cfg.layout.grid || [],
       history: cfg.layout.history || null,

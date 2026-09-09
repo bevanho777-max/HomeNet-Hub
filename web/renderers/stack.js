@@ -3,6 +3,7 @@
 // / identity color); children share the outer .card frame, separated by a hairline.
 // The stack card's header_right/items/labels apply to every child.
 import { card, esc } from './common.js';
+import { cv } from '../i18n.js';
 import { renderService } from './service.js';
 
 export function renderStack(gc, resolve, metrics) {
@@ -14,7 +15,7 @@ export function renderStack(gc, resolve, metrics) {
     items: gc.items,
     labels: gc.labels,
   };
-  const label = (k) => metrics?.[k]?.label || k;
+  const label = (k) => cv(metrics?.[k], 'label') || k;
   const inners = (gc.children || []).map((childId) => {
     const { target, snap } = resolve(childId);
     if (!target) return '';
@@ -53,7 +54,7 @@ export function renderStack(gc, resolve, metrics) {
   const minW = Number(gc.min_row_width) || ((gc.children || []).length * 180);
   return card({
     key: gc.key || `stack:${(gc.children || []).join(',')}`,
-    title: gc.title || '',                 // outer frame usually title-less; children carry headers
+    title: cv(gc, 'title') || '',          // outer frame usually title-less; children carry headers
     body: `<div class="stack" data-dir="${dir}" data-min="${minW}"><div class="stack-inner">${inners}</div></div>`,
     accent: gc.accent || '',
     stale: false,

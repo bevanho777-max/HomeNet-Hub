@@ -16,11 +16,21 @@
 #                      carrying its own unit (°C, W, counts) belongs on the
 #                      auto-scaling right axis. Defaults are built in per key.
 #   color: "#rrggbb"   line colour; falls back to a built-in palette.
+#
+# i18n: `label` may carry a `label_en` sibling, used when the viewer picks EN in the
+# header switch (see the block at the top of layout.yaml). `unit` and `format` never do —
+# a unit is a symbol and a format is a template, and neither is prose. Nor does the metric
+# KEY: it is the reference layout.yaml and the collectors match on. With no `label_en`,
+# the base label is shown in both languages, which is why the mostly-symbolic labels
+# below only need one where the word is actually English prose.
 
 metrics:
-  cpu:         { label: "CPU",     unit: "%",  thresholds: { warn: 70, danger: 90 } }
-  mem_pct:     { label: "Memory",  unit: "%",  thresholds: { warn: 80, danger: 92 } }
-  disk_pct:    { label: "Disk",    unit: "%",  thresholds: { warn: 75, danger: 90 } }
+  # `label_en` mirrors `label` here because this file is already written in English —
+  # they show the shape. Translate `label` into your own language and these keep the
+  # English; drop them and both languages get whatever `label` says.
+  cpu:         { label: "CPU",     label_en: "CPU",    unit: "%",  thresholds: { warn: 70, danger: 90 } }
+  mem_pct:     { label: "Memory",  label_en: "Memory", unit: "%",  thresholds: { warn: 80, danger: 92 } }
+  disk_pct:    { label: "Disk",    label_en: "Disk",   unit: "%",  thresholds: { warn: 75, danger: 90 } }
   gpu:         { label: "GPU",     unit: "%",  thresholds: { warn: 80, danger: 95 } }
   vram_pct:    { label: "VRAM",    unit: "%",  thresholds: { warn: 80, danger: 92 } }
   gpu_temp:    { label: "Temp",    unit: "°C", thresholds: { warn: 75, danger: 88 } }

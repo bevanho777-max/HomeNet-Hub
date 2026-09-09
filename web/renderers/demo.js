@@ -11,6 +11,7 @@
 // reconfigured the server, or that clearing the demo left the banner up on every other
 // device until each one was clicked.
 import { esc } from './common.js';
+import { t } from '../i18n.js';
 
 const $ = (s) => document.querySelector(s);
 const HIDE_KEY = 'hnh_demo_bar_hidden';
@@ -47,7 +48,7 @@ export function applyDemoBar(config, authed) {
   // would leave a logged-out visitor with no hint that the demo CAN be cleared — but
   // clicking it while logged out routes to the login/first-run box instead of a 401.
   const clear = $('#demoClear');
-  if (clear) clear.textContent = state.authed ? '清空演示' : '清空演示(需登录)';
+  if (clear) clear.textContent = state.authed ? t('demo_clear') : t('demo_clear_locked');
 }
 
 async function clearDemo() {
@@ -55,13 +56,11 @@ async function clearDemo() {
   if (!state.authed) return hooks.needsLogin?.();
   // A one-way action for the whole install: worth one deliberate confirmation. Native
   // confirm() rather than a bespoke modal — this fires at most once in an install's life.
-  if (!window.confirm('清空演示数据?\n\n示例机器与卡片会从这块板子上消失,只留下你自己添加的目标。'
-    + '\n这个操作会保存在服务端,刷新后依然生效,并且没有撤销按钮 —— '
-    + '要恢复演示板需要在服务器上清掉 settings 里的 demo_dismissed。')) return;
+  if (!window.confirm(t('demo_confirm'))) return;
 
   busy = true;
   $('#demoClear').disabled = true;
-  setText('正在清空…', 'busy');
+  setText(t('demo_clearing'), 'busy');
   try {
     // The body is '{}' rather than absent: declaring content-type application/json and
     // then sending nothing is what Fastify's JSON parser rejects with a 400
@@ -80,15 +79,15 @@ async function clearDemo() {
       const bar = $('#demoBar');
       if (bar) bar.hidden = true;
     } else if (r.status === 401) {
-      setText('会话已失效,请重新登录后再试。', 'bad');
+      setText(t('demo_expired'), 'bad');
       hooks.needsLogin?.();
     } else if (r.status === 403) {
-      setText('请求被拒(跨站来源)。', 'bad');
+      setText(t('cross_site'), 'bad');
     } else {
-      setText(esc(String(j.reason || '清空失败。')), 'bad');
+      setText(esc(String(j.reason || t('demo_failed'))), 'bad');
     }
   } catch (e) {
-    setText(`请求失败:${esc(String(e?.message || e))}`, 'bad');
+    setText(t('req_failed', esc(String(e?.message || e))), 'bad');
   } finally {
     busy = false;
     const b = $('#demoClear');
@@ -114,9 +113,7 @@ export function bindDemoBar(opts = {}) {
  */
 export function emptyBoardHtml(authed) {
   return `<div class="emptyBoard">
-    <div class="emptyTitle">还没有目标</div>
-    <div class="emptyHint">${authed
-      ? '点右上角的「＋ 添加目标」来发现并添加你自己的机器。'
-      : '先用右上角的「管理登录」登录,然后就能添加你自己的机器。'}</div>
+    <div class="emptyTitle">${esc(t('empty_title'))}</div>
+    <div class="emptyHint">${esc(t(authed ? 'empty_hint_admin' : 'empty_hint_guest'))}</div>
   </div>`;
 }

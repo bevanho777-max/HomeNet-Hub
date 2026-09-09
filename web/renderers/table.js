@@ -4,6 +4,7 @@
 // entirely a layout decision (gridCard.columns). No per-purpose logic here — a
 // new table card is a new query file + a type:table card, zero code changes.
 import { card, esc } from './common.js';
+import { colmap, cv, t } from '../i18n.js';
 
 // Same compact scale the token pivot uses server-side, so a token count reads
 // identically on both cards.
@@ -37,22 +38,22 @@ function cell(value, format) {
 const DEFAULT_FRONT_MAX = 6;
 
 // Ordered map { key: "Label" | { label, format } } → the renderer's column list.
-export function parseColumns(map) {
-  return Object.entries(map || {}).map(([k, v]) => (
-    typeof v === 'string' ? { key: k, label: v, format: null }
-      : { key: k, label: v?.label ?? k, format: v?.format ?? null }
-  ));
+// Takes the CARD, not the map, because the English variant of a column map lives beside
+// it on the same card (`columns_en` / a per-entry `label_en`) and resolving one without
+// the other would translate the label while losing the format.
+export function parseColumns(gridCard, field) {
+  return Object.entries(colmap(gridCard, field)).map(([key, c]) => ({ key, label: c.label, format: c.format }));
 }
 
 export { cell };
 
 export function renderTable(gridCard, target, snap) {
-  const title = gridCard.title || target?.name || target?.id || 'Table';
+  const title = cv(gridCard, 'title') || target?.name || target?.id || 'Table';
   const accent = target?.color || '';
   const key = gridCard.target || title;
 
   // columns is an ordered map: key → "Label" | { label, format }
-  const cols = parseColumns(gridCard.columns);
+  const cols = parseColumns(gridCard, 'columns');
 
   const rows = Array.isArray(snap?.extra?.rows) ? snap.extra.rows : null;
 
@@ -61,7 +62,7 @@ export function renderTable(gridCard, target, snap) {
     // wear the same message: one is a broken card, the other is a true answer.
     const note = snap?.online === false
       ? `No data${snap?.error ? ` (${esc(snap.error)})` : ''}`
-      : esc(gridCard.empty_note || 'No rows');
+      : esc(cv(gridCard, 'empty_note') || 'No rows');
     return card({ key, title, accent, kind: 'table', body: `<div class="note">${note}</div>` });
   }
 
@@ -80,9 +81,10 @@ export function renderTable(gridCard, target, snap) {
   // only reason the card becomes clickable. A card that fits stays inert, exactly like
   // every other card whose detail view would add nothing.
   const more = overflow
-    ? `<div class="note tblMore">${esc(gridCard.more_label || '查看全部')}（共 ${rows.length}）</div>`
+    ? `<div class="note tblMore">${esc(cv(gridCard, 'more_label') || t('table_more'))}${t('table_count', rows.length)}</div>`
     : '';
-  const hint = gridCard.hint ? `<div class="note">${esc(gridCard.hint)}</div>` : '';
+  const hintText = cv(gridCard, 'hint');
+  const hint = hintText ? `<div class="note">${esc(hintText)}</div>` : '';
   return card({
     key, title, accent, kind: 'table',
     clickable: overflow,

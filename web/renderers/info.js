@@ -4,16 +4,19 @@
 // target snapshot (same templating as header_right). No per-purpose logic — add
 // any "info box" by adding a type:info card in layout.yaml, zero code changes.
 import { card, mget, lvClass, esc } from './common.js';
+import { cv } from '../i18n.js';
 
 export function renderInfo(gridCard, target, snap) {
-  const title = gridCard.title || target?.name || target?.id || 'Info';
+  const title = cv(gridCard, 'title') || target?.name || target?.id || 'Info';
   const accent = target?.color || '';
 
   const items = (gridCard.items || []).map((it) => {
     if (it == null || typeof it !== 'object') return '';
-    const val = String(it.value ?? '').replace(/\{(\w+)\}/g, (_, k) => mget(snap, k).display ?? '—');
+    // Both halves are display text, so both take an `_en` sibling: a static info row is
+    // often a sentence ("Demo (synthetic data)"), not just a labelled number.
+    const val = String(cv(it, 'value') ?? '').replace(/\{(\w+)\}/g, (_, k) => mget(snap, k).display ?? '—');
     const cls = it.level ? lvClass(it.level) : '';
-    return `<div class="item"><span class="label">${esc(it.label)}</span><span class="value ${cls}">${esc(val)}</span></div>`;
+    return `<div class="item"><span class="label">${esc(cv(it, 'label'))}</span><span class="value ${cls}">${esc(val)}</span></div>`;
   }).join('');
 
   return card({ key: gridCard.target || title, title, body: `<div class="kv">${items}</div>`, accent });

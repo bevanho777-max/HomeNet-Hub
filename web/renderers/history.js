@@ -2,6 +2,7 @@
 // Driven by layout.history (ranges / selectable_targets / default). Each pane
 // fetches /api/history?target=&range and plots whichever known metrics exist.
 import { esc } from './common.js';
+import { cv, t } from '../i18n.js';
 import { drawMulti } from './chart.js';
 
 // Series are declared by metric id + chart placement only (color = line color,
@@ -30,7 +31,7 @@ let METRICS = {};                       // metric templates from /api/config (§
 function paneError(idx, msg) {
   const err = document.querySelector(`.histErr[data-pane="${idx}"]`);
   if (!err) return;
-  err.innerHTML = `<span class="histErrMsg">${esc(msg)}</span><button type="button">重试</button>`;
+  err.innerHTML = `<span class="histErrMsg">${esc(msg)}</span><button type="button">${esc(t('chart_retry'))}</button>`;
   err.hidden = false;
 }
 
@@ -73,7 +74,7 @@ async function loadPane(idx, { force = false } = {}) {
     try {
       drawMulti(canvas, j.series || {}, legend, { subs: SUBS, metrics: METRICS, height: 240 });
     } catch (e) {
-      paneError(idx, `渲染失败：${e?.message || e}`);
+      paneError(idx, t('chart_render_failed', e?.message || e));
       return;
     }
     paneErrorClear(idx);
@@ -82,8 +83,8 @@ async function loadPane(idx, { force = false } = {}) {
     // Keep whatever is already drawn — a stale chart plus a visible notice beats
     // silently wiping the pane to blank.
     paneError(idx, timedOut
-      ? `加载超时（${curRange}）`
-      : `加载失败：${e?.message || e}`);
+      ? t('chart_timeout', curRange)
+      : t('chart_load_failed', e?.message || e));
   } finally {
     clearTimeout(timer);
     if (inflight.get(idx) === ctrl) inflight.delete(idx);
@@ -101,14 +102,16 @@ export function initHistory(config) {
   if (!CFG) { if (section) section.hidden = true; return; }
   section.hidden = false;
 
-  names = Object.fromEntries((config.targets || []).map((t) => [t.id, t.name || t.id]));
+  // `name_en` where the operator supplied one; the pane <select> and nothing else reads
+  // this map, so a re-init on a language change is what re-labels the dropdown.
+  names = Object.fromEntries((config.targets || []).map((x) => [x.id, cv(x, 'name') || x.id]));
   METRICS = config.metrics || {};       // §12-step5: legend labels/units from config
   const selectable = (CFG.selectable_targets || []).filter((id) => names[id]);
   curRange = CFG.default_range || (CFG.ranges || ['6h'])[0];
   // B10: N panes from `panes: [...]`, backward-compatible with `default: [a,b]`.
   const wanted = (Array.isArray(CFG.panes) && CFG.panes.length ? CFG.panes : (CFG.default || [])).filter((id) => names[id]);
   const paneIds = wanted.length ? wanted : selectable.slice(0, 2);
-  panes = paneIds.map((t, i) => ({ idx: i, target: t }));
+  panes = paneIds.map((id, i) => ({ idx: i, target: id }));
 
   // build pane DOM (N panes)
   const split = document.getElementById('histSplit');
@@ -123,7 +126,7 @@ export function initHistory(config) {
         <div class="legend" data-pane="${p.idx}"></div>
       </div>`).join('');
 
-    // one delegated handler: any 重试 button reloads just its own pane. Stashed the
+    // one delegated handler: any retry button reloads just its own pane. Stashed the
     // same way as the resize listener so a re-init swaps it instead of stacking.
     if (initHistory._onRetry) split.removeEventListener('click', initHistory._onRetry);
     initHistory._onRetry = (e) => {
@@ -169,4 +172,21 @@ export function initHistory(config) {
   loadAll();
   clearInterval(initHistory._t);
   initHistory._t = setInterval(() => loadAll(), 10000);
+}
+
+/**
+ * Re-label the pane pickers after a language change, WITHOUT re-running initHistory:
+ * that would reset curRange and every pane's chosen target back to the config default,
+ * so switching language mid-investigation would throw away the window being looked at.
+ * Only the visible option text changes here; the selected values are preserved.
+ */
+export function relocalizeHistory(config) {
+  if (!CFG) return;
+  names = Object.fromEntries((config.targets || []).map((x) => [x.id, cv(x, 'name') || x.id]));
+  const selectable = (CFG.selectable_targets || []).filter((id) => names[id]);
+  document.querySelectorAll('.hostSel').forEach((sel) => {
+    const idx = Number(sel.dataset.pane);
+    sel.innerHTML = selectable.map((id) => `<option value="${esc(id)}">${esc(names[id])}</option>`).join('');
+    if (panes[idx]?.target) sel.value = panes[idx].target;
+  });
 }

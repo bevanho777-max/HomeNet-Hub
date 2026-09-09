@@ -60,6 +60,11 @@ you see the whole thing working before wiring up anything real.
   over a covering index, which keeps long-range queries cheap; **Postgres** token
   accounting with a cumulative all-time total, a live tokens/sec, and a per-project
   breakdown by API key.
+- **中 / EN language switch** — a per-viewer toggle in the header, remembered in
+  `localStorage`. It never reaches the server and never changes what another visitor
+  sees. The panel's own chrome is translated; your YAML display text follows if you give
+  it an `_en` sibling (`title_en`, `hint_en`, `name_en`, `columns_en`, …), and any field
+  without one simply renders its base value in both languages.
 - **Themeable & resilient** — fonts/colors via `theme.yaml`; visibility-aware polling
   with a reconnect badge for flaky mobile networks.
 - **Set up in the browser** — a fresh install asks for an admin password on first load

@@ -1,5 +1,6 @@
 // machine renderer (§6) — rings + KV grid + header_right (uptime/badge).
 import { ring, kvItem, mget, card, esc } from './common.js';
+import { cv } from '../i18n.js';
 
 export function renderMachine(gridCard, target, snap, metrics) {
   const title = target.name || target.id;
@@ -15,7 +16,9 @@ export function renderMachine(gridCard, target, snap, metrics) {
     });
   }
 
-  const label = (k) => metrics?.[k]?.label || k;
+  // i18n: a metric template may carry `label_en`; with none, the base label is used in
+  // both languages rather than falling back to the bare key.
+  const label = (k) => cv(metrics?.[k], 'label') || k;
   const rings = (gridCard.rings || []).map((k) => ring(label(k), mget(snap, k))).join('');
   const items = (gridCard.items || []).map((k) => kvItem(label(k), mget(snap, k))).join('');
 

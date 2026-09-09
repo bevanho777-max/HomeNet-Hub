@@ -5,6 +5,18 @@ import Ajv from 'ajv';
 
 const ajv = new Ajv({ allErrors: true, allowUnionTypes: true, strict: false });
 
+// ── English label variants (i18n) ───────────────────────────────────
+// Every DISPLAY-TEXT field may carry an `_en` sibling; the frontend prefers it when the
+// viewer picked English and silently falls back to the base value otherwise. They are
+// declared explicitly rather than left to `additionalProperties: true` so a `title_en: 42`
+// is caught by the same reload gate that catches every other malformed value, instead of
+// reaching the browser and rendering as "42".
+//
+// A field is translatable when it is text a person READS. Metric keys, target ids, colours,
+// formats and thresholds are references and are deliberately NOT given a variant: two
+// spellings of an identifier is how a config silently stops matching itself.
+const enString = { type: 'string' };
+
 // ── metrics.yaml ─ metric templates (§4.1) ──────────────────────────
 const metricsSchema = {
   type: 'object',
@@ -16,6 +28,9 @@ const metricsSchema = {
         type: 'object',
         properties: {
           label: { type: 'string' },
+          label_en: enString,
+          // `unit` is a symbol (%, °C, W, G) and `format` is a template — neither is prose,
+          // so neither takes a variant.
           unit: { type: 'string' },
           format: { type: 'string' },
           higher_is_better: { type: 'boolean' },
@@ -153,8 +168,10 @@ const targetsSchema = {
         properties: {
           id: { type: 'string', pattern: '^[a-zA-Z0-9_]+$' },
           name: { type: 'string' },
+          name_en: enString,
           color: { type: 'string' },
           badge: { type: 'string' },
+          badge_en: enString,
           enabled: { type: 'boolean' },
           source: sourceSchema,
           map: { type: 'object', additionalProperties: mapEntry },
@@ -178,6 +195,7 @@ const gridCard = {
     direction: { enum: ['row', 'column'] }, // B12: stack layout direction (default column)
     min_row_width: { type: 'number' }, // B12-row: min px width to lay row out (else children×180)
     title: { type: 'string' },               // §12-step4: info card title (no target needed)
+    title_en: enString,
     rings: { type: 'array', items: { type: 'string' } },
     // metric-key strings (machine/service) OR {label,value,level} objects (info, §12-step4)
     items: {
@@ -188,7 +206,13 @@ const gridCard = {
           {
             type: 'object',
             required: ['label', 'value'],
-            properties: { label: { type: 'string' }, value: { type: 'string' }, level: { type: 'string' } },
+            // An info row's `value` is a literal sentence as often as it is a number, so
+            // it takes a variant too — unlike a metric key, which is a reference.
+            properties: {
+              label: { type: 'string' }, label_en: enString,
+              value: { type: 'string' }, value_en: enString,
+              level: { type: 'string' },
+            },
             additionalProperties: true,
           },
         ],
@@ -198,7 +222,12 @@ const gridCard = {
     clickable: { type: 'string' },
     // §12-step2: externalized card-local labels (all optional strings)
     hint: { type: 'string' },
+    hint_en: enString,
     detail_title: { type: 'string' },
+    detail_title_en: enString,
+    // table card: the "N rows did not fit, click for all of them" line's leading words.
+    more_label: { type: 'string' },
+    more_label_en: enString,
     // columns: ordered map of row-key → label. A table card may give an object
     // instead, { label, format } — format picks how a cell is rendered
     // (compact/number/text); omitted, the renderer infers it from the value.
@@ -210,6 +239,26 @@ const gridCard = {
           {
             type: 'object',
             required: ['label'],
+            properties: {
+              label: { type: 'string' }, label_en: enString,
+              format: { enum: ['compact', 'number', 'text'] },
+            },
+            additionalProperties: true,
+          },
+        ],
+      },
+    },
+    // The English column map: same keys, translated labels. An entry may be a bare string
+    // (the label alone, keeping the base entry's format) or an object merged over it. A
+    // per-entry `label_en` above does the same job one column at a time; this block is for
+    // translating a whole card at once.
+    columns_en: {
+      type: 'object',
+      additionalProperties: {
+        anyOf: [
+          { type: 'string' },
+          {
+            type: 'object',
             properties: { label: { type: 'string' }, format: { enum: ['compact', 'number', 'text'] } },
             additionalProperties: true,
           },
@@ -227,6 +276,22 @@ const gridCard = {
           {
             type: 'object',
             required: ['label'],
+            properties: {
+              label: { type: 'string' }, label_en: enString,
+              format: { enum: ['compact', 'number', 'text'] },
+            },
+            additionalProperties: true,
+          },
+        ],
+      },
+    },
+    detail_columns_en: {
+      type: 'object',
+      additionalProperties: {
+        anyOf: [
+          { type: 'string' },
+          {
+            type: 'object',
             properties: { label: { type: 'string' }, format: { enum: ['compact', 'number', 'text'] } },
             additionalProperties: true,
           },
@@ -235,8 +300,10 @@ const gridCard = {
     },
     // table card: what to show instead of rows when the query returns none.
     empty_note: { type: 'string' },
+    empty_note_en: enString,
     // §12-step2 patch: token card front labels { today, requests_suffix, total }
     labels: { type: 'object', additionalProperties: { type: 'string' } },
+    labels_en: { type: 'object', additionalProperties: { type: 'string' } },
     // §12-step6: max class boxes on the token card front (default 3); modal shows all
     front_max: { type: 'number' },
   },
@@ -258,12 +325,16 @@ const layoutSchema = {
       type: 'object',
       properties: {
         title: { type: 'string' },
+        title_en: enString,
         clock: { type: 'boolean' },
       },
       additionalProperties: true,
     },
-    // §12-step2: externalized global UI chrome labels (all optional strings)
+    // §12-step2: externalized global UI chrome labels (all optional strings).
+    // `text_en` overlays it key by key in English mode; a key missing there falls back to
+    // `text`, and a key in neither falls back to the frontend's built-in string.
     text: { type: 'object', additionalProperties: { type: 'string' } },
+    text_en: { type: 'object', additionalProperties: { type: 'string' } },
     status_bar: {
       type: 'object',
       properties: { targets: { type: 'array', items: { type: 'string' } } },
@@ -275,6 +346,7 @@ const layoutSchema = {
       properties: {
         type: { type: 'string' },
         title: { type: 'string' },
+        title_en: enString,
         ranges: { type: 'array', items: { type: 'string' } },
         default_range: { type: 'string' },
         selectable_targets: { type: 'array', items: { type: 'string' } },
@@ -292,6 +364,7 @@ const themeSchema = {
   properties: {
     font_family: { type: 'string' },
     subtitle: { type: 'string' },
+    subtitle_en: enString,
     card_bg: { type: 'string' },
     background: {
       type: 'object',

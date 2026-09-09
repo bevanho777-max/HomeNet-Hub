@@ -6,6 +6,33 @@
 # All display text is config-driven (§12-step2). "HomeNet Hub" is the product
 # name; everything else here is neutral and meant to be edited. Free-text fields
 # accept any language (write your own localized strings).
+#
+# ── i18n: the `_en` convention ──────────────────────────────────────────────
+# The header carries a 中 / EN switch. It is a per-viewer browser preference — stored in
+# localStorage, never sent to the server, and it never changes what anyone else sees. It
+# swaps two things: the frontend's own chrome (buttons, panels, confirmations), which is
+# built in; and the display text in THIS file, which is up to you.
+#
+# Any display-text field may carry an `_en` sibling:
+#
+#   scalars     title_en / hint_en / detail_title_en / empty_note_en / more_label_en,
+#               plus name_en / badge_en in targets.yaml, label_en in metrics.yaml and
+#               subtitle_en in theme.yaml
+#   label maps  a parallel map with the same keys: text_en / labels_en / columns_en /
+#               detail_columns_en. An entry there may be a bare string (the label alone,
+#               keeping the base entry's `format`) or an object merged over the base one.
+#   inline      a `columns` / `detail_columns` entry written in object form can carry
+#               `label_en` next to its `format` instead of using the parallel map — the
+#               better choice when only one column needs translating.
+#
+# Nothing is required. A field with no variant renders its base value in BOTH languages,
+# so a half-translated file reads as mixed text rather than going blank. Only PROSE takes
+# a variant: metric keys, target ids, colours, units and formats are references, and two
+# spellings of a reference is how a config quietly stops matching itself.
+#
+# This file is already written in English, so the `_en` values below mirror their base
+# values. They are here to show the shape — delete them, or translate the base fields
+# into your own language and let `_en` carry the English.
 
 header:
   title: "HomeNet Hub"              # product name — change to your own if you like
@@ -21,6 +48,18 @@ text:
   conn_reconnecting: "Reconnecting…"   # B15: shown after a few consecutive poll failures
   conn_offline: "Disconnected"
   conn_locked: "Login required"      # admin-auth: REQUIRE_LOGIN_TO_VIEW is on and this tab has no session
+
+# The EN half of `text`, overlaid key by key. A key missing here falls back to `text`;
+# a key in neither falls back to the frontend's own built-in string (already English).
+# Write your own language into `text` above and leave this block as the English.
+text_en:
+  raw_title: "Raw JSON (debug)"
+  modal_close: "Close"
+  conn_connecting: "Connecting…"
+  conn_online: "Online"
+  conn_reconnecting: "Reconnecting…"
+  conn_offline: "Disconnected"
+  conn_locked: "Login required"
 
 status_bar:                         # top service pill row
   targets: [svc_api, svc_imagegen, svc_inference, svc_notify]
@@ -64,7 +103,9 @@ grid:
     front_max: 3                    # §12-step6: max class boxes on card front (modal shows all)
     header_right: "LiteLLM · {token_speed} t/s"
     hint: "Click the card for per-model detail"
+    hint_en: "Click the card for per-model detail"
     detail_title: "Token Detail · by Model"
+    detail_title_en: "Token Detail · by Model"
     columns:
       model: "Model"
       tokens: "Tokens"
@@ -76,12 +117,25 @@ grid:
       net: "Net"
       requests: "Requests"
       share: "Share"
+    # The EN half of `columns`, same keys. A bare string replaces just the label; an
+    # object is merged over the base entry (so it can also change `format`).
+    columns_en:
+      model: "Model"
+      tokens: "Tokens"
+      net: "Net"
+      requests: "Requests"
+      share: "Share"
     labels:                              # §12-step2 patch: token card front labels
       today: "Today"                     # stat-box "today" prefix
       net: "Net"                         # stat-box "actually-new" prefix (today only;
                                          # the all-time figure lives in the modal table)
       requests_suffix: "req"             # stat-box request-count suffix
       total: "Total"                     # the total/aggregate column label
+    labels_en:                           # the EN half, same keys
+      today: "Today"
+      net: "Net"
+      requests_suffix: "req"
+      total: "Total"
 
   - target: svc_api
     type: service
@@ -145,7 +199,7 @@ grid:
   #     # wider than either number alone and truncates sooner. Compare across the row.
   #     # tokens_7d / tokens_30d are still returned by the query — swap one in here if
   #     # recency matters more to you than request counts.
-  #     net_total:      { label: "Net",    format: compact }
+  #     net_total:      { label: "Net",    label_en: "Net", format: compact }
   #     requests_total: { label: "Reqs",   format: number }
   #   # Rows kept on the card front. Over this many and the card becomes clickable, grows
   #   # a "查看全部（共 N）" line, and opens a modal with every row and every column.
@@ -159,28 +213,38 @@ grid:
   #   detail_columns:
   #     project:        "Project"
   #     tokens_total:   { label: "Tokens", format: compact }
-  #     net_total:      { label: "Net",    format: compact }
+  #     net_total:      { label: "Net",    label_en: "Net", format: compact }
   #     requests_total: { label: "Reqs",   format: number }
   #     tokens_7d:      { label: "7d",     format: compact }
   #     tokens_30d:     { label: "30d",    format: compact }
   #     first_day:      { label: "First",  format: text }
   #     last_day:       { label: "Last",   format: text }
   #   empty_note: "No chat traffic recorded yet."
+  #   empty_note_en: "No chat traffic recorded yet."
   #   hint: "One row per API key. Chat models only — embedding/rerank excluded."
+  #   hint_en: "One row per API key. Chat models only — embedding/rerank excluded."
+  #   # The words before the "(N total)" count on the overflow line. Omitted, the
+  #   # frontend supplies its own, already translated.
+  #   more_label: "View all"
+  #   more_label_en: "View all"
 
   # §12-step4: generic info card — pure label/value list, no target needed.
   # Add any "info box" by adding a type:info card here; no code changes.
   - type: info
     title: "About"
+    title_en: "About"
+    # An info row's `value` is a literal sentence as often as it is a number, so both
+    # halves take a variant — unlike a metric key elsewhere, which is a reference.
     items:
       - { label: "Version", value: "v2.0.0" }
-      - { label: "Mode", value: "Demo (synthetic data)" }
+      - { label: "Mode", label_en: "Mode", value: "Demo (synthetic data)", value_en: "Demo (synthetic data)" }
       - { label: "Nodes", value: "3 GPU + gateway" }
       - { label: "Source", value: "config-driven YAML" }
 
 history:                            # bottom — dual-pane compare
   type: compare                     # B10: N-pane compare (dual_compare still accepted)
   title: "History · Compare"
+  title_en: "History · Compare"
   ranges: ["1h", "6h", "24h"]
   default_range: "6h"
   selectable_targets: [gpu1, gpu2, gpu3, gateway]

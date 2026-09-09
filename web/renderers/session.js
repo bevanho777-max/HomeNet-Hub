@@ -12,6 +12,7 @@
 //      cleared on every outcome. It is never re-displayed, never stored, and a failed
 //      attempt leaves nothing in the DOM to read back.
 import { esc } from './common.js';
+import { t } from '../i18n.js';
 
 const $ = (s) => document.querySelector(s);
 
@@ -80,10 +81,10 @@ export async function sessionLost() {
 async function submit() {
   if (busy) return;
   const pass = $('#loginPass').value;
-  if (!pass) return setStatus('请输入管理密码。', 'bad');
+  if (!pass) return setStatus(t('login_need_pass'), 'bad');
   busy = true;
   $('#loginSubmit').disabled = true;
-  setStatus('正在登录…', 'busy');
+  setStatus(t('login_busy'), 'busy');
   try {
     const r = await fetch('/api/login', {
       method: 'POST',
@@ -92,23 +93,23 @@ async function submit() {
     });
     const j = await r.json().catch(() => ({}));
     if (r.ok) {
-      setStatus('已登录。', 'ok');
+      setStatus(t('login_done'), 'ok');
       await refreshSession();
       closeLoginPanel();
       await onChange();
     } else if (r.status === 429) {
-      setStatus(`尝试过于频繁,请 ${Number(j.retry_after_s) || 60} 秒后再试。`, 'bad');
+      setStatus(t('too_many', Number(j.retry_after_s) || 60), 'bad');
     } else if (j.error === 'admin not configured') {
-      setStatus('服务端没有配置 ADMIN_PASSWORD,管理功能不可用。', 'bad');
+      setStatus(t('login_not_configured'), 'bad');
     } else if (r.status === 403) {
-      setStatus('请求被拒(跨站来源)。', 'bad');
+      setStatus(t('cross_site'), 'bad');
     } else if (j.retry_after_s) {
-      setStatus(`密码错误,已触发限速,${Number(j.retry_after_s)} 秒后可再试。`, 'bad');
+      setStatus(t('login_wrong_limited', Number(j.retry_after_s)), 'bad');
     } else {
-      setStatus('密码错误。', 'bad');
+      setStatus(t('login_wrong'), 'bad');
     }
   } catch (e) {
-    setStatus(`登录请求失败:${esc(String(e?.message || e))}`, 'bad');
+    setStatus(t('login_failed', esc(String(e?.message || e))), 'bad');
   } finally {
     clearPass();          // always — success, wrong password, or network failure
     busy = false;
@@ -153,18 +154,18 @@ async function submitPasswd() {
 
   // Checked here only to save a round trip; the server enforces every one of these
   // again and is the only place that decides.
-  if (!current) return setPwStatus('请输入当前密码。', 'bad');
-  if (!next) return setPwStatus('请输入新密码。', 'bad');
+  if (!current) return setPwStatus(t('passwd_need_current'), 'bad');
+  if (!next) return setPwStatus(t('passwd_need_new'), 'bad');
   if (next !== confirm) {
     // Not a server error, so nothing is sent — but the boxes still get cleared, because
     // a mistyped password sitting in the DOM is the same exposure as a submitted one.
     clearPasswdFields();
-    return setPwStatus('两次输入的新密码不一致,已清空重填。', 'bad');
+    return setPwStatus(t('passwd_mismatch'), 'bad');
   }
 
   busy = true;
   $('#passwdSubmit').disabled = true;
-  setPwStatus('正在修改…', 'busy');
+  setPwStatus(t('passwd_busy'), 'busy');
   try {
     const r = await fetch('/api/admin/password', {
       method: 'POST',
@@ -173,28 +174,28 @@ async function submitPasswd() {
     });
     const j = await r.json().catch(() => ({}));
     if (r.ok) {
-      setPwStatus('密码已修改。本标签页仍然登录,其他会话已全部失效。', 'ok');
+      setPwStatus(t('passwd_done'), 'ok');
       await refreshSession();
       await onChange();
     } else if (r.status === 429) {
-      setPwStatus(`尝试过于频繁,请 ${Number(j.retry_after_s) || 60} 秒后再试。`, 'bad');
+      setPwStatus(t('too_many', Number(j.retry_after_s) || 60), 'bad');
     } else if (r.status === 403) {
-      setPwStatus('请求被拒(跨站来源)。', 'bad');
+      setPwStatus(t('cross_site'), 'bad');
     } else if (r.status === 401 && j.error === 'invalid current password') {
       setPwStatus(j.retry_after_s
-        ? `当前密码不正确,已触发限速,${Number(j.retry_after_s)} 秒后可再试。`
-        : '当前密码不正确。', 'bad');
+        ? t('passwd_bad_current_limited', Number(j.retry_after_s))
+        : t('passwd_bad_current'), 'bad');
     } else if (r.status === 401) {
       // The session went away underneath us — an expiry, or another tab changing the
       // password first. Say so and put the login entry back rather than blaming the
       // password they typed.
-      setPwStatus('会话已失效,请重新登录。', 'bad');
+      setPwStatus(t('passwd_session_lost'), 'bad');
       await sessionLost();
     } else {
-      setPwStatus(esc(String(j.reason || '修改失败。')), 'bad');
+      setPwStatus(esc(String(j.reason || t('passwd_failed'))), 'bad');
     }
   } catch (e) {
-    setPwStatus(`请求失败:${esc(String(e?.message || e))}`, 'bad');
+    setPwStatus(t('req_failed', esc(String(e?.message || e))), 'bad');
   } finally {
     clearPasswdFields();   // always — success, rejection, or network failure
     busy = false;
@@ -205,7 +206,7 @@ async function submitPasswd() {
 export function openPasswdPanel() {
   $('#passwdModal').classList.add('open');
   clearPasswdFields();
-  setPwStatus('需要当前密码。改密会立即让其他所有已登录会话失效。');
+  setPwStatus(t('passwd_intro'));
   setTimeout(() => $('#passwdCurrent')?.focus(), 0);
 }
 
@@ -225,10 +226,10 @@ export function openLoginPanel() {
   $('#loginModal').classList.add('open');
   clearPass();
   if (!state.configured) {
-    setStatus('服务端没有配置 ADMIN_PASSWORD —— 管理端点全部拒绝,登录也不会成功。', 'warn');
+    setStatus(t('login_hint_unconfigured'), 'warn');
     $('#loginSubmit').disabled = true;
   } else {
-    setStatus('登录后才能发现主机、添加目标与管理凭据。');
+    setStatus(t('login_hint'));
     $('#loginSubmit').disabled = false;
   }
   setTimeout(() => $('#loginPass')?.focus(), 0);
@@ -258,8 +259,7 @@ function clearSetupFields() {
 export function openSetupPanel() {
   $('#setupModal')?.classList.add('open');
   clearSetupFields();
-  setSetupStatus('这台机器还没有管理员密码。设一个之后才能发现主机、添加目标与管理凭据。'
-    + '只能在局域网里设,且只能设这一次。');
+  setSetupStatus(t('setup_intro'));
   setTimeout(() => $('#setupPass')?.focus(), 0);
 }
 
@@ -277,15 +277,15 @@ async function submitSetup() {
   // Both checked again on the server, which is the only place that decides. These two
   // just save a round trip — and the mismatch branch still clears the boxes, because a
   // mistyped password left in the DOM is the same exposure as a submitted one.
-  if (!pass) return setSetupStatus('请输入管理密码。', 'bad');
+  if (!pass) return setSetupStatus(t('login_need_pass'), 'bad');
   if (pass !== confirm) {
     clearSetupFields();
-    return setSetupStatus('两次输入不一致,已清空重填。', 'bad');
+    return setSetupStatus(t('setup_mismatch'), 'bad');
   }
 
   busy = true;
   $('#setupSubmit').disabled = true;
-  setSetupStatus('正在设置…', 'busy');
+  setSetupStatus(t('setup_busy'), 'busy');
   try {
     const r = await fetch('/api/admin/setup', {
       method: 'POST',
@@ -294,24 +294,24 @@ async function submitSetup() {
     });
     const j = await r.json().catch(() => ({}));
     if (r.ok) {
-      setSetupStatus('已设置,并且已登录。', 'ok');
+      setSetupStatus(t('setup_done'), 'ok');
       await refreshSession();
       closeSetupPanel();
       await onChange();
     } else if (r.status === 409) {
       // Someone else got there first, or this install was already configured. Either
       // way the wizard is over — re-read the state so the login entry takes its place.
-      setSetupStatus('这台机器已经配置过管理员了,请改用登录。', 'bad');
+      setSetupStatus(t('setup_conflict'), 'bad');
       await refreshSession();
     } else if (r.status === 403) {
-      setSetupStatus('设置管理员密码只能在局域网内完成。', 'bad');
+      setSetupStatus(t('setup_lan_only'), 'bad');
     } else if (r.status === 429) {
-      setSetupStatus(`尝试过于频繁,请 ${Number(j.retry_after_s) || 60} 秒后再试。`, 'bad');
+      setSetupStatus(t('too_many', Number(j.retry_after_s) || 60), 'bad');
     } else {
-      setSetupStatus(esc(String(j.reason || '设置失败。')), 'bad');
+      setSetupStatus(esc(String(j.reason || t('setup_failed'))), 'bad');
     }
   } catch (e) {
-    setSetupStatus(`请求失败:${esc(String(e?.message || e))}`, 'bad');
+    setSetupStatus(t('req_failed', esc(String(e?.message || e))), 'bad');
   } finally {
     clearSetupFields();   // always — success, rejection, or network failure
     busy = false;
@@ -328,6 +328,21 @@ export function maybeOpenSetup() {
   if (state.configured || !state.setupAvailable) return false;
   openSetupPanel();
   return true;
+}
+
+/**
+ * Re-write whatever standing text an OPEN panel is showing. The status lines are the
+ * only strings these panels hold that a `data-i18n` sweep cannot reach — they were
+ * written by JS, so JS has to write them again. Deliberately limited to the idle/intro
+ * lines: an outcome ("Wrong password.") stays in the language it was reported in rather
+ * than being silently rewritten under the reader.
+ */
+export function relocalizeSession() {
+  if ($('#loginModal')?.classList.contains('open')) {
+    setStatus(state.configured ? t('login_hint') : t('login_hint_unconfigured'), state.configured ? '' : 'warn');
+  }
+  if ($('#passwdModal')?.classList.contains('open')) setPwStatus(t('passwd_intro'));
+  if ($('#setupModal')?.classList.contains('open')) setSetupStatus(t('setup_intro'));
 }
 
 export function bindSession(opts = {}) {

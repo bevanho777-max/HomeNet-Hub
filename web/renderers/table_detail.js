@@ -29,6 +29,7 @@
 // Value checking applies ONLY to derived columns. Blanking a declared column would mean
 // silently disagreeing with the card the operator is looking at.
 import { esc } from './common.js';
+import { cv, t } from '../i18n.js';
 import { parseColumns, cell } from './table.js';
 
 const $ = (s) => document.querySelector(s);
@@ -41,11 +42,11 @@ const UNSAFE_VALUE = /^(sk-|[0-9a-f]{32,}$)/i;
 let current = null;
 
 function columnsFor(gridCard, rows) {
-  const declared = parseColumns(gridCard.detail_columns);
+  const declared = parseColumns(gridCard, 'detail_columns');
   if (declared.length) return declared;
   // Derive: the card's own columns first, in their configured order, then anything else
   // the rows carry. Union across rows, because a row is free to omit a null column.
-  const front = parseColumns(gridCard.columns);
+  const front = parseColumns(gridCard, 'columns');
   const seen = new Set(front.map((c) => c.key));
   const extra = [];
   for (const r of rows) {
@@ -69,14 +70,15 @@ function render() {
   const { rows, gridCard } = current;
   const cols = columnsFor(gridCard, rows);
   if (!rows.length || !cols.length) {
-    box.innerHTML = `<div class="note">${esc(gridCard.empty_note || 'No rows')}</div>`;
+    box.innerHTML = `<div class="note">${esc(cv(gridCard, 'empty_note') || 'No rows')}</div>`;
     return;
   }
   const head = cols.map((c, i) => `<th${i ? ' class="num"' : ''}>${esc(c.label)}</th>`).join('');
   const body = rows.map((r) => `<tr>${
     cols.map((c, i) => `<td${i ? ' class="num"' : ''}>${esc(cell(r[c.key], c.format))}</td>`).join('')
   }</tr>`).join('');
-  const hint = gridCard.hint ? `<div class="note">${esc(gridCard.hint)}</div>` : '';
+  const hintText = cv(gridCard, 'hint');
+  const hint = hintText ? `<div class="note">${esc(hintText)}</div>` : '';
   box.innerHTML = `<table class="tbl"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>${hint}`;
 }
 
@@ -86,9 +88,21 @@ export function openTableModal(c) {
   if (!c?.detail) return;
   current = c.detail;
   const n = current.rows.length;
-  $('#tableModalTitle').textContent = current.gridCard.detail_title
-    || `${current.title}（共 ${n}）`;
+  $('#tableModalTitle').textContent = cv(current.gridCard, 'detail_title')
+    || t('table_title_count', current.title, n);
   $('#tableModal').classList.add('open');
+  render();
+}
+
+/** Re-draw in the language now selected. No-op while the modal is closed. */
+export function relocalizeTableModal() {
+  if (!current || !$('#tableModal')?.classList.contains('open')) return;
+  // `current.title` was resolved by renderTable in the PREVIOUS language and is the card's
+  // fallback identity (its target name) when the card declares no title. Re-resolve the
+  // declared title here; a name-derived one is re-read from the card on the next open.
+  const title = cv(current.gridCard, 'title') || current.title;
+  $('#tableModalTitle').textContent = cv(current.gridCard, 'detail_title')
+    || t('table_title_count', title, current.rows.length);
   render();
 }
 

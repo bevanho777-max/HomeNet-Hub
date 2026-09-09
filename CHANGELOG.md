@@ -49,6 +49,64 @@ on screen is the one from `package.json`, and this file is what needs fixing.
 
 ---
 
+## v2.16 — 2026-09-10
+
+**中 / EN 语言切换:界面全套双语,配置标签按需加 `_en`。**
+
+*Rebuild required — `web/` + `server/config/` changed.（同时改了 `config/`,但那一半是热加载的。）*
+
+header 里多了一个两段小开关。它是**浏览器本地偏好**:存 `localStorage`,不发给服务端、不进
+config etag、不影响别的访客看到的界面 —— 所以两台机器上的选择互不干扰,也不需要登录。点一下
+立刻重渲染,刷新后还在。
+
+**硬指标是 zh 不动。** 页面里内联的中文就是 zh 基线,i18n 的 zh 那一遍写回去的是同样的字,
+只有 EN 那一遍才真正改 DOM。验证方式是渲染文本对比,不是眼看:同一份 `/api/config` +
+`/api/snapshot`(取自线上)喂给改前/改后两棵树,headless 里把所有面板与弹窗打开,取
+`document.body.innerText` 逐行 diff —— **唯一的差别是新增的那两个「中 / EN」段**。另外三条
+也跑了:点开关切到 EN,结果与直接以 EN 启动**逐字一致**;zh → EN → zh 转一圈回到 zh,
+与直接以 zh 启动**逐字一致**;EN 模式下整页只剩一个汉字,就是开关上的「中」。
+
+**前端所有硬编码中文串收进一个字典**(`web/i18n.js`,`{zh, en}` 两套)。之前它们散在
+八个 renderer 的模板串里 —— 登录/改密/凭据/客户端/添加目标/演示条的每一句提示、每一个
+confirm、每一条错误。字典是 **zh 优先**写的:翻译方向决定了哪一边允许漂,而那一边不是中文。
+EN 缺项回落到 zh 而不是回落到 key,半套翻译显示的是原句,不是 `cli_revoke_failed`。
+
+index.html 里的静态文案不动,只挂 `data-i18n` 属性,由字典在首屏前写回 —— zh 下这一遍是
+空操作,EN 读者也不会先闪一下中文。
+
+**配置标签支持 `_en` 变体。** schema 显式声明(不是靠 `additionalProperties` 放行),所以
+`title_en: 42` 会被和其它畸形值同一道门挡下:
+
+| 位置 | 字段 |
+|---|---|
+| layout | `title_en` `hint_en` `detail_title_en` `empty_note_en` `more_label_en` `text_en` `labels_en` `columns_en` `detail_columns_en`,以及 `columns` 对象形式里的 `label_en` |
+| targets | `name_en` `badge_en` |
+| metrics | `label_en` |
+| theme | `subtitle_en` |
+| info 卡 | 每行的 `label_en` / `value_en` |
+
+**只有散文有变体。** 指标 key、target id、颜色、单位、format 都是**引用**,不给变体 ——
+一个引用有两种拼法,配置就会悄悄对不上自己。没写 `_en` 的字段两种语言都渲染原值,所以翻一半
+的配置退化成中英混排,而不是空白。
+
+`publicConfig` 是白名单不是黑名单,`name_en` / `badge_en` / `text_en` 因此要逐个放行(实测:
+不放行就是英文模式下静默回落)。演示板被清空时 `text_en` 跟着 `text` 一起留下 —— 它是页面
+chrome,不是演示内容。
+
+**顺手修掉一个既有 bug。** `mountCards` 是 shell-persist 的,卡片的 `<h2>` 标题只在首次挂载
+时写一次 —— 在 YAML 里改 target 的 `name`,卡上的名字要硬刷新才更新(和当初 `.ring-label`
+那个问题同源)。语言开关把它照出来了:切到 EN 后满屏都跟着变,只有卡片标题还是中文。现在
+标题和 tag 一样每次渲染同步。
+
+**切换不重置正在看的东西。** 语言变化走的是各模块的 `relocalize*`,不是重跑 `initHistory` ——
+后者会把历史区间和三个 pane 的选择打回配置默认值,等于切个语言就把你正在看的窗口扔了。
+同理,面板上那句**结果**(「密码错误。」)不会被改写成另一种语言:它是当时报出来的事实。
+
+**实配翻译**(同步到私有仓 `homenet-config`):六台机器的 `name_en`(`GPU · 机器 26` →
+`GPU · Box 26` 等)、token 卡与 Per-Project 卡的「净增 / 实际新增 / 首次 / 最近」,以及
+Per-Project 那句中英混排的 `hint`。`config.example` 本来就是全英文,所以那边加的 `_en` 是
+**示范用的镜像值** + 一段约定说明,让示例文件本身就是这个特性的参考。
+
 ## v2.15 — 2026-09-05
 
 **table 卡:放不下的行不再消失,点开看全部。**

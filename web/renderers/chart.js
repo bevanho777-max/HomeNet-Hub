@@ -3,18 +3,22 @@
 // than a second, drifting copy. Series definition, metric templates and height are
 // parameters now; everything else is the original renderer.
 import { esc } from './common.js';
+import { cv } from '../i18n.js';
 
 export const subUnit = (metrics, k) => metrics?.[k]?.unit || '';
+// The metric's own display name, `label_en` first in English mode. A unit is a symbol
+// (%, °C, W) and is never translated.
+const nameOf = (metrics, k) => cv(metrics?.[k], 'label') || k;
 // B23: the left axis IS the 0..100 scale, so anything drawn against it is a percentage
 // regardless of what unit its template carries for the card face. mem_bytes is labelled
 // "G" so the card can read "5.0/15.6G", but the value that reaches the timeseries is
 // the used/total ratio -- the legend was reporting "Memory G 33G" for 33%.
 const unitOf = (metrics, sub) => (sub.axis === 'L' ? '%' : subUnit(metrics, sub.k));
 export const subLabel = (metrics, k) =>
-  `${metrics?.[k]?.label || k}${subUnit(metrics, k) ? ' ' + subUnit(metrics, k) : ''}`;
+  `${nameOf(metrics, k)}${subUnit(metrics, k) ? ' ' + subUnit(metrics, k) : ''}`;
 const labelOf = (metrics, sub) => {
   const u = unitOf(metrics, sub);
-  return `${metrics?.[sub.k]?.label || sub.k}${u ? ' ' + u : ''}`;
+  return `${nameOf(metrics, sub.k)}${u ? ' ' + u : ''}`;
 };
 
 // B24: on-chart series labels. The unit IS the axis cue -- the left axis is always the
@@ -22,7 +26,7 @@ const labelOf = (metrics, sub) => {
 // suffix is worth its width exactly when both axes are in play. On a percentage-only
 // chart (the gateway card: cpu/cache_hit/success) it would just repeat "%" three times.
 const tagOf = (metrics, sub, hasRight) =>
-  hasRight ? labelOf(metrics, sub) : (metrics?.[sub.k]?.label || sub.k);
+  hasRight ? labelOf(metrics, sub) : nameOf(metrics, sub.k);
 
 // Ellipsise to fit `max` px under whatever font the caller has set on ctx.
 const fitText = (ctx, s, max) => {

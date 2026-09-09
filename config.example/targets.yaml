@@ -37,8 +37,13 @@ targets:
       uptime:     { s: "$.uptime_s" }   # protocol field: seconds → {d}d {h}h in normalize
 
   # ── GPU node 1 ──
+  # i18n: `name` and `badge` may carry `name_en` / `badge_en`, used when the viewer picks
+  # EN in the header switch (see the block at the top of layout.yaml). The target `id`
+  # never does — it is the reference layout.yaml points at. These two mirror their base
+  # values because this file is already written in English; they show the shape.
   - id: gpu1
     name: "GPU Node 1"
+    name_en: "GPU Node 1"
     color: auto            # B14 demo: role auto-detected → gpu (orange), was cyan
     badge: "GPU Node"
     source: { type: demo, interval: "1.5s" }

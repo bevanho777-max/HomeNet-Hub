@@ -2,6 +2,7 @@
 // multi-line chart. Same renderer and same /api/history data as History · Dual
 // Compare; only the shell (Token Detail's modal) and the series selection differ.
 import { esc } from './common.js';
+import { cv, t } from '../i18n.js';
 import { drawMulti } from './chart.js';
 
 const RANGES = ['24h', '7d', '30d'];
@@ -84,7 +85,7 @@ function seriesFor(role, available) {
 function showError(msg, retry) {
   const el = $('#machineModalErr');
   if (!el) return;
-  el.innerHTML = `<span class="histErrMsg">${esc(msg)}</span>${retry ? '<button type="button">重试</button>' : ''}`;
+  el.innerHTML = `<span class="histErrMsg">${esc(msg)}</span>${retry ? `<button type="button">${esc(t('chart_retry'))}</button>` : ''}`;
   el.hidden = false;
 }
 function clearError() {
@@ -98,16 +99,17 @@ function clearError() {
 function noteMissing(role, recorded, available) {
   const m = metrics();
   const wanted = ROLE_SERIES[role] || [];
-  const name = (k) => m[k]?.label || k;
+  const name = (k) => cv(m[k], 'label') || k;
   const never = wanted.filter((k) => !recorded.includes(k));
   const thin = wanted.filter((k) => recorded.includes(k) && !available.includes(k));
   const el = $('#machineModalNote');
   if (!el) return;
   const parts = [];
-  if (never.length) parts.push(`${never.map(name).join('、')}：未记录历史`);
-  if (thin.length) parts.push(`${thin.map(name).join('、')}：该时段无数据`);
+  const sep = t('list_sep');
+  if (never.length) parts.push(t('chart_never_recorded', never.map(name).join(sep)));
+  if (thin.length) parts.push(t('chart_none_in_range', thin.map(name).join(sep)));
   if (!parts.length) { el.hidden = true; el.textContent = ''; return; }
-  el.textContent = parts.join('　');
+  el.textContent = parts.join(t('chart_note_sep'));
   el.hidden = false;
 }
 
@@ -143,31 +145,46 @@ async function load() {
     try {
       drawMulti(canvas, series, legend, {
         subs, metrics: metrics(), height: 300,
-        emptyText: `该时段无数据（${range}）`,
+        emptyText: t('chart_no_data_range', range),
       });
     } catch (e) {
-      showError(`渲染失败：${e?.message || e}`, false);
+      showError(t('chart_render_failed', e?.message || e), false);
       return;
     }
     noteMissing(role, recorded, available);
     clearError();
   } catch (e) {
     if (inflight !== ctrl) return;                    // aborted by a newer request
-    showError(timedOut ? `加载超时（${range}）` : `加载失败：${e?.message || e}`, true);
+    showError(timedOut ? t('chart_timeout', range) : t('chart_load_failed', e?.message || e), true);
   } finally {
     clearTimeout(timer);
     if (inflight === ctrl) inflight = null;
   }
 }
 
-export function openMachineModal(id, title) {
+// The modal's own title, derived from config rather than handed in by the caller, so a
+// language change can re-derive it without app.js having to remember which card was
+// clicked. Same string as before: the target's display name plus " Detail".
+function modalTitle(id) {
+  const target = (CONFIG?.targets || []).find((x) => x.id === id);
+  return `${cv(target, 'name') || id} Detail`;
+}
+
+export function openMachineModal(id) {
   targetId = id;
-  $('#machineModalTitle').textContent = title;
+  $('#machineModalTitle').textContent = modalTitle(id);
   $('#machineModal').classList.add('open');
   clearError();
   $('#machineModalRanges').innerHTML = RANGES.map((r) =>
     `<button data-r="${esc(r)}" class="${r === range ? 'active' : ''}">${esc(r)}</button>`).join('');
   load();
+}
+
+/** Re-title and re-draw in the language now selected. No-op while the modal is closed. */
+export function relocalizeMachineModal() {
+  if (!targetId || !$('#machineModal')?.classList.contains('open')) return;
+  $('#machineModalTitle').textContent = modalTitle(targetId);
+  load();   // the note and any error line are built from the dictionary too
 }
 
 export function closeMachineModal() {

@@ -9,6 +9,7 @@
 //   2. Every failure is reported next to the thing that failed. Adding six
 //      capabilities means six independent POSTs; one 409 must not cost the other five.
 import { esc } from './common.js';
+import { t } from '../i18n.js';
 
 const $ = (s) => document.querySelector(s);
 
@@ -20,35 +21,39 @@ let busy = false;
 // ── host pre-check ──────────────────────────────────────────────────
 // UX only, and deliberately a copy of nothing: the server's net_guard remains the
 // authority and is what actually refuses a probe. This exists so typing a public
-// address gets an instant Chinese explanation instead of a round trip that returns
-// English, and its verdict is never trusted for anything.
+// address gets an instant explanation in the reader's own language instead of a round
+// trip that returns a validator string, and its verdict is never trusted for anything.
 function hostHint(raw) {
   const s = (raw || '').trim();
-  if (!s) return '请输入一个 IP 地址';
+  if (!s) return t('add_need_ip');
   const m = s.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
-  if (!m) return '只支持 IPv4 地址,例如 192.168.1.24';
+  if (!m) return t('add_ipv4_only');
   const o = m.slice(1, 5);
-  if (o.some((x) => x.length > 1 && x[0] === '0')) return '八位组不能有前导零(0 开头会被当作八进制)';
+  if (o.some((x) => x.length > 1 && x[0] === '0')) return t('add_leading_zero');
   const n = o.map(Number);
-  if (n.some((x) => x > 255)) return '每一段必须在 0-255 之间';
+  if (n.some((x) => x > 255)) return t('add_octet_range');
   const [a, b] = n;
-  if (a === 169 && b === 254) return '链路本地地址(169.254.x.x)不允许探测';
+  if (a === 169 && b === 254) return t('add_link_local');
   const priv = a === 10 || (a === 192 && b === 168) || (a === 172 && b >= 16 && b <= 31) || a === 127;
-  if (!priv) return '只能探测私网地址:10.x / 172.16-31.x / 192.168.x';
+  if (!priv) return t('add_private_only');
   return null;
 }
 
 // Server errors come back in English from the validator; these are the ones a user can
 // actually hit, mapped to something actionable. Anything unmapped is shown verbatim
 // rather than swallowed — an unexplained failure is worse than an English one.
-function zhReason(reason = '') {
-  if (/private IPv4/.test(reason)) return '只能探测私网地址(10.x / 172.16-31.x / 192.168.x)';
-  if (/link-local/.test(reason)) return '链路本地地址(169.254.x.x)不允许探测';
-  if (/leading zero/.test(reason)) return '八位组不能有前导零';
-  if (/not an IPv4 literal/.test(reason)) return '不是合法的 IPv4 地址';
-  if (/not in the known port set/.test(reason)) return '该端口不在已知端口集内';
-  if (/collector pending/.test(reason)) return '该能力的采集器尚未实现';
-  if (/is TLS — use tls_cert/.test(reason)) return '这是 TLS 端口,请改用 TLS 证书能力';
+//
+// In EN mode the mapping is still applied rather than short-circuited: the phrasing here
+// is the one written for a person, while the validator's is written for a log line
+// ("host must be a private IPv4 literal"). Only the unmapped tail falls through raw.
+function reasonText(reason = '') {
+  if (/private IPv4/.test(reason)) return t('add_reason_private');
+  if (/link-local/.test(reason)) return t('add_reason_link_local');
+  if (/leading zero/.test(reason)) return t('add_reason_leading_zero');
+  if (/not an IPv4 literal/.test(reason)) return t('add_reason_not_ipv4');
+  if (/not in the known port set/.test(reason)) return t('add_reason_port');
+  if (/collector pending/.test(reason)) return t('add_reason_pending');
+  if (/is TLS — use tls_cert/.test(reason)) return t('add_reason_tls');
   return reason;
 }
 
@@ -65,13 +70,13 @@ async function discover() {
   if (busy) return;
   busy = true;
   $('#addDiscover').disabled = true;
-  setStatus('正在探测 ' + esc(host) + ' …', 'busy');
+  setStatus(t('add_probing', esc(host)), 'busy');
   manifest = null;
   renderManifest();
   try {
     const r = await fetch(`/api/discover?host=${encodeURIComponent(host)}`, { cache: 'no-store' });
     const j = await r.json();
-    if (!r.ok) return setStatus(`探测被拒绝:${esc(zhReason(j.reason || j.error || ''))}`, 'bad');
+    if (!r.ok) return setStatus(t('add_refused', esc(reasonText(j.reason || j.error || ''))), 'bad');
     manifest = j;
     // Fetched alongside the manifest so a credential-backed row can render its picker
     // in the same paint — asking for it lazily would flash an empty select.
@@ -79,11 +84,11 @@ async function discover() {
     catch { creds = { vault: { configured: false }, credentials: [] }; }
     const n = j.suggested_capabilities.filter((c) => c.available).length;
     setStatus(j.reachable
-      ? `探测完成,用时 ${j.took_ms}ms,可添加 ${n} 项`
-      : `${esc(j.host)} 没有响应(端口全关或主机离线),仍可添加可达性监控`, j.reachable ? 'ok' : 'warn');
+      ? t('add_probe_ok', j.took_ms, n)
+      : t('add_probe_silent', esc(j.host)), j.reachable ? 'ok' : 'warn');
     renderManifest();
   } catch (e) {
-    setStatus(`探测失败:${esc(String(e?.message || e))}`, 'bad');
+    setStatus(t('add_probe_failed', esc(String(e?.message || e))), 'bad');
   } finally {
     busy = false;
     $('#addDiscover').disabled = false;
@@ -92,19 +97,19 @@ async function discover() {
 
 // ── manifest rendering ──────────────────────────────────────────────
 const WIDGET_GROUP = {
-  service: '服务与端口',
-  info: '证书与信息',
-  machine: '机器指标',
+  service: 'add_group_service',
+  info: 'add_group_info',
+  machine: 'add_group_machine',
 };
 
 // A capability that needs a credential gets a picker instead of a name field. The list
 // comes from the credentials API — names only, which is all this side ever sees.
 function credPicker(capId) {
   if (!creds.vault?.configured) {
-    return `<span class="addPending">金库未配置,无法使用凭据</span>`;
+    return `<span class="addPending">${esc(t('add_no_vault'))}</span>`;
   }
   if (!creds.credentials.length) {
-    return `<span class="addPending">先去「凭据」面板添加一个 SSH 凭据</span>`;
+    return `<span class="addPending">${esc(t('add_no_creds'))}</span>`;
   }
   return `<select class="addName addCred credSelect" data-for="${esc(capId)}">`
     + creds.credentials.map((c) => `<option value="${esc(c.id)}">${esc(c.name)} (${esc(c.username)})</option>`).join('')
@@ -112,9 +117,9 @@ function credPicker(capId) {
 }
 
 function pendingWhy(cap) {
-  if (cap.requires === 'ssh') return '需要 SSH 凭据';
-  if (cap.requires === 'winrm') return '需要 WinRM 凭据';
-  return '需要采集器(切片 2d)';
+  if (cap.requires === 'ssh') return t('add_needs_ssh');
+  if (cap.requires === 'winrm') return t('add_needs_winrm');
+  return t('add_needs_collector');
 }
 
 function renderManifest() {
@@ -124,21 +129,22 @@ function renderManifest() {
 
   const m = manifest;
   const ports = m.open_ports.map((p) =>
-    `<span class="addChip">${p.port}<i>${esc(p.port_hint)}</i></span>`).join('') || '<span class="addMuted">无</span>';
+    `<span class="addChip">${p.port}<i>${esc(p.port_hint)}</i></span>`).join('')
+    || `<span class="addMuted">${esc(t('add_none'))}</span>`;
 
   const svc = m.services.map((s) => `<div class="addSvc">
       <b>:${s.port}</b>
       <span>${s.http_status ? `HTTP ${s.http_status}` : '—'}</span>
       <span class="addMuted">${esc(s.server || '')}</span>
       <span>${esc(s.title || '')}</span>
-      ${s.tls_expiry_days != null ? `<span class="addMuted">证书 ${s.tls_expiry_days} 天</span>` : ''}
+      ${s.tls_expiry_days != null ? `<span class="addMuted">${esc(t('add_cert_days', s.tls_expiry_days))}</span>` : ''}
     </div>`).join('');
 
   // Group by widget so a long list reads as "ports / certificates / machine metrics"
   // rather than one flat column of 18 checkboxes.
   const groups = new Map();
   for (const c of m.suggested_capabilities) {
-    const g = WIDGET_GROUP[c.widget] || c.widget;
+    const g = WIDGET_GROUP[c.widget] ? t(WIDGET_GROUP[c.widget]) : c.widget;
     if (!groups.has(g)) groups.set(g, []);
     groups.get(g).push(c);
   }
@@ -149,7 +155,7 @@ function renderManifest() {
           c.requires === 'credential' && !(creds.vault?.configured && creds.credentials.length) ? ' disabled' : ''} />
         <span class="addCapLabel">${esc(c.label)}</span>
         ${c.requires === 'credential' ? credPicker(c.id)
-          : '<input type="text" class="addName" placeholder="自定义名称(可选)" maxlength="60" />'}
+          : `<input type="text" class="addName" placeholder="${esc(t('add_custom_name_ph'))}" maxlength="60" />`}
         <span class="addResult"></span>
       </label>` : `
       <div class="addCap off">
@@ -162,14 +168,14 @@ function renderManifest() {
     <div class="addSum">
       <span class="addDot ${m.reachable ? 'ok' : 'bad'}"></span>
       <b>${esc(m.host)}</b>
-      <span>${m.reachable ? '可达' : '无响应'}</span>
+      <span>${esc(m.reachable ? t('add_reachable') : t('add_silent'))}</span>
       ${m.latency_ms != null ? `<span class="addMuted">${m.latency_ms}ms</span>` : ''}
       <span class="addMuted">·</span>
       <span>${esc(m.os_hint)}</span>
       <span class="addMuted">(${esc(m.os_hint_reason)})</span>
     </div>
-    <div class="addRow"><span class="addMuted">开放端口</span><div class="addChips">${ports}</div></div>
-    ${svc ? `<div class="addRow"><span class="addMuted">服务</span><div class="addSvcs">${svc}</div></div>` : ''}
+    <div class="addRow"><span class="addMuted">${esc(t('add_open_ports'))}</span><div class="addChips">${ports}</div></div>
+    ${svc ? `<div class="addRow"><span class="addMuted">${esc(t('add_services'))}</span><div class="addSvcs">${svc}</div></div>` : ''}
     <div class="addCaps">${caps}</div>`;
 
   foot.hidden = false;
@@ -189,7 +195,7 @@ function updateCount() {
   const n = document.querySelectorAll('.addPick:checked').length;
   const btn = $('#addSelected');
   btn.disabled = n === 0 || busy;
-  btn.textContent = n ? `添加所选 (${n})` : '添加所选';
+  btn.textContent = n ? t('add_selected_n', n) : t('add_selected');
 }
 
 // ── adding ──────────────────────────────────────────────────────────
@@ -210,7 +216,7 @@ async function addSelected() {
     // The name input and the credential picker share a slot; only one is ever present.
     const name = credSel ? undefined : (row.querySelector('.addName')?.value.trim() || undefined);
     out.className = 'addResult busy';
-    out.textContent = '添加中…';
+    out.textContent = t('add_adding');
     try {
       const r = await fetch('/api/user_targets', {
         method: 'POST',
@@ -223,25 +229,25 @@ async function addSelected() {
       });
       const j = await r.json();
       if (r.ok) {
-        out.className = 'addResult ok'; out.textContent = '已添加';
+        out.className = 'addResult ok'; out.textContent = t('add_added');
         pick.checked = false; pick.disabled = true; row.classList.add('done');
         added++;
       } else if (r.status === 409) {
-        out.className = 'addResult warn'; out.textContent = '已存在';
+        out.className = 'addResult warn'; out.textContent = t('add_exists');
         pick.checked = false; pick.disabled = true;
       } else {
         out.className = 'addResult bad';
-        out.textContent = zhReason(j.reason || (j.errors || []).join('; ') || j.error || `HTTP ${r.status}`);
+        out.textContent = reasonText(j.reason || (j.errors || []).join('; ') || j.error || `HTTP ${r.status}`);
       }
     } catch (e) {
       out.className = 'addResult bad';
-      out.textContent = `请求失败:${String(e?.message || e)}`;
+      out.textContent = t('req_failed', String(e?.message || e));
     }
   }
   busy = false;
   updateCount();
   if (added) {
-    setStatus(`已添加 ${added} 项,看板已刷新`, 'ok');
+    setStatus(t('add_added_n', added), 'ok');
     await refreshList();
     await onChanged();
   }
@@ -254,19 +260,19 @@ async function refreshList() {
     const r = await fetch('/api/user_targets', { cache: 'no-store' });
     const j = await r.json();
     const rows = j.targets || [];
-    box.innerHTML = rows.length ? rows.map((t) => `
-      <div class="addItem" data-id="${esc(t.id)}">
-        <span class="addDot ${t.enabled ? 'ok' : ''}"></span>
-        <b>${esc(t.name)}</b>
-        <span class="addMuted">${esc(t.host || '')}</span>
-        <span class="addChip">${esc(t.capability || '手动')}</span>
-        <button type="button" class="addDel">删除</button>
-      </div>`).join('') : '<div class="addMuted">还没有通过发现添加的目标。</div>';
+    box.innerHTML = rows.length ? rows.map((x) => `
+      <div class="addItem" data-id="${esc(x.id)}">
+        <span class="addDot ${x.enabled ? 'ok' : ''}"></span>
+        <b>${esc(x.name)}</b>
+        <span class="addMuted">${esc(x.host || '')}</span>
+        <span class="addChip">${esc(x.capability || t('add_manual'))}</span>
+        <button type="button" class="addDel">${esc(t('del'))}</button>
+      </div>`).join('') : `<div class="addMuted">${esc(t('add_list_empty'))}</div>`;
     box.querySelectorAll('.addDel').forEach((btn) => {
       btn.onclick = () => removeOne(btn.closest('.addItem'));
     });
   } catch {
-    box.innerHTML = '<div class="addStatus bad">已添加列表加载失败</div>';
+    box.innerHTML = `<div class="addStatus bad">${esc(t('add_list_failed'))}</div>`;
   }
 }
 
@@ -274,21 +280,21 @@ async function removeOne(row) {
   const id = row?.dataset.id;
   if (!id) return;
   // Deleting takes a card off the panel; a mis-click should not be silent.
-  if (!window.confirm(`删除 "${id}" ?\n它的卡片和历史采样将停止。`)) return;
+  if (!window.confirm(t('add_del_confirm', id))) return;
   const btn = row.querySelector('.addDel');
-  btn.disabled = true; btn.textContent = '删除中…';
+  btn.disabled = true; btn.textContent = t('deleting');
   try {
     const r = await fetch(`/api/user_targets/${encodeURIComponent(id)}`, { method: 'DELETE' });
     const j = await r.json();
-    if (!r.ok) throw new Error(zhReason(j.reason || j.error || `HTTP ${r.status}`));
+    if (!r.ok) throw new Error(reasonText(j.reason || j.error || `HTTP ${r.status}`));
     // A deleted target frees its id, so anything in the manifest that was greyed out
     // as "already added" can be picked again — re-render rather than leave it stale.
     await refreshList();
     await onChanged();
-    setStatus(`已删除 ${esc(id)}`, 'ok');
+    setStatus(t('add_deleted', esc(id)), 'ok');
   } catch (e) {
-    btn.disabled = false; btn.textContent = '删除';
-    setStatus(`删除失败:${esc(String(e?.message || e))}`, 'bad');
+    btn.disabled = false; btn.textContent = t('del');
+    setStatus(t('add_del_failed', esc(String(e?.message || e))), 'bad');
   }
 }
 
@@ -300,12 +306,21 @@ export function openAddPanel() {
   // session — stale enough to mislead, so it is discarded rather than shown again.
   manifest = null;
   renderManifest();
-  setStatus('输入一个私网 IP,点"发现"看看那台机器上有什么。');
+  setStatus(t('add_intro'));
   refreshList();
   setTimeout(() => $('#addHost')?.focus(), 0);
 }
 
 export function closeAddPanel() { $('#addModal')?.classList.remove('open'); }
+
+/** Re-render an OPEN panel in the language now selected; the manifest and the added
+ *  list are both rebuilt from data already in hand, so nothing is re-fetched. */
+export function relocalizeAddPanel() {
+  if (!$('#addModal')?.classList.contains('open')) return;
+  setStatus(t('add_intro'));
+  renderManifest();
+  refreshList();
+}
 
 export function bindAddTarget(opts = {}) {
   onChanged = opts.onChanged || (() => {});

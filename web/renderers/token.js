@@ -2,6 +2,7 @@
 // Data comes from snap.extra.token (pivoted server-side, see token_detail.js).
 // clickable:detail → app.js opens the /api/token_detail modal.
 import { card, mget, esc } from './common.js';
+import { cmap, cv } from '../i18n.js';
 
 export function renderToken(gridCard, target, snap) {
   const title = target.name || target.id;
@@ -33,7 +34,9 @@ export function renderToken(gridCard, target, snap) {
   }
   const cols = totalCol ? [...classCols, totalCol] : classCols;
   // §12-step2 patch: stat-box front labels are config-driven (generic fallbacks)
-  const L = gridCard.labels || {};
+  // `labels_en` overlays this map key by key, so translating only `today` leaves the
+  // rest on their configured values instead of blanking them.
+  const L = cmap(gridCard, 'labels');
   const todayLabel = L.today || 'Today';
   const reqLabel = L.requests_suffix || 'req';
   // Today's actually-new tokens, directly under today's total so the two are read as
@@ -60,8 +63,9 @@ export function renderToken(gridCard, target, snap) {
   }).join('');
 
   // click hint is externalized (gridCard.hint); shown only when clickable + set.
-  const note = (gridCard.clickable === 'detail' && gridCard.hint)
-    ? `<div class="note">${esc(gridCard.hint)}</div>` : '';
+  const hintText = cv(gridCard, 'hint');
+  const note = (gridCard.clickable === 'detail' && hintText)
+    ? `<div class="note">${esc(hintText)}</div>` : '';
   const body = `<div class="tk-grid" style="grid-template-columns:repeat(${cols.length},1fr)">${colHtml}</div>`
     + (sparkHtml ? `<div class="spark">${sparkHtml}</div>` : '')
     + note;

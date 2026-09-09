@@ -562,3 +562,17 @@ h2:empty { display: none; } /* 堆叠卡外框无标题时不留空行 */
   border: 1px solid var(--hair); border-radius: 10px; background: var(--glass); margin-bottom: var(--s3); }
 .credLocked b { color: var(--yellow); font-size: 13px; }
 @media (max-width: 560px) { .credGrid { grid-template-columns: 1fr; } }
+
+/* ---------- 语言开关(i18n) ---------- */
+/* 两段式小开关,常驻 header —— 它是浏览器本地的偏好,不随登录状态显隐。
+   尺寸对齐 .addOpen(同样的 12px/9px 圆角),所以它落在 .meta 那行里不会顶高
+   header;选中的一段用 --text 描边 + 玻璃底,和 .addOpen:hover 是同一套。 */
+.langSw { display: inline-flex; border: 1px solid var(--hair); border-radius: 9px;
+  overflow: hidden; background: var(--glass2); }
+.langBtn { background: transparent; color: var(--muted); border: 0; cursor: pointer;
+  padding: 5px 10px; font-size: 12px; font-weight: 600; letter-spacing: .5px;
+  font-family: var(--font); line-height: 1.2; transition: color .2s, background .2s; }
+.langBtn + .langBtn { border-left: 1px solid var(--hair); }
+.langBtn:hover { color: var(--text); }
+.langBtn.active { color: var(--text); background: var(--glass); }
+@media (max-width: 560px) { .langBtn { padding: 4px 8px; font-size: 11px; } }

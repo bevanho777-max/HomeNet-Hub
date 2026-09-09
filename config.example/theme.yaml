@@ -12,6 +12,10 @@
 font_family: 'ui-sans-serif, -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif'
 
 # subtitle: "self-hosted monitoring"   # optional; omitted by default (no change)
+# subtitle_en: "self-hosted monitoring" # the EN half, used when the viewer picks EN in
+                                        # the header switch. Omitted, `subtitle` is shown
+                                        # in both languages. Colours and fonts have no
+                                        # such variant — they are not text.
 
 # page background gradient stops
 background:

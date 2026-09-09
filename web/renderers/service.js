@@ -1,5 +1,6 @@
 // service renderer (§6) — no rings; KV list + header_right status/badge.
 import { card, mget, lvClass, esc, statusLevel } from './common.js';
+import { cv } from '../i18n.js';
 
 export function renderService(gridCard, target, snap, metrics) {
   const title = target.name || target.id;
@@ -12,7 +13,7 @@ export function renderService(gridCard, target, snap, metrics) {
     });
   }
 
-  const label = (k) => metrics?.[k]?.label || k;
+  const label = (k) => cv(metrics?.[k], 'label') || k;
 
   // header_right: "status" → colored status value, "badge" → target.badge, else metric
   let tag = '';

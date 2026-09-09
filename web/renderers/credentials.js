@@ -6,15 +6,18 @@
 // panel says so, because a form that silently cannot show you what you typed reads as
 // broken unless it tells you it is by design.
 import { esc } from './common.js';
+import { t } from '../i18n.js';
 
 const $ = (s) => document.querySelector(s);
 let onChanged = () => {};
 let busy = false;
 
+// Dictionary KEYS, not text: the same three names appear in the <select> in index.html
+// (translated there by data-i18n), and two lists of the same three strings drift.
 const TYPE_LABEL = {
-  ssh_password: 'SSH 密码',
-  ssh_key: 'SSH 私钥',
-  winrm_password: 'WinRM 密码',
+  ssh_password: 'cred_type_ssh_password',
+  ssh_key: 'cred_type_ssh_key',
+  winrm_password: 'cred_type_winrm_password',
 };
 
 const setStatus = (html, cls = '') => {
@@ -39,7 +42,8 @@ async function refresh() {
     $('#credForm').hidden = locked;
     $('#credLocked').hidden = !locked;
     if (locked) {
-      $('#credLockedWhy').textContent = j.vault?.reason || '未配置';
+      // One element, one whole sentence — see the comment on #credLockedWhy in index.html.
+      $('#credLockedWhy').textContent = t('cred_locked_why', j.vault?.reason || t('cred_unconfigured'));
       box.innerHTML = '';
       return;
     }
@@ -49,12 +53,12 @@ async function refresh() {
         <span class="addDot ok"></span>
         <b>${esc(c.name)}</b>
         <span class="addMuted">${esc(c.username)}</span>
-        <span class="addChip">${esc(TYPE_LABEL[c.type] || c.type)}</span>
-        <button type="button" class="addDel">删除</button>
-      </div>`).join('') : '<div class="addMuted">还没有存过凭据。</div>';
+        <span class="addChip">${esc(TYPE_LABEL[c.type] ? t(TYPE_LABEL[c.type]) : c.type)}</span>
+        <button type="button" class="addDel">${esc(t('del'))}</button>
+      </div>`).join('') : `<div class="addMuted">${esc(t('cred_empty'))}</div>`;
     box.querySelectorAll('.addDel').forEach((b) => { b.onclick = () => removeOne(b.closest('.addItem')); });
   } catch {
-    box.innerHTML = '<div class="addStatus bad">凭据列表加载失败</div>';
+    box.innerHTML = `<div class="addStatus bad">${esc(t('cred_list_failed'))}</div>`;
   }
 }
 
@@ -64,10 +68,10 @@ async function submit() {
   const type = $('#credType').value;
   const username = $('#credUser').value.trim();
   const secret = $('#credSecret').value;
-  if (!name || !username || !secret) return setStatus('名称、用户名、密钥都要填。', 'bad');
+  if (!name || !username || !secret) return setStatus(t('cred_need_fields'), 'bad');
   busy = true;
   $('#credSave').disabled = true;
-  setStatus('正在加密并保存…', 'busy');
+  setStatus(t('cred_busy'), 'busy');
   try {
     const r = await fetch('/api/credentials', {
       method: 'POST',
@@ -75,17 +79,17 @@ async function submit() {
       body: JSON.stringify({ name, type, username, secret }),
     });
     const j = await r.json();
-    if (r.status === 503) setStatus(`金库未配置:${esc(j.reason || '')}`, 'bad');
-    else if (r.status === 409) setStatus(`已存在同名凭据「${esc(name)}」`, 'warn');
-    else if (!r.ok) setStatus(`保存失败:${esc(j.reason || j.error || `HTTP ${r.status}`)}`, 'bad');
+    if (r.status === 503) setStatus(t('cred_vault_off', esc(j.reason || '')), 'bad');
+    else if (r.status === 409) setStatus(t('cred_dup', esc(name)), 'warn');
+    else if (!r.ok) setStatus(t('cred_save_failed', esc(j.reason || j.error || `HTTP ${r.status}`)), 'bad');
     else {
-      setStatus(`已加密保存「${esc(j.name)}」—— 密钥本身此后无法再读出。`, 'ok');
+      setStatus(t('cred_saved', esc(j.name)), 'ok');
       $('#credName').value = ''; $('#credUser').value = '';
       await refresh();
       await onChanged();
     }
   } catch (e) {
-    setStatus(`请求失败:${esc(String(e?.message || e))}`, 'bad');
+    setStatus(t('req_failed', esc(String(e?.message || e))), 'bad');
   } finally {
     clearSecret();          // always, including on failure
     busy = false;
@@ -97,35 +101,42 @@ async function removeOne(row) {
   const id = row?.dataset.id;
   if (!id) return;
   const name = row.querySelector('b')?.textContent || id;
-  if (!window.confirm(`删除凭据「${name}」?\n它无法恢复,引用它的目标会失效。`)) return;
+  if (!window.confirm(t('cred_del_confirm', name))) return;
   const btn = row.querySelector('.addDel');
-  btn.disabled = true; btn.textContent = '删除中…';
+  btn.disabled = true; btn.textContent = t('deleting');
   try {
     const r = await fetch(`/api/credentials/${encodeURIComponent(id)}`, { method: 'DELETE' });
     const j = await r.json();
     if (r.status === 409) {
-      btn.disabled = false; btn.textContent = '删除';
-      return setStatus(`「${esc(name)}」正在被这些目标使用:${esc((j.used_by || []).join('、'))}`, 'warn');
+      btn.disabled = false; btn.textContent = t('del');
+      return setStatus(t('cred_in_use', esc(name), esc((j.used_by || []).join(t('list_sep')))), 'warn');
     }
     if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
-    setStatus(`已删除「${esc(name)}」`, 'ok');
+    setStatus(t('cred_deleted', esc(name)), 'ok');
     await refresh();
     await onChanged();
   } catch (e) {
-    btn.disabled = false; btn.textContent = '删除';
-    setStatus(`删除失败:${esc(String(e?.message || e))}`, 'bad');
+    btn.disabled = false; btn.textContent = t('del');
+    setStatus(t('cred_del_failed', esc(String(e?.message || e))), 'bad');
   }
 }
 
 export function openCredPanel() {
   $('#credModal').classList.add('open');
   clearSecret();
-  setStatus('密钥加密后存入本机数据库,存进去就再也读不出来 —— 只能改名重存或删除。');
+  setStatus(t('cred_intro'));
   refresh();
   setTimeout(() => $('#credName')?.focus(), 0);
 }
 
 export function closeCredPanel() { $('#credModal')?.classList.remove('open'); }
+
+/** Re-render an OPEN panel in the language now selected. */
+export function relocalizeCredPanel() {
+  if (!$('#credModal')?.classList.contains('open')) return;
+  setStatus(t('cred_intro'));
+  refresh();
+}
 
 export function bindCredentials(opts = {}) {
   onChanged = opts.onChanged || (() => {});

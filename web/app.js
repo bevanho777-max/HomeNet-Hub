@@ -8,15 +8,16 @@ import { renderService } from './renderers/service.js';
 import { renderStack } from './renderers/stack.js';
 import { renderInfo } from './renderers/info.js';
 import { renderTable } from './renderers/table.js';
-import { initHistory, historyRefresh } from './renderers/history.js';
-import { initMachineDetail, openMachineModal, closeMachineModal, bindMachineModal } from './renderers/machine_detail.js';
-import { openTableModal, closeTableModal, bindTableModal } from './renderers/table_detail.js';
-import { bindAddTarget, closeAddPanel, openAddPanel } from './renderers/add_target.js';
-import { bindCredentials, closeCredPanel } from './renderers/credentials.js';
-import { bindClients, closeClientsPanel } from './renderers/clients.js';
-import { bindSession, refreshSession, sessionLost, closeLoginPanel, closeSetupPanel, maybeOpenSetup, isAuthed, openLoginPanel } from './renderers/session.js';
+import { initHistory, historyRefresh, relocalizeHistory } from './renderers/history.js';
+import { initMachineDetail, openMachineModal, closeMachineModal, bindMachineModal, relocalizeMachineModal } from './renderers/machine_detail.js';
+import { openTableModal, closeTableModal, bindTableModal, relocalizeTableModal } from './renderers/table_detail.js';
+import { bindAddTarget, closeAddPanel, openAddPanel, relocalizeAddPanel } from './renderers/add_target.js';
+import { bindCredentials, closeCredPanel, relocalizeCredPanel } from './renderers/credentials.js';
+import { bindClients, closeClientsPanel, relocalizeClientsPanel } from './renderers/clients.js';
+import { bindSession, refreshSession, sessionLost, closeLoginPanel, closeSetupPanel, maybeOpenSetup, isAuthed, openLoginPanel, relocalizeSession } from './renderers/session.js';
 import { bindDemoBar, applyDemoBar, emptyBoardHtml } from './renderers/demo.js';
 import { esc, statusLevel } from './renderers/common.js';
+import { applyDocumentLang, applyStaticText, cmap, colmap, cv, getLang, onLangChange, setLang } from './i18n.js';
 
 const FAST_MS = 1500;     // snapshot poll (machine/GPU rhythm)
 const CONFIG_MS = 10000;  // config re-check (hot-reload pickup)
@@ -46,10 +47,25 @@ function mountCards(containerId, cards) {
       if (c.accent) el.style.setProperty('--accent', c.accent);
       const body = el.querySelector('.card-body');
       if (body) updateBodyKeepRings(body, c.body);
-      // shell-persist: create the .tag span if it wasn't there at first mount
-      // (a card that mounted tagless while offline can later gain a header_right,
-      //  e.g. uptime), update it when present, remove it when the tag goes empty.
+      // shell-persist: the header is written once at first mount, so anything in it has
+      // to be re-synced here or the card keeps what it was born with until a hard reload.
       const h2 = el.querySelector('h2');
+      // The title. It changes when the target is renamed in YAML — and, now, whenever the
+      // viewer flips the language switch and the card resolves `name_en` instead. It is the
+      // h2's leading TEXT node (the tag span, when present, is its sibling), so this touches
+      // the text and leaves the tag alone.
+      if (h2) {
+        const first = h2.firstChild;
+        if (first && first.nodeType === Node.TEXT_NODE) {
+          if (first.textContent !== c.title) first.textContent = c.title;
+        } else if (c.title) {
+          // Mounted title-less (a stack frame) and has since gained one.
+          h2.insertBefore(document.createTextNode(c.title), h2.firstChild);
+        }
+      }
+      // create the .tag span if it wasn't there at first mount (a card that mounted
+      // tagless while offline can later gain a header_right, e.g. uptime), update it when
+      // present, remove it when the tag goes empty.
       let tagEl = h2 && h2.querySelector('.tag');
       if (c.tag) {
         if (!tagEl && h2) { tagEl = document.createElement('span'); tagEl.className = 'tag'; h2.appendChild(tagEl); }
@@ -72,7 +88,9 @@ function mountCards(containerId, cards) {
 // B23: which modal a card opens. `kind` comes from the renderer via card(), so the
 // routing lives with the card definition rather than being re-derived from the layout.
 function openCardModal(c) {
-  if (c.kind === 'machine') openMachineModal(c.key, `${c.title} Detail`);
+  // The machine modal titles itself from config (target name + " Detail") so a language
+  // change can re-derive it without app.js having to remember which card was clicked.
+  if (c.kind === 'machine') openMachineModal(c.key);
   // A table card only becomes clickable when it has rows the front could not fit, and it
   // carries them on the card object — so this modal opens from data already in hand
   // rather than a second fetch.
@@ -133,7 +151,13 @@ function chip(target, snap) {
 }
 
 // ── main render ──
-function targetById(id) { return (CONFIG.targets || []).find((t) => t.id === id) || { id }; }
+// Target display text resolved once, here, rather than in each renderer: name and badge
+// reach five callers (chips, machine, service, token, stack) and one of them would end up
+// on the base value while the others took `name_en`.
+function targetById(id) {
+  const t = (CONFIG.targets || []).find((x) => x.id === id) || { id };
+  return { ...t, name: cv(t, 'name'), badge: cv(t, 'badge') };
+}
 
 // B14: identity color for `color: auto` (or omitted) — role decided from live data.
 // GPU metrics present (⇔ payload gpus[] non-empty) → gpu; none → host; service/
@@ -211,9 +235,11 @@ function render() {
   $('#rawjson').textContent = JSON.stringify(lastSnap, null, 2);
 }
 
-// externalized UI label with a generic (non-project) bottom-line fallback (§12-step2)
+// externalized UI label with a generic (non-project) bottom-line fallback (§12-step2).
+// `layout.text_en` overlays `layout.text` key by key in English mode; a key present in
+// neither falls through to the built-in string, which is already English.
 function txt(key, fallback) {
-  const v = CONFIG?.layout?.text?.[key];
+  const v = cmap(CONFIG?.layout, 'text')[key];
   return (v == null || v === '') ? fallback : v;
 }
 function tokenCardCfg() {
@@ -233,8 +259,10 @@ async function fetchT(url, opts = {}, ms = 5000) {
 const RECONNECT_AT = 2;   // consecutive failures → "Reconnecting…" (yellow)
 const OFFLINE_AT = 5;     // consecutive failures → "Disconnected" (red)
 let failStreak = 0;
+let connState = null;   // remembered so a language change can re-render the badge at once
 function setConn(state) {
   const el = $('#conn'); if (!el) return;
+  connState = state;
   if (state === 'ok') { el.className = 'conn ok'; el.textContent = txt('conn_online', 'Online'); }
   else if (state === 'reconnecting') { el.className = 'conn warn'; el.textContent = txt('conn_reconnecting', 'Reconnecting…'); }
   else if (state === 'locked') { el.className = 'conn warn'; el.textContent = txt('conn_locked', 'Login required'); }
@@ -287,7 +315,7 @@ function applyTheme(theme) {
   set('--card-bg', theme.card_bg);
   if (theme.background) { set('--bg0', theme.background.base0); set('--bg1', theme.background.base1); set('--bg2', theme.background.base2); }
   if (theme.status) { set('--green', theme.status.ok); set('--yellow', theme.status.warn); set('--red', theme.status.danger); set('--cyan', theme.status.cool); }
-  applySubtitle(theme.subtitle);
+  applySubtitle(cv(theme, 'subtitle'));
 }
 // optional brand subtitle (title authority stays layout.header.title). Created
 // only when set, so the default (unset) DOM/layout is unchanged.
@@ -304,14 +332,17 @@ function applySubtitle(text) {
   } else if (el) { el.remove(); }
 }
 
-function applyConfig(first) {
-  applyTheme(CONFIG.theme);
-  const title = CONFIG.header?.title || 'Dashboard';
+// Every piece of page chrome that comes from config. Split out of applyConfig so a
+// language change can re-apply it WITHOUT re-running initHistory — that would reset the
+// history range and pane selection back to the config defaults, throwing away the window
+// the reader is in the middle of looking at.
+function applyChrome() {
+  const title = cv(CONFIG.header, 'title') || 'Dashboard';
   document.title = title;
   $('#title').textContent = title;
   // externalized chrome labels (config-driven, generic fallbacks)
   if (!$('#conn').textContent) $('#conn').textContent = txt('conn_connecting', 'Connecting…');
-  $('#historyTitle').textContent = CONFIG.layout?.history?.title || '';
+  $('#historyTitle').textContent = cv(CONFIG.layout?.history, 'title') || '';
   $('#rawTitle').textContent = txt('raw_title', 'Raw JSON');
   // Version footer. Written only when the server reported one — an older backend, or
   // one whose package.json could not be read, leaves the footer empty rather than
@@ -319,6 +350,11 @@ function applyConfig(first) {
   $('#version').textContent = CONFIG.version ? `v${CONFIG.version}` : '';
   $('#tokenModalClose').textContent = txt('modal_close', 'Close');
   $('#machineModalClose').textContent = txt('modal_close', 'Close');
+}
+
+function applyConfig(first) {
+  applyTheme(CONFIG.theme);
+  applyChrome();
   initHistory(CONFIG);
   initMachineDetail(CONFIG);
   render();
@@ -395,7 +431,7 @@ let tokenTargetId = null;
 
 async function openTokenModal(targetId) {
   tokenTargetId = targetId;
-  $('#tokenModalTitle').textContent = tokenCardCfg().detail_title || 'Detail';
+  $('#tokenModalTitle').textContent = cv(tokenCardCfg(), 'detail_title') || 'Detail';
   $('#tokenModal').classList.add('open');
   $('#tokenModalRanges').innerHTML = TOKEN_RANGES.map((r) =>
     `<button data-r="${r}" class="${r === tokenRange ? 'active' : ''}">${r}</button>`).join('');
@@ -409,6 +445,13 @@ async function openTokenModal(targetId) {
 }
 function closeTokenModal() { $('#tokenModal').classList.remove('open'); }
 
+/** Re-title and re-fetch in the language now selected. No-op while the modal is closed. */
+function relocalizeTokenModal() {
+  if (!$('#tokenModal').classList.contains('open')) return;
+  $('#tokenModalTitle').textContent = cv(tokenCardCfg(), 'detail_title') || 'Detail';
+  loadTokenDetail();
+}
+
 async function loadTokenDetail() {
   const tbl = $('#tokenModalTable');
   try {
@@ -416,8 +459,8 @@ async function loadTokenDetail() {
     const j = await r.json();
     if (j.error) { tbl.innerHTML = `<div class="note">Detail unavailable: ${esc(j.error)}</div>`; drawTokenChart({ days: [], classes: [], matrix: {} }); return; }
     drawTokenChart(j.series || { days: [], classes: [], matrix: {} });
-    const col = tokenCardCfg().columns || {};
-    const th = (k, fb) => esc(col[k] || fb);
+    const col = colmap(tokenCardCfg(), 'columns');
+    const th = (k, fb) => esc(col[k]?.label || fb);
     // The Net column appears only when the rows carried it (see token_detail.js) --
     // an older queries/ file or the demo collector yields null, and a blank column
     // would read as "zero new tokens" rather than "not measured".
@@ -472,6 +515,47 @@ function drawTokenChart(series) {
     ctx.fillText(d, x, cssH - 6);
   });
 }
+
+// ── language switch ──
+// Everything the switch has to touch, in one place. Two things it deliberately does NOT
+// do: re-run initHistory (that resets the range and pane selection, throwing away the
+// window being looked at — relocalizeHistory re-labels the pickers instead), and rewrite
+// a panel's last OUTCOME line ("Wrong password."), which stays in the language it was
+// reported in rather than being silently restated under the reader.
+function paintLangSwitch() {
+  const box = $('#langSw');
+  if (!box) return;
+  box.querySelectorAll('.langBtn').forEach((b) => b.classList.toggle('active', b.dataset.lang === getLang()));
+}
+
+function relocalizeAll() {
+  paintLangSwitch();
+  applyStaticText();
+  if (CONFIG) {
+    applyChrome();
+    if (connState) setConn(connState);   // the badge is written per tick; don't wait for one
+    relocalizeHistory(CONFIG);
+    render();
+  }
+  relocalizeSession();
+  relocalizeAddPanel();
+  relocalizeCredPanel();
+  relocalizeClientsPanel();
+  relocalizeTableModal();
+  relocalizeMachineModal();
+  relocalizeTokenModal();
+}
+
+// Applied before the first paint so an EN reader never sees the zh markup flash. In zh
+// this writes back exactly what the document already contains.
+applyDocumentLang();
+applyStaticText();
+paintLangSwitch();
+$('#langSw').onclick = (e) => {
+  const b = e.target.closest('.langBtn');
+  if (b) setLang(b.dataset.lang);
+};
+onLangChange(relocalizeAll);
 
 // ── boot ──
 $('#tokenModalClose').onclick = closeTokenModal;
