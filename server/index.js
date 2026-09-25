@@ -84,7 +84,11 @@ const loginLimiter = new LoginLimiter();
 // counts every attempt, not just failures. It is also the only limiter whose lockout can
 // never strand anyone: once setup succeeds the endpoint is 409 forever anyway.
 const setupLimiter = new LoginLimiter();
-const REQUIRE_LOGIN_TO_VIEW = /^(1|true|yes|on)$/i.test(String(process.env.REQUIRE_LOGIN_TO_VIEW || '').trim());
+const VIEW_MODE_RAW = String(process.env.REQUIRE_LOGIN_TO_VIEW || '').trim();
+// `lan`: viewing needs a session from outside the LAN only. It still counts as "login
+// required" everywhere a boolean is reported, because from the internet it is.
+const VIEW_LAN_OPEN = /^lan$/i.test(VIEW_MODE_RAW);
+const REQUIRE_LOGIN_TO_VIEW = VIEW_LAN_OPEN || /^(1|true|yes|on)$/i.test(VIEW_MODE_RAW);
 // LiteLLM's key API, used for two things only: naming the digests the spend table
 // stores, and minting/revoking client keys from the admin panel. Unconfigured is a
 // supported state, not an error — the manager page says so and every other feature,
@@ -98,7 +102,7 @@ console.log(`[vault] ${vault.locked ? `locked — ${vault.reason}` : 'unlocked'}
 // Never the password, never anything derived from it — only whether one is configured.
 console.log(`[auth] admin ${auth.configured ? `configured (${auth.source})` : `DISABLED — ${auth.reason}`}`
   + ` (admin endpoints ${auth.configured ? 'require login' : 'all answer 401'};`
-  + ` dashboard ${REQUIRE_LOGIN_TO_VIEW ? 'requires login' : 'public'})`);
+  + ` dashboard ${VIEW_LAN_OPEN ? 'public on LAN, login from outside' : REQUIRE_LOGIN_TO_VIEW ? 'requires login' : 'public'})`);
 if (auth.source === 'env-bootstrap') {
   console.log('[auth] bootstrapped the admin_auth row from ADMIN_PASSWORD;'
     + ' from now on the database is authoritative and editing that env var changes nothing.');
@@ -237,9 +241,29 @@ async function requireSameOrigin(req, reply) {
   if (!o.ok) return reply.code(403).send({ error: 'forbidden', reason: o.reason });
 }
 
-/** Optional whole-site privacy. Default off: the board stays public, as before. */
+/**
+ * A direct LAN hit on the port: private socket peer and NO forwarding headers at all.
+ *
+ * Deliberately not clientIsPrivate(): Lucky rewrites X-Forwarded-For to its own LAN
+ * address (measured: every proxied request arrived as "192.168.1.5, 192.168.1.5"), so
+ * through the proxy an internet visitor is indistinguishable from a LAN one by address.
+ * What the proxy cannot help doing is ADD these headers — so their presence means "came
+ * through the proxy", and an internet caller has no way to arrive without them.
+ */
+function directLanHit(req) {
+  const h = req.headers || {};
+  if (h['x-forwarded-for'] || h['x-forwarded-host'] || h['x-real-ip'] || h.forwarded) return false;
+  return checkPrivateClient(req.socket?.remoteAddress).ok;
+}
+
+/**
+ * Optional whole-site privacy. Default off: the board stays public, as before.
+ * `lan` lets a direct LAN hit (http://<host>:3100) look without a session; anything
+ * through the reverse proxy — the domain, even from home — needs one.
+ */
 async function requireView(req, reply) {
   if (!REQUIRE_LOGIN_TO_VIEW) return;
+  if (VIEW_LAN_OPEN && directLanHit(req)) return;
   return requireAdmin(req, reply);
 }
 

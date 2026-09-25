@@ -291,7 +291,7 @@ fail-closed default the vault takes, for the same reason.
 |---|---|
 | `GET /api/discover`, `GET /api/credentials` | admin session |
 | `POST`/`DELETE /api/credentials`, `POST`/`DELETE /api/user_targets`, `POST /api/demo/dismiss` | admin session **+** same-origin check |
-| `GET /api/config`, `/api/snapshot`, `/api/history`, `/api/token_detail`, `GET /api/user_targets` | public by default; admin session when `REQUIRE_LOGIN_TO_VIEW` is on |
+| `GET /api/config`, `/api/snapshot`, `/api/history`, `/api/token_detail`, `GET /api/user_targets` | public by default; admin session when `REQUIRE_LOGIN_TO_VIEW` is on (`lan`: only through the reverse proxy) |
 | `/healthz`, `/api/login`, `/api/logout`, `/api/session` | always reachable |
 | `POST /api/admin/setup` | same-origin **+** private client address **+** *only* while no admin exists; `409` forever after |
 | `POST /api/admin/password` | admin session **+** same-origin **+** the current password |
@@ -299,7 +299,9 @@ fail-closed default the vault takes, for the same reason.
 
 Reading the board stays public, because that is what an existing install already did and
 a monitor on a trusted LAN is usually meant to be glanceable. Flip
-`REQUIRE_LOGIN_TO_VIEW=1` and the whole panel — data included — needs a session.
+`REQUIRE_LOGIN_TO_VIEW=1` and the whole panel — data included — needs a session; set it to
+`lan` and a direct LAN hit on the port (`http://<host>:3100`) looks freely while anything
+through the reverse proxy (the domain, even from home) needs one.
 
 ### The controls follow the session
 
@@ -617,7 +619,7 @@ and fill in what you use.
 |---|---|
 | `VAULT_KEY` | Credential-vault passphrase (≥16 chars; `openssl rand -base64 32`). Unset → the vault is locked and no credential can be stored or decrypted. **Losing it voids every stored credential.** |
 | `ADMIN_PASSWORD` | **Bootstrap** password for the management endpoints — discovery, the credentials API, and *writes* to runtime targets (8-256 chars; `openssl rand -base64 24`). Used once, to create the hashed `admin_auth` row on an install that has none; after that the database is authoritative and this var is inert. **Optional since v2.8:** leave it unset and set the password from the browser on first run instead (LAN only). Unset **and** no row **and** never set up → those endpoints answer **401**, never "open". Delete the row to bootstrap again, or to re-arm the first-run wizard — that is the forgotten-password recovery. |
-| `REQUIRE_LOGIN_TO_VIEW` | `1`/`true`/`on` → viewing needs a session too (`/api/config`, `/api/snapshot`, `/api/history`, …). Default off: the board stays public and only management is gated. |
+| `REQUIRE_LOGIN_TO_VIEW` | `1`/`true`/`on` → viewing needs a session too (`/api/config`, `/api/snapshot`, `/api/history`, …). `lan` → only through the reverse proxy: a request with no forwarding headers from a private peer (a direct `http://<host>:3100` hit) is let through. Default off: the board stays public and only management is gated. |
 | `PG_DSN` | Read-only Postgres DSN for a `sql` token collector. The name is whatever the target's `dsn_env` says; `PG_DSN` is the shipped example. |
 | `PUSH_TOKEN_*` | Shared secret per `http_push` target; the name must match that target's `token_env` (`openssl rand -hex 32`). |
 | `TELEGRAM_BOT_TOKEN` | Optional, for the built-in `probe_telegram` exec command. |

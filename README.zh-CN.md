@@ -248,14 +248,15 @@ openssl rand -base64 24        # 至少 8 字符
 |---|---|
 | `GET /api/discover`、`GET /api/credentials` | 管理会话 |
 | `POST`/`DELETE /api/credentials`、`POST`/`DELETE /api/user_targets`、`POST /api/demo/dismiss` | 管理会话 **+** 同源校验 |
-| `GET /api/config`、`/api/snapshot`、`/api/history`、`/api/token_detail`、`GET /api/user_targets` | 默认公开;打开 `REQUIRE_LOGIN_TO_VIEW` 后需要管理会话 |
+| `GET /api/config`、`/api/snapshot`、`/api/history`、`/api/token_detail`、`GET /api/user_targets` | 默认公开;打开 `REQUIRE_LOGIN_TO_VIEW` 后需要管理会话(`lan`:仅经反向代理访问时需要) |
 | `/healthz`、`/api/login`、`/api/logout`、`/api/session` | 始终可达 |
 | `POST /api/admin/setup` | 同源 **+** 私网客户端地址 **+** 仅在还没有管理员时;设过之后永远 `409` |
 | `POST /api/admin/password` | 管理会话 **+** 同源 **+** 当前密码 |
 | `POST /api/push/:targetId` | 仍由该目标的 `X-Push-Token` 把守 |
 
 看板本身默认仍然公开:一来这是既有安装原本的行为,二来可信局域网里的监控通常就是拿来
-扫一眼的。把 `REQUIRE_LOGIN_TO_VIEW=1` 打开,整块面板连同数据都需要会话。
+扫一眼的。把 `REQUIRE_LOGIN_TO_VIEW=1` 打开,整块面板连同数据都需要会话;设为 `lan`
+则局域网直连端口(`http://<host>:3100`)免登录,经反向代理(域名,在家也算)进来的需要登录。
 
 ### 控件跟着会话走
 
@@ -542,7 +543,7 @@ docker compose restart homenet-hub
 |---|---|
 | `VAULT_KEY` | 凭据金库主密钥(≥16 字符;`openssl rand -base64 32`)。不设 → 金库锁定,凭据既存不进也解不开。**丢了它 = 所有已存凭据作废。** |
 | `ADMIN_PASSWORD` | 管理端点(发现、整个凭据 API、以及对运行时目标的*写入*)的**引导**密码(8–256 字符;`openssl rand -base64 24`)。只用一次,在还没有 `admin_auth` 行的安装上创建那一行(哈希存入);此后以数据库为准,这个变量不再起作用。**v2.8 起可选:** 不设它,改成首次运行时从浏览器里设(仅限局域网)。不设**且**无该行**且**从没设置过 → 这些端点一律 **401**,而不是"放开"。删掉那一行可以重新引导,或者重新武装首次运行向导 —— 这就是忘记密码时的恢复手段。 |
-| `REQUIRE_LOGIN_TO_VIEW` | 设为 `1`/`true`/`on` → 连"看"也要登录(`/api/config`、`/api/snapshot`、`/api/history` 等)。默认关闭:看板保持公开,只有管理动作需要登录。 |
+| `REQUIRE_LOGIN_TO_VIEW` | 设为 `1`/`true`/`on` → 连"看"也要登录(`/api/config`、`/api/snapshot`、`/api/history` 等)。设为 `lan` → 只有经反向代理才要登录:私网对端且不带任何转发头(直连 `http://<host>:3100`)的请求放行。默认关闭:看板保持公开,只有管理动作需要登录。 |
 | `PG_DSN` | `sql` token 采集器用的只读 Postgres DSN。变量名由目标的 `dsn_env` 决定,`PG_DSN` 是自带示例里用的那个。 |
 | `PUSH_TOKEN_*` | 每个 `http_push` 目标一个共享密钥,变量名必须与该目标的 `token_env` 一致(`openssl rand -hex 32`)。 |
 | `TELEGRAM_BOT_TOKEN` | 可选,内置 `probe_telegram` exec 命令用。 |

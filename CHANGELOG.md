@@ -49,6 +49,28 @@ on screen is the one from `package.json`, and this file is what needs fixing.
 
 ---
 
+## v2.16.1 — 2026-09-25
+
+**`REQUIRE_LOGIN_TO_VIEW=lan`:局域网直连端口免登录,经反向代理(域名)访问必须登录。**
+
+*Rebuild required — `server/` changed.*
+
+之前只有两档:全公开(默认),或者连局域网也要登录。经反向代理暴露到公网的面板,两档都不
+合适 —— 前者让任何人不登录就能读 `/api/config`、`/api/snapshot`(拓扑、服务名、token 用量),
+后者把家里常亮的看板也锁住。新增第三档 `lan`:socket 对端是私网、且**不带任何转发头**
+(`X-Forwarded-For` / `X-Forwarded-Host` / `X-Real-IP` / `Forwarded`)的请求放行,其余要会话。
+
+**为什么不按地址判断**(没用首次设置那个 `clientIsPrivate()`):实测 Lucky 把
+`X-Forwarded-For` 改写成它自己的内网地址,每个经代理的请求到这里都是
+`192.168.1.5, 192.168.1.5` —— 按地址看,公网访客和局域网访客一模一样。代理改不了的是
+**它一定会加上这些头**,所以"有转发头 = 走了代理",公网请求没有不带头进来的路。代价:在家
+用域名访问也要登录;免登录请用 `http://192.168.1.24:3100` 直连。
+
+`/healthz` 的 `require_login_to_view` 在 `lan` 下报 `true`:经域名访问确实要登录。
+`1`/`true`/`on` 与未设置时的行为不变。
+
+---
+
 ## v2.16 — 2026-09-10
 
 **中 / EN 语言切换:界面全套双语,配置标签按需加 `_en`。**
