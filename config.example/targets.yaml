@@ -197,6 +197,9 @@ targets:
       speed_query_file: "queries/token_speed.sql"  # optional: t/s over last N completions
       speed_samples: 10               # whitelisted integer sample count
       total_query_file: "queries/token_total.sql"  # optional: cumulative all-time (cached ~10min)
+      # total_excludes_window: true   # optional: the total query takes $1 = window days and returns only
+      #                               # days BEFORE the window; the live window is added on every poll,
+      #                               # so "all" never trails "today". Needs `WHERE <day> < CURRENT_DATE - ($1 - 1)`.
       interval: "15s"
     classify:
       by: model

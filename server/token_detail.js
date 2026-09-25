@@ -66,7 +66,7 @@ function classOf(model, compiled) {
  * back null and the card simply omits that line rather than reporting a zero it
  * cannot distinguish from "no new tokens".
  */
-export function pivotTokens(rows, { speed = null, classify = null, totalLabel = null, totals = null } = {}) {
+export function pivotTokens(rows, { speed = null, classify = null, totalLabel = null, totals = null, totalsExcludeWindow = false } = {}) {
   const compiled = compileClassify(classify);
   const classList = [...compiled.rules, compiled.fallback]; // ordered, display order
 
@@ -115,12 +115,14 @@ export function pivotTokens(rows, { speed = null, classify = null, totalLabel = 
       if (r.net_tokens != null) { sawCumNet = true; agg.net += Number(r.net_tokens) || 0; }
     }
   }
-  const allOf = (key) => (useTotals ? cumByClass.get(key).all : byClass.get(key).all);
-  const reqOf = (key) => (useTotals ? cumByClass.get(key).requests : byClass.get(key).requests);
+  // totalsExcludeWindow: `totals` stops where the window starts, so the window is added.
+  const win = (key, f) => (useTotals && !totalsExcludeWindow ? 0 : byClass.get(key)[f]);
+  const allOf = (key) => (useTotals ? cumByClass.get(key).all : 0) + win(key, 'all');
+  const reqOf = (key) => (useTotals ? cumByClass.get(key).requests : 0) + win(key, 'requests');
   // All-time net follows `all`: the cumulative query when there is one, else the
-  // window. Null when neither source carried the column.
-  const hasNetAll = useTotals ? sawCumNet : sawNet;
-  const netOf = (key) => (useTotals ? cumByClass.get(key).net : byClass.get(key).net);
+  // window. Null when a source that contributes did not carry the column.
+  const hasNetAll = useTotals ? sawCumNet && (!totalsExcludeWindow || sawNet) : sawNet;
+  const netOf = (key) => (useTotals ? cumByClass.get(key).net : 0) + win(key, 'net');
 
   const columns = classList.map((c) => {
     const a = byClass.get(c.key);

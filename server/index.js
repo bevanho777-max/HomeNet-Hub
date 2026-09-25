@@ -121,6 +121,10 @@ function applyEffective(next, why) {
 
 applyEffective(effective.get(), 'boot');
 
+// queries/*.sql are outside the etag, so an edit to one alone never fires 'change'.
+// Dropping the SQL cache on every reload is cheap: the next poll re-reads the file.
+config.on('reloaded', () => clearQueryCache());
+
 config.on('change', (next) => {
   const r = effective.rebuild(next);
   // A refused rebuild means the FILE edit is fine but the user rows no longer fit it

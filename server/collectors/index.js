@@ -135,19 +135,29 @@ export class Scheduler {
         // B4: cumulative all-time totals for the "all"/requests columns, cached
         // ~10min (full-table scan kept off the poll cadence). Trend/today/spark
         // still come from the windowed `rows` above.
+        //
+        // total_excludes_window: the cached query covers only the days BEFORE the live
+        // window, and the window (fetched every poll) is added on top. Past days do not
+        // change, so "all" is exact on every poll instead of trailing "today" by up to
+        // TTL + interval. The cache is re-keyed when the UTC day rolls (LiteLLM buckets
+        // by UTC date), because that is when a day leaves the window.
         let totals = null;
+        const split = target.source.total_excludes_window === true;
         if (target.source.total_query_file) {
+          const epoch = split ? new Date().toISOString().slice(0, 10) : null;
           const cached = this._totals.get(target.id);
-          if (cached && (Date.now() - cached.at) < TOTALS_TTL_MS) {
+          if (cached && cached.epoch === epoch && (Date.now() - cached.at) < TOTALS_TTL_MS) {
             totals = cached.rows;
           } else {
             try {
-              totals = await collectSqlRows(target.source, env, target.source.total_query_file);
-              this._totals.set(target.id, { at: Date.now(), rows: totals });
-            } catch { totals = cached ? cached.rows : null; } // keep last good on error
+              totals = await collectSqlRows(target.source, env, target.source.total_query_file,
+                split ? SNAPSHOT_TOKEN_DAYS : undefined);
+              this._totals.set(target.id, { at: Date.now(), rows: totals, epoch });
+            } catch { totals = cached && cached.epoch === epoch ? cached.rows : null; } // keep last good on error
           }
         }
-        const pivot = pivotTokens(rows, { classify: target.classify, totalLabel: this.tokenLabels?.total, speed, totals });
+        const pivot = pivotTokens(rows, { classify: target.classify, totalLabel: this.tokenLabels?.total, speed, totals,
+          totalsExcludeWindow: split });
         const raw = { token_speed: pivot.speed };
         const norm = normalize(raw, target, metrics);
         snapshot.update(target.id, { online: true, metrics: norm.metrics, extra: { token: pivot } });

@@ -90,6 +90,7 @@ const sourceSchema = {
     speed_query_file: { type: 'string' }, // B3 optional 2nd query → token_speed scalar
     speed_samples: { type: 'number', default: 10 }, // B3 whitelisted sample count
     total_query_file: { type: 'string' }, // B4 optional cumulative all-time query (slow-cycle cached)
+    total_excludes_window: { type: 'boolean' }, // total query takes $1 = window days and covers only days BEFORE it
     // exec
     command: { type: 'string' },
     args: { type: 'array', items: { type: ['string', 'number', 'boolean'] } },

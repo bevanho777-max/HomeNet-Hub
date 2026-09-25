@@ -82,6 +82,9 @@ export class ConfigStore extends EventEmitter {
       this.lastError = null;
       this._log('reloaded', `etag=${next.etag} (changed=${changed}) trigger=${path || '?'}`);
       if (changed) this.emit('change', next);
+      // Every successful reload, changed or not: queries/*.sql sit outside the etag, so
+      // a SQL-only edit is "unchanged" here yet still has to reach the query cache.
+      this.emit('reloaded', path);
     } catch (err) {
       const errors = err.errors || [err.message];
       this.lastError = { at: new Date().toISOString(), errors };

@@ -49,6 +49,30 @@ on screen is the one from `package.json`, and this file is what needs fixing.
 
 ---
 
+## v2.16.2 — 2026-09-25
+
+**Token 卡的累计值(All / 请求数 / Net)不再落后于「今日」。**
+
+*Rebuild required — `server/` changed.（同时要改实配的 `config/`,见下。）*
+
+累计值来自 `total_query_file`,为避开全表扫描缓存 10 分钟;今日值来自每 5 分钟一次的窗口查询。
+两者不同步,同一张卡上 All 最多落后 Today 约 15 分钟 —— 实测对账时 All 比数据库少 7 个请求、
+36 万 token,而 Today 分毫不差。
+
+新增可选 `total_excludes_window: true`:累计查询带 `$1`(= 窗口天数),**只统计窗口开始之前**
+的日子,窗口部分每轮用刚取到的数据补上。窗口之前的日子不会再变,缓存也就不会过期;UTC 日期
+翻页(LiteLLM 按 UTC 分日)时缓存重新取,因为那一刻正好有一天滑出窗口。不开这个选项时行为不变,
+`config.example` 里按 SpendLogs 写的示例查询也不受影响。
+
+**顺带修复:只改 `queries/*.sql` 不生效。** SQL 文件不参与 etag,单独改一个查询文件时热加载判定
+为「未变化」直接返回,旧 SQL 一直留在缓存里(实测:`token_speed.sql` 改完后面板仍在跑旧的
+`SELECT NULL`)。现在任何配置文件变化都会先清掉 SQL 缓存。
+
+实配需同时:`targets.yaml` 的 token 源加 `total_excludes_window: true`,`queries/token_total.sql`
+加 `WHERE date::date < (CURRENT_DATE - ($1::int - 1))`。
+
+---
+
 ## v2.16.1 — 2026-09-25
 
 **`REQUIRE_LOGIN_TO_VIEW=lan`:局域网直连端口免登录,经反向代理(域名)访问必须登录。**
