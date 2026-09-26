@@ -31,7 +31,7 @@ export function renderStack(gc, resolve, metrics) {
         `<div class="item"><span class="label">${esc(label(k))}</span><span class="value">—</span></div>`).join('');
       const err = snap?.error ? ` (${esc(snap.error)})` : '';
       const badge = esc(target.badge || 'offline');
-      return `<div class="stack-item stack-item-offline"${accentAttr}>`
+      return `<div class="stack-item stack-item-offline" data-target="${esc(childId)}"${accentAttr}>`
         + `<h2>${title}<span class="tag">${badge}</span></h2>`
         + `<div class="stack-offline"><div class="stack-offline-status">Offline${err}</div>`
         + (skel ? `<div class="kv">${skel}</div>` : '') + '</div>'
@@ -40,7 +40,7 @@ export function renderStack(gc, resolve, metrics) {
 
     const m = renderService(childCfg, target, snap, metrics); // { title, tag, body, accent }
     // m.tag may be HTML (e.g. a colored status span) — matches mountCards' contract.
-    return `<div class="stack-item"${m.accent ? ` style="--accent:${esc(m.accent)}"` : ''}>`
+    return `<div class="stack-item" data-target="${esc(childId)}"${m.accent ? ` style="--accent:${esc(m.accent)}"` : ''}>`
       + `<h2>${esc(m.title)}${m.tag ? `<span class="tag">${m.tag}</span>` : ''}</h2>`
       + m.body
       + `</div>`;
@@ -58,5 +58,10 @@ export function renderStack(gc, resolve, metrics) {
     body: `<div class="stack" data-dir="${dir}" data-min="${minW}"><div class="stack-inner">${inners}</div></div>`,
     accent: gc.accent || '',
     stale: false,
+    // clickable: detail → the clicked child opens the history modal (app.js reads
+    // data-target off the .stack-item under the pointer).
+    kind: 'stack',
+    clickable: gc.clickable === 'detail',
+    detail: { ranges: gc.detail_ranges || null },
   });
 }

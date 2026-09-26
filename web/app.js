@@ -80,14 +80,21 @@ function mountCards(containerId, cards) {
     // which was fine while the token card was the only one; a machine card needs its
     // own. `onclick` (not addEventListener) so a re-render replaces the handler
     // instead of stacking a new one on the persisted shell.
-    el.onclick = c.clickable ? () => openCardModal(c) : null;
+    el.onclick = c.clickable ? (e) => openCardModal(c, e) : null;
   }
   container.querySelectorAll('.card').forEach((el) => { if (!seen.has(el.dataset.key)) el.remove(); });
 }
 
 // B23: which modal a card opens. `kind` comes from the renderer via card(), so the
 // routing lives with the card definition rather than being re-derived from the layout.
-function openCardModal(c) {
+function openCardModal(c, e) {
+  // A stack is several targets in one frame: open the one that was clicked. A click on
+  // the divider between children lands on no child and does nothing.
+  if (c.kind === 'stack') {
+    const id = e?.target?.closest?.('.stack-item')?.dataset.target;
+    if (id) openMachineModal(id, c.detail?.ranges);
+    return;
+  }
   // The machine modal titles itself from config (target name + " Detail") so a language
   // change can re-derive it without app.js having to remember which card was clicked.
   if (c.kind === 'machine') openMachineModal(c.key);

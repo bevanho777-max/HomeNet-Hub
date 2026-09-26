@@ -49,6 +49,25 @@ on screen is the one from `package.json`, and this file is what needs fixing.
 
 ---
 
+## v2.17.0 — 2026-09-25
+
+**Stack 卡可以点进子卡看历史;弹窗时段可按卡配置;速度卡拆成两张图。**
+
+*Rebuild required — `server/` + `web/` changed.*
+
+- `stack` 卡支持 `clickable: detail`:点哪个子卡就打开哪个 target 的历史弹窗(复用机器卡的
+  弹窗与 `/api/history`)。点在子卡之间的分隔线上不响应。
+- 卡片可选 `detail_ranges`(取值为 `RANGE_SEC` 的键),替换弹窗默认的 24h / 7d / 30d。
+  `RANGE_SEC` 新增 `1d`、`3d`。
+- 新角色 `speed`(target 有 `prefill_speed` / `decode_speed`):两条线各画一张图、各自自动
+  缩放 —— prefill 约是 decode 的 10 倍,放在同一根轴上 decode 会被压成一条贴底的直线。
+  其他卡的弹窗不变。
+- 图表左侧 0..100 刻度只在确实有序列画在左轴时才显示(与右轴已有的规则对称)。
+
+实配:速度 stack 加 `clickable: detail` 与 `detail_ranges: [1d, 3d, 7d]`。
+
+---
+
 ## v2.16.2 — 2026-09-25
 
 **Token 卡的累计值(All / 请求数 / Net)不再落后于「今日」。**

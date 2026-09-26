@@ -1,6 +1,6 @@
 {
   "name": "homenet-hub",
-  "version": "2.16.2",
+  "version": "2.17.0",
   "private": false,
   "type": "module",
   "description": "Config-driven, self-hostable home-lab monitoring dashboard. Fastify + SQLite, YAML-configured, hot-reloadable.",

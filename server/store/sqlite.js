@@ -505,4 +505,4 @@ export class Tsdb {
   close() { try { this.db.close(); } catch { /* ignore */ } }
 }
 
-export const RANGE_SEC = { '1h': 3600, '6h': 21600, '24h': 86400, '7d': 604800, '30d': 2592000 };
+export const RANGE_SEC = { '1h': 3600, '6h': 21600, '24h': 86400, '1d': 86400, '3d': 259200, '7d': 604800, '30d': 2592000 };

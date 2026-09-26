@@ -221,6 +221,8 @@ const gridCard = {
     },
     header_right: { anyOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }] }, // B13: single or combined
     clickable: { type: 'string' },
+    // Windows offered by this card's detail modal (default 24h/7d/30d). Keys of RANGE_SEC.
+    detail_ranges: { type: 'array', minItems: 1, items: { enum: ['1h', '6h', '24h', '1d', '3d', '7d', '30d'] } },
     // §12-step2: externalized card-local labels (all optional strings)
     hint: { type: 'string' },
     hint_en: enString,

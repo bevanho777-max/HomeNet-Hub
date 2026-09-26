@@ -23,7 +23,11 @@ const ROLE_SERIES = {
   gateway: ['cpu', 'cache_hit', 'success'],
   nas: ['cpu', 'mem_bytes', 'disks_hdd_max'],
   host: ['cpu', 'mem_bytes', 'disk_bytes'],
+  // llama.cpp speed cards. Drawn as two panels (see SPLIT_ROLES): prefill runs ~10x
+  // decode, so one shared auto-scaled axis would flatten decode into the floor.
+  speed: ['prefill_speed', 'decode_speed'],
 };
+const SPLIT_ROLES = new Set(['speed']);
 const FALLBACK = ['cpu', 'mem_bytes', 'disk_bytes'];
 
 // Axis + colour per metric, overridable from metrics.yaml (`axis:` / `color:`), which
@@ -63,6 +67,7 @@ function roleOf(snap, recorded = []) {
   // ever recorded -- otherwise m110 (down for days) would be typed as a plain host and
   // shown cpu/mem/disk instead of the GPU lines its history is actually full of.
   const has = (k) => typeof snap?.metrics?.[k]?.value === 'number' || recorded.includes(k);
+  if (has('prefill_speed') || has('decode_speed')) return 'speed';
   if (has('gpu') || has('gpu_temp') || has('gpu_power')) return 'gpu';
   if (has('cache_hit') || has('success') || has('reqs_5m')) return 'gateway';
   if (has('nas_disk_bytes') || has('vol1_bytes')) return 'nas';
@@ -113,6 +118,22 @@ function noteMissing(role, recorded, available) {
   el.hidden = false;
 }
 
+// Second chart for split roles, created on first use under the main legend and hidden
+// for every other card so machine charts are untouched.
+function secondPanel(show) {
+  let wrap = document.getElementById('machineModalPanel2');
+  if (!wrap && show) {
+    wrap = document.createElement('div');
+    wrap.id = 'machineModalPanel2';
+    wrap.style.marginTop = '16px';
+    wrap.innerHTML = '<canvas id="machineModalCanvas2" height="220" style="width:100%;display:block"></canvas>'
+      + '<div class="legend" id="machineModalLegend2" style="margin-top:12px"></div>';
+    $('#machineModalLegend').after(wrap);
+  }
+  if (wrap) wrap.hidden = !show;
+  return show ? { canvas: $('#machineModalCanvas2'), legend: $('#machineModalLegend2') } : null;
+}
+
 async function load() {
   const canvas = $('#machineModalCanvas');
   const legend = $('#machineModalLegend');
@@ -142,11 +163,21 @@ async function load() {
     const available = recorded.filter((k) => (series[k] || []).length >= 2);
     const role = roleOf(window.__lastSnap?.[targetId], recorded);
     const subs = seriesFor(role, available);
+    const split = SPLIT_ROLES.has(role);
+    const second = secondPanel(split);
     try {
-      drawMulti(canvas, series, legend, {
-        subs, metrics: metrics(), height: 300,
-        emptyText: t('chart_no_data_range', range),
-      });
+      if (split) {
+        // One series per panel, each on its own auto-scaled axis.
+        const one = (s) => (s ? [{ ...s, axis: 'R' }] : []);
+        const opts = { metrics: metrics(), height: 220, emptyText: t('chart_no_data_range', range) };
+        drawMulti(canvas, series, legend, { ...opts, subs: one(subs[0]) });
+        drawMulti(second.canvas, series, second.legend, { ...opts, subs: one(subs[1]) });
+      } else {
+        drawMulti(canvas, series, legend, {
+          subs, metrics: metrics(), height: 300,
+          emptyText: t('chart_no_data_range', range),
+        });
+      }
     } catch (e) {
       showError(t('chart_render_failed', e?.message || e), false);
       return;
@@ -170,12 +201,18 @@ function modalTitle(id) {
   return `${cv(target, 'name') || id} Detail`;
 }
 
-export function openMachineModal(id) {
+// Windows for the modal now open: a card may bring its own (the speed stack asks for
+// 1d/3d/7d); everything else keeps RANGES.
+let ranges = RANGES;
+
+export function openMachineModal(id, customRanges) {
   targetId = id;
+  ranges = Array.isArray(customRanges) && customRanges.length ? customRanges : RANGES;
+  if (!ranges.includes(range)) range = ranges[0];
   $('#machineModalTitle').textContent = modalTitle(id);
   $('#machineModal').classList.add('open');
   clearError();
-  $('#machineModalRanges').innerHTML = RANGES.map((r) =>
+  $('#machineModalRanges').innerHTML = ranges.map((r) =>
     `<button data-r="${esc(r)}" class="${r === range ? 'active' : ''}">${esc(r)}</button>`).join('');
   load();
 }

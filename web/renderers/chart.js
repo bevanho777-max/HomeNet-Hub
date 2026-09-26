@@ -87,6 +87,9 @@ export function drawMulti(canvas, series, legendEl, opts) {
   // ticks regardless left a bare 0…1.1 scale on cards whose metrics are all
   // percentages (the gateway card is exactly this), which reads as a broken axis.
   const hasRight = present.some((s) => s.axis === 'R');
+  // Same rule for the left 0..100 scale: a chart whose every series is on the right axis
+  // (the speed panels) would otherwise show a percent scale that nothing is drawn against.
+  const hasLeft = present.some((s) => s.axis === 'L') || !hasRight;
   // B24: series names live in a gutter to the RIGHT of the axis, never inside the plot.
   // That is what makes them collision-proof by construction rather than by tuning: a
   // spike cannot cross a label, a label cannot hide a sample, and because the gutter is
@@ -124,8 +127,10 @@ export function drawMulti(canvas, series, legendEl, opts) {
   for (let i = 0; i <= 4; i++) {
     const y = padT + (H * i / 4);
     ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(cssW - padR, y); ctx.stroke();
-    ctx.fillStyle = 'rgba(106,169,255,0.6)'; ctx.textAlign = 'right';
-    ctx.fillText(String(100 - i * 25), padL - 5, y + 3);
+    if (hasLeft) {
+      ctx.fillStyle = 'rgba(106,169,255,0.6)'; ctx.textAlign = 'right';
+      ctx.fillText(String(100 - i * 25), padL - 5, y + 3);
+    }
     if (hasRight) {
       ctx.fillStyle = 'rgba(248,250,252,0.35)'; ctx.textAlign = 'left';
       ctx.fillText((rMax - (rMax - rMin) * i / 4).toFixed(0), cssW - padR + 5, y + 3);
