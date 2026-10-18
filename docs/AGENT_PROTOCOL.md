@@ -129,7 +129,10 @@ agent 对任何响应都不做分支处理,唯一职责是"采集→推送→睡
 
 ### 5.2 Windows(`agents/homenet-agent.ps1`)
 
-- 文件编码 **UTF-8 with BOM**,兼容 PowerShell 5.1 / 中文版 Server 2022(GBK)。
+- 文件编码 **UTF-8 with BOM**、**LF 换行**。BOM 是 Windows 侧的硬性要求:PowerShell 5.1
+  读无 BOM 的文件会按系统 ANSI 代码页(中文版 Server 2022 是 GBK)解码,脚本里的中文
+  注释与字符串会变成乱码。行尾 LF/CRLF 两者 PowerShell 都能跑,仓库里存 LF,与 Linux
+  侧统一;经 Windows 编辑器另存为 CRLF 不影响运行,但会改变文件哈希,比对版本时要留意。
 - CPU:`Get-Counter '\Processor(_Total)\% Processor Time'`(已验证的方法,不用 `Win32_Processor.LoadPercentage`)。
 - 内存:`Get-CimInstance Win32_OperatingSystem`(TotalVisibleMemorySize / FreePhysicalMemory)。
 - 磁盘:`Get-PSDrive C`。
@@ -146,8 +149,17 @@ agent 对任何响应都不做分支处理,唯一职责是"采集→推送→睡
 > 路径是 `git clone` + `install(1)` 从仓库直接装到 `/opt/homenet-agent/`,不经过那条
 > 链路,所以约束本身已经不成立了。
 >
-> 仍然要守的是:**文件必须是无 BOM 的 UTF-8、LF 换行**。若确实要经浏览器/邮件/剪贴板
-> 转运脚本,装完先 `bash -n` 验一遍语法再重启服务。
+> 仍然要守的是编码与行尾,但**两边要求不同**,别套用同一条:
+>
+> | 脚本 | 编码 | 行尾 |
+> |---|---|---|
+> | `homenet-agent.sh` / `nas75-agent.sh`(Linux) | UTF-8,**不带 BOM** | LF |
+> | `homenet-agent.ps1`(Windows) | UTF-8,**带 BOM** | LF |
+>
+> Linux 侧不能有 BOM:`#!/usr/bin/env bash` 前面多出三个字节,shebang 就失效了。
+> Windows 侧必须有 BOM,理由见 §5.2。若确实要经浏览器/邮件/剪贴板转运脚本,装完
+> 先验语法(`.sh` 用 `bash -n`,`.ps1` 用 `powershell -NoProfile -Command "$null = 
+> [ScriptBlock]::Create((Get-Content -Raw '...'))"`)再重启服务。
 
 ## 6. 安装形态
 
