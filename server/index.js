@@ -29,10 +29,12 @@ import { UserStore } from './store/user_store.js';
 import { EffectiveStore } from './config/effective.js';
 import { materialize, originOf } from './capabilities/catalog.js';
 import { createLitellmKeys, NAME_RE } from './litellm_keys.js';
+import { agentHeads } from './agent_heads.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..');
 const WEB_DIR = join(ROOT, 'web');
+const AGENTS_DIR = join(ROOT, 'agents');
 const DATA_DIR = process.env.DATA_DIR || join(ROOT, 'data');
 const PORT = Number(process.env.PORT || 3100);
 
@@ -542,6 +544,10 @@ app.get('/api/history', VIEW, async (req) => {
   if (metric) return { target, metric, range, points: tsdb.history(target, metric, since) };
   return { target, range, series: tsdb.historyTarget(target, since) };
 });
+
+// v2.18: sha256 of each agent script in this checkout, for the machine modal's
+// "agent matches HEAD" line. Public-safe: hashes of files that are in the public repo.
+app.get('/api/agent_heads', VIEW, async () => ({ files: agentHeads(AGENTS_DIR) }));
 
 app.get('/api/token_detail', VIEW, async (req, reply) => {
   const range = (req.query?.range) || '24h';

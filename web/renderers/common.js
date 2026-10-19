@@ -40,7 +40,18 @@ export function ring(label, m) {
   // B2: ring center is ALWAYS an integer percentage (composite *_bytes uses its
   // v/max ratio in m.value). Full "used/total G" stays in the KV block, never here.
   const text = isNull ? '—' : Math.round(p) + '%';
-  return `<div class="ring-wrap"><div class="ring" style="--p:${p};--c:${c}"><b>${esc(text)}</b></div><div class="ring-label">${esc(label)}</div></div>`;
+  return `<div class="ring-wrap"><div class="ring" style="--p:${p};--c:${c}"><b>${esc(text)}</b></div><div class="ring-label">${esc(label)}</div>${cardsLine(m)}</div>`;
+}
+
+// v2.18 multi-GPU: a metric aggregated over several cards carries `cards`
+// ([{i, text, full?, level}]); list them as "0:88% 1:14%", each in its own status
+// color. Single-card and non-GPU metrics have no `cards`, so they render exactly as
+// before -- no empty line, no extra markup.
+function cardsLine(m, full = false) {
+  if (!Array.isArray(m.cards) || !m.cards.length) return '';
+  const cls = full ? 'gpu-cards gpu-cards-kv' : 'gpu-cards';
+  return `<div class="${cls}">${m.cards.map((c) =>
+    `<i class="${lvClass(c.level)}">${esc(`${c.i}:${full && c.full ? c.full : c.text}`)}</i>`).join('')}</div>`;
 }
 
 // Key/value item; ratio metrics (have numeric value) get a status class.
@@ -57,7 +68,7 @@ export function kvItem(label, m) {
   // the worst part). ok/cool keep the neutral frame, so a healthy card looks exactly
   // as it did before and a warm drive is the only thing that lights up.
   const edge = (m.level === 'warn' || m.level === 'danger') ? ` ${cls}` : '';
-  return `<div class="item${edge}"><span class="label">${esc(label)}</span>${body}</div>`;
+  return `<div class="item${edge}"><span class="label">${esc(label)}</span>${body}${cardsLine(m, true)}</div>`;
 }
 
 // Card model consumed by mountCards (matches the .24 shell-persist contract).

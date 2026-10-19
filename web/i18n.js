@@ -267,6 +267,17 @@ const ZH = {
   chart_none_in_range: (names) => `${names}：该时段无数据`,
   chart_note_sep: '　',
 
+  // v2.18 multi-GPU card + machine modal
+  gpu_cards_missing: (n, m) => `只检测到 ${n}/${m} 张卡`,
+  gpu_panel_util: '使用率',
+  gpu_panel_vram: '显存',
+  gpu_panel_temp: '温度（edge / junction / mem）',
+  gpu_panel_power: '功耗',
+  agent_head_match: (sha) => `agent 与 HEAD 一致（${sha}）`,
+  agent_head_mismatch: (run, head) => `agent 与 HEAD 不一致：运行中 ${run}，HEAD ${head}`,
+  agent_head_unknown: (sha) => `agent ${sha}（HEAD 版本未知）`,
+  agent_unreported: 'agent 未上报版本（旧版 agent）',
+
   // table card
   table_more: '查看全部',
   table_count: (n) => `（共 ${n}）`,
@@ -483,6 +494,17 @@ const EN = {
   chart_never_recorded: (names) => `${names}: never recorded`,
   chart_none_in_range: (names) => `${names}: no data in this window`,
   chart_note_sep: '   ',
+
+  // v2.18 multi-GPU card + machine modal
+  gpu_cards_missing: (n, m) => `Only ${n}/${m} GPUs detected`,
+  gpu_panel_util: 'Utilization',
+  gpu_panel_vram: 'VRAM',
+  gpu_panel_temp: 'Temperature (edge / junction / mem)',
+  gpu_panel_power: 'Power',
+  agent_head_match: (sha) => `Agent matches HEAD (${sha})`,
+  agent_head_mismatch: (run, head) => `Agent differs from HEAD: running ${run}, HEAD ${head}`,
+  agent_head_unknown: (sha) => `Agent ${sha} (HEAD version unknown)`,
+  agent_unreported: 'Agent does not report its version (old agent)',
 
   table_more: 'View all',
   table_count: (n) => ` (${n} total)`,

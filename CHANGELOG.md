@@ -49,6 +49,39 @@ on screen is the one from `package.json`, and this file is what needs fixing.
 
 ---
 
+## v2.18.0 — 2026-10-20
+
+**多 GPU:双卡机器的每张卡都上卡面、进历史;agent 自报版本,弹窗直接显示是否与 HEAD 一致。**
+
+*Rebuild required — `server/` + `web/` changed;`docker-compose.yml` 新增 `./agents` 只读挂载;
+agent 需在各机重新部署。*
+
+- **agent(`agents/homenet-agent.sh`)**
+  - AMD 多卡:只认 `vendor=0x1002` 的卡,张数不写死,按 PCI 地址排序编号(重启后
+    `cardN` 换序,`idx` 不变)。每卡新增 `pci`、`temp_junction_c`、`temp_mem_c`、
+    `power_cap_w`;`temp_c` 仍是 edge;`power1_average` / `power1_input` 二选一;读不到的省略。
+  - 使用率改为一个推送周期内多次读取 `gpu_busy_percent` 取平均(`GPU_SAMPLES`,默认 4)。
+  - `extra.agent = { file, sha256 }`:脚本自身的 sha256。
+  - `--once`:采集一次、打印 payload、不推送,部署前核对输出用。
+  - 单卡 / 无卡机器的 payload 与原来相容(只多了上述可选字段)。
+- **hub**
+  - payload 里 ≥2 张卡或 target 声明 `gpu_count ≥ 2` 时:`gpu` = 平均使用率、`vram_bytes`
+    = 已用合计/总量合计、`gpu_temp` = 最高 edge 温度、`gpu_power` = 相加(上限 = 各卡
+    `power_cap_w` 相加);另出 `gpuN`、`gpuN_vram_bytes`、`gpuN_temp`、`gpuN_temp_junction`、
+    `gpuN_temp_mem`、`gpuN_power`。颜色**按单卡判**(取各卡最差),阈值不变 —— 合计比例永远
+    不高于最满的那张卡,按合计判断等于放宽。
+  - `gpu_cards`:检测到的卡数;少于 `gpu_count` 时卡面显示「只检测到 N/2 张卡」。
+  - `GET /api/agent_heads`:仓库里各 agent 脚本的 sha256(`./agents` 只读挂载进容器,改脚本
+    不用重建)。
+- **前端**
+  - 多卡时环下、格子下逐卡小字(每张卡按自己的状态着色),单卡机器显示完全不变。
+  - 机器明细弹窗:多卡机器分四张图(使用率 / 显存 / 温度 edge·junction·mem / 功耗),每卡一
+    条线,仍用同一个 `drawMulti`,Dual Compare 不受影响。弹窗顶部显示 agent 与 HEAD 是否一致。
+
+实配:m25 标签「2× RX 7900 XTX」并加 `gpu_count: 2`;m26 标签「RX 6900 XT」。
+
+---
+
 ## v2.17.0 — 2026-09-25
 
 **Stack 卡可以点进子卡看历史;弹窗时段可按卡配置;速度卡拆成两张图。**

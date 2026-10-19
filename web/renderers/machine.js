@@ -1,6 +1,6 @@
 // machine renderer (§6) — rings + KV grid + header_right (uptime/badge).
 import { ring, kvItem, mget, card, esc } from './common.js';
-import { cv } from '../i18n.js';
+import { cv, t } from '../i18n.js';
 
 export function renderMachine(gridCard, target, snap, metrics) {
   const title = target.name || target.id;
@@ -33,7 +33,13 @@ export function renderMachine(gridCard, target, snap, metrics) {
       : (gridCard.header_right === 'badge' ? (target.badge || '') : (mget(snap, gridCard.header_right).display || tag));
   }
 
-  const body = `<div class="rings">${rings}</div>${items ? `<div class="kv">${items}</div>` : ''}`;
+  // v2.18: fewer GPUs detected than the target's gpu_count. Said in words on the card
+  // face, because the aggregates alone would look perfectly healthy with one card gone.
+  const gc = snap.metrics?.gpu_cards;
+  const warn = gc && gc.expected && typeof gc.value === 'number' && gc.value < gc.expected
+    ? `<div class="gpu-missing">${esc(t('gpu_cards_missing', gc.value, gc.expected))}</div>` : '';
+
+  const body = `${warn}<div class="rings">${rings}</div>${items ? `<div class="kv">${items}</div>` : ''}`;
   return card({
     key: target.id, title, tag, body, accent, stale: snap.stale,
     kind: 'machine', clickable: gridCard.clickable === 'detail',

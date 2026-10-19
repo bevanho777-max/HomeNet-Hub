@@ -249,6 +249,35 @@ targets:
   # secret (sent as X-Push-Token); `stale_after_s` is how long a silent host stays
   # "online" before the card greys out. Payload shape: docs/AGENT_PROTOCOL.md.
   #
+  # v2.18: multi-GPU box. `gpu_count` is how many cards this host should have. With two
+  # or more cards in the payload (or gpu_count >= 2) the hub turns gpu / vram_bytes /
+  # gpu_temp / gpu_power into totals across cards (average util, summed VRAM and power,
+  # hottest edge temp; status colors still judged per card, so one full card turns the
+  # VRAM ring red even when the total is fine), adds per-card gpuN_* metrics for the
+  # detail modal, and warns "only N/2 GPUs detected" on the card face when a card goes
+  # missing. The gpus[0] paths below are what a single-card payload uses; with several
+  # cards the totals replace them. Single-card hosts need no gpu_count and are unchanged.
+  - id: gpu_multi_example
+    name: "GPU Node (2 cards, real http_push)"
+    color: auto
+    badge: "2× GPU"
+    enabled: false
+    gpu_count: 2
+    source:
+      type: http_push
+      token_env: PUSH_TOKEN_GPU2
+      stale_after_s: 10
+    map:
+      gpu:        "$.gpus[0].util_pct"
+      gpu_temp:   "$.gpus[0].temp_c"
+      gpu_power:  "$.gpus[0].power_w"
+      vram_bytes: { v: "$.gpus[0].vram_used_gb", max: "$.gpus[0].vram_total_gb" }
+      cpu:        "$.cpu.pct"
+      uptime:     { s: "$.uptime_s" }
+      mem_bytes:  { v: "$.mem.used_gb",  max: "$.mem.total_gb" }
+      disk_bytes: { v: "$.disk.used_gb", max: "$.disk.total_gb" }
+      net:        { rx: "$.net.rx_bps",  tx: "$.net.tx_bps" }
+
   # B20: NAS with per-disk temperatures. The agent emits extra.disks[] HDD-first
   # then SSD/NVMe, so the indices below are stable groups rather than raw
   # enumeration order — re-check them after adding or pulling a drive. Each

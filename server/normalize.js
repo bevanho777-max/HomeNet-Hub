@@ -162,6 +162,117 @@ function normMetric(raw, mapEntry, metric, metricKey) {
   return { value, level, display };
 }
 
+// ── 多 GPU(v2.18)─────────────────────────────────────────────────────
+// 协议的 gpus[] 一直是数组,但 map 只取 gpus[0]:双卡机器的第二张卡从来没上过卡面。
+// 这里在 map 之后统一处理 —— 只在「payload 里 ≥2 张卡」或「target 声明 gpu_count ≥2」
+// 时介入,单卡/无卡机器一个字节都不变。
+//
+//   合计:gpu=平均使用率  vram_bytes=已用合计/总量合计  gpu_temp=最高 edge 温度
+//         gpu_power=功耗相加(各卡都报了 power_cap_w 时显示「合计/上限合计 W」)
+//   告警:颜色按**单张卡**判 —— 合计显存比例永远不高于最满的那张卡,用合计判断等于
+//         放宽阈值。所以 vram_bytes / gpu_temp / gpu_power 取各卡 level 的最差值,
+//         阈值仍是 metrics.yaml 里同一份,一个数字都没改。
+//   每卡:gpuN、gpuN_vram_bytes、gpuN_temp(edge)、gpuN_temp_junction、gpuN_temp_mem、
+//         gpuN_power —— 普通 metric,自动进历史,机器明细弹窗按卡画线。
+//   少卡:gpu_cards = 检测到的张数;少于 gpu_count 时 level=danger,卡面显示警告,
+//         免得只剩一张卡时合计值看起来一切正常。
+// 卡面小字由各合计 metric 上的 `cards` 数组提供(用 cards 而不是 parts,不触发 B20 的分段渲染)。
+const LV_RANK = { ok: 1, warn: 2, danger: 3 };
+const worstLevel = (levels) => levels.reduce((a, l) => ((LV_RANK[l] || 0) > (LV_RANK[a] || 0) ? l : a), null);
+const gb1 = (n) => n.toFixed(1);
+
+function applyGpuMulti(raw, target, tpls, metrics) {
+  const list = Array.isArray(raw?.gpus) ? raw.gpus.filter((g) => g && typeof g === 'object') : [];
+  const expected = Number(target.gpu_count) || 0;
+  if (list.length < 2 && expected < 2) return;
+
+  const T = (k) => tpls?.[k] || {};
+  const vramTh = T('vram_bytes').thresholds || DEFAULT_RATIO;
+  const cards = list
+    .map((g, pos) => ({ g, i: num(g.idx) ?? pos }))
+    .sort((a, b) => a.i - b.i)
+    .map(({ g, i }) => {
+      const util = num(g.util_pct), used = num(g.vram_used_gb), total = num(g.vram_total_gb);
+      const temp = num(g.temp_c), power = num(g.power_w), cap = num(g.power_cap_w);
+      const ratio = used != null && total > 0 ? Math.max(0, Math.min(100, (used / total) * 100)) : null;
+      return {
+        i, util, used, total, ratio, temp, power, cap,
+        tj: num(g.temp_junction_c), tm: num(g.temp_mem_c),
+        lvUtil: computeLevel(util, T('gpu')),
+        lvVram: computeLevel(ratio, { thresholds: vramTh }),
+        lvTemp: computeLevel(temp, T('gpu_temp')),
+        lvPower: computeLevel(power, T('gpu_power')),
+      };
+    });
+
+  // 每卡 metric
+  for (const c of cards) {
+    const p = `gpu${c.i}`;
+    metrics[p] = { value: c.util, level: c.lvUtil, display: fmtScalar(c.util, T('gpu')) };
+    metrics[`${p}_vram_bytes`] = {
+      value: c.ratio, level: c.lvVram,
+      display: c.used != null && c.total != null ? `${gb1(c.used)}/${gb1(c.total)}G` : '—',
+    };
+    metrics[`${p}_temp`] = { value: c.temp, level: c.lvTemp, display: fmtScalar(c.temp, T('gpu_temp')) };
+    // junction/mem 正常就比 edge 高 20-30°C,套 edge 的阈值会常年发红;只进历史,不着色。
+    metrics[`${p}_temp_junction`] = { value: c.tj, level: c.tj == null ? 'cool' : null, display: fmtScalar(c.tj, T('gpu_temp')) };
+    metrics[`${p}_temp_mem`] = { value: c.tm, level: c.tm == null ? 'cool' : null, display: fmtScalar(c.tm, T('gpu_temp')) };
+    metrics[`${p}_power`] = { value: c.power, level: c.lvPower, display: fmtScalar(c.power, T('gpu_power')) };
+  }
+
+  const has = (k) => Object.prototype.hasOwnProperty.call(target.map || {}, k);
+  const vals = (k) => cards.map((c) => c[k]).filter((v) => v != null);
+  const sum = (xs) => xs.reduce((a, b) => a + b, 0);
+  const lvOf = (k) => cards.filter((c) => c[k] != null);
+
+  if (has('gpu')) {
+    const xs = vals('util');
+    const v = xs.length ? sum(xs) / xs.length : null;
+    metrics.gpu = {
+      value: v, level: computeLevel(v, T('gpu')), display: fmtScalar(v, T('gpu')),
+      cards: lvOf('util').map((c) => ({ i: c.i, text: `${Math.round(c.util)}%`, level: c.lvUtil })),
+    };
+  }
+  if (has('vram_bytes')) {
+    const ok = cards.filter((c) => c.used != null && c.total > 0);
+    const u = sum(ok.map((c) => c.used)), t = sum(ok.map((c) => c.total));
+    const v = ok.length ? Math.max(0, Math.min(100, (u / t) * 100)) : null;
+    const tpl = T('vram_bytes');
+    metrics.vram_bytes = {
+      value: v,
+      level: ok.length ? worstLevel([computeLevel(v, { thresholds: vramTh }), ...ok.map((c) => c.lvVram)]) : 'cool',
+      display: ok.length ? applyFormat(tpl.format || '{v}/{max}G', { v: u, max: t }, 'vram_bytes', tpl.divide) : '—',
+      cards: ok.map((c) => ({ i: c.i, text: `${gb1(c.used)}G`, full: `${gb1(c.used)}/${gb1(c.total)}`, level: c.lvVram })),
+    };
+  }
+  if (has('gpu_temp')) {
+    const xs = vals('temp');
+    const v = xs.length ? Math.max(...xs) : null;
+    metrics.gpu_temp = {
+      value: v, level: xs.length ? worstLevel(lvOf('temp').map((c) => c.lvTemp)) : 'cool',
+      display: fmtScalar(v, T('gpu_temp')),
+      cards: lvOf('temp').map((c) => ({ i: c.i, text: `${Math.round(c.temp)}`, level: c.lvTemp })),
+    };
+  }
+  if (has('gpu_power')) {
+    const xs = vals('power');
+    const v = xs.length ? sum(xs) : null;
+    const caps = vals('cap');
+    const capSum = caps.length === cards.length && caps.length ? sum(caps) : null;
+    metrics.gpu_power = {
+      value: v, level: xs.length ? worstLevel(lvOf('power').map((c) => c.lvPower)) : 'cool',
+      display: v == null ? '—' : capSum ? `${Math.round(v)}/${Math.round(capSum)}W` : fmtScalar(v, T('gpu_power')),
+      cards: lvOf('power').map((c) => ({ i: c.i, text: `${Math.round(c.power)}`, level: c.lvPower })),
+    };
+  }
+  metrics.gpu_cards = {
+    value: cards.length,
+    level: expected && cards.length < expected ? 'danger' : 'ok',
+    display: expected ? `${cards.length}/${expected}` : String(cards.length),
+    ...(expected ? { expected } : {}),
+  };
+}
+
 /**
  * Normalize a raw collector payload into standard metrics for a target.
  * @returns {{ metrics: Record<string,{value,level,display}> }}
@@ -173,6 +284,7 @@ export function normalize(raw, target, metricTemplates) {
     const tpl = metricTemplates?.[metricKey] || {};
     metrics[metricKey] = normMetric(raw, mapEntry, tpl, metricKey);
   }
+  applyGpuMulti(raw, target, metricTemplates, metrics);
   return { metrics };
 }
 

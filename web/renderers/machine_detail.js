@@ -134,6 +134,121 @@ function secondPanel(show) {
   return show ? { canvas: $('#machineModalCanvas2'), legend: $('#machineModalLegend2') } : null;
 }
 
+// ── v2.18 multi-GPU ──────────────────────────────────────────────────────
+// A host with several cards gets per-card series from the hub (gpuN, gpuN_vram_bytes,
+// gpuN_temp / _temp_junction / _temp_mem, gpuN_power -- see normalize.js). Their
+// presence is the switch: single-card hosts never record them, so their modal is the
+// one chart it always was. Multi-card hosts get four panels, one line per card, drawn
+// by the same drawMulti as everything else; the per-card names are handed to it as
+// metric templates, so chart.js (and with it History · Dual Compare) is untouched.
+const CARD_COLORS = [
+  ['#6aa9ff', '#b18cff', '#5eead4'],   // GPU0: edge / junction / mem
+  ['#ff9d5c', '#ff7b7b', '#f7c948'],   // GPU1
+];
+const cardColor = (i, shade = 0) => CARD_COLORS[i]?.[shade] || PALETTE[(i * 3 + shade) % PALETTE.length];
+
+function gpuCardIdx(snap, recorded) {
+  const set = new Set();
+  const scan = (k) => { const m = /^gpu(\d+)$/.exec(k); if (m) set.add(Number(m[1])); };
+  recorded.forEach(scan);
+  Object.keys(snap?.metrics || {}).forEach(scan);
+  return [...set].sort((a, b) => a - b);
+}
+
+function gpuMetrics(idx) {
+  const m = { ...metrics() };
+  for (const i of idx) {
+    m[`gpu${i}`] = { label: `GPU${i}`, unit: '%' };
+    m[`gpu${i}_vram_bytes`] = { label: `GPU${i}`, unit: '%' };
+    m[`gpu${i}_temp`] = { label: `GPU${i} edge`, unit: '°C' };
+    m[`gpu${i}_temp_junction`] = { label: `GPU${i} junction`, unit: '°C' };
+    m[`gpu${i}_temp_mem`] = { label: `GPU${i} mem`, unit: '°C' };
+    m[`gpu${i}_power`] = { label: `GPU${i}`, unit: 'W' };
+  }
+  return m;
+}
+
+function gpuPanels(idx) {
+  return [
+    { title: 'gpu_panel_util', subs: idx.map((i) => ({ k: `gpu${i}`, color: cardColor(i), axis: 'L' })) },
+    { title: 'gpu_panel_vram', subs: idx.map((i) => ({ k: `gpu${i}_vram_bytes`, color: cardColor(i), axis: 'L' })) },
+    { title: 'gpu_panel_temp', subs: idx.flatMap((i) => [
+      { k: `gpu${i}_temp`, color: cardColor(i, 0), axis: 'R' },
+      { k: `gpu${i}_temp_junction`, color: cardColor(i, 1), axis: 'R' },
+      { k: `gpu${i}_temp_mem`, color: cardColor(i, 2), axis: 'R' },
+    ]) },
+    { title: 'gpu_panel_power', subs: idx.map((i) => ({ k: `gpu${i}_power`, color: cardColor(i), axis: 'R' })) },
+  ];
+}
+
+// Extra panels (2..4) for the multi-GPU view, created on first use under the main
+// legend and hidden for every other card.
+function extraGpuPanels(n) {
+  let wrap = document.getElementById('machineModalGpuPanels');
+  if (!wrap && n) {
+    wrap = document.createElement('div');
+    wrap.id = 'machineModalGpuPanels';
+    ($('#machineModalPanel2') || $('#machineModalLegend')).after(wrap);
+  }
+  if (!wrap) return [];
+  while (wrap.children.length < n) {
+    const k = wrap.children.length;
+    const p = document.createElement('div');
+    p.innerHTML = `<div class="gpu-panel-title"></div>`
+      + `<canvas data-gpu-panel="${k}" height="200" style="width:100%;display:block;margin-top:8px"></canvas>`
+      + '<div class="legend" style="margin-top:10px"></div>';
+    wrap.appendChild(p);
+  }
+  wrap.hidden = !n;
+  return [...wrap.children].slice(0, n).map((p) => ({
+    title: p.querySelector('.gpu-panel-title'), canvas: p.querySelector('canvas'), legend: p.querySelector('.legend'),
+  }));
+}
+
+function mainTitle(text) {
+  const el = $('#machineModalMainTitle');
+  if (!el) return;
+  el.textContent = text || '';
+  el.hidden = !text;
+}
+
+// ── agent vs HEAD ────────────────────────────────────────────────────────
+// Agents report their own sha256 in extra.agent; /api/agent_heads hashes the same file
+// in the hub's checkout. Shown for push targets only -- pulled targets have no agent.
+let heads = null, headsAt = 0;
+async function agentHeads() {
+  if (heads && Date.now() - headsAt < 60000) return heads;
+  const r = await fetch('/api/agent_heads', { cache: 'no-store' });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  heads = (await r.json()).files || {};
+  headsAt = Date.now();
+  return heads;
+}
+
+async function showAgent(id) {
+  const el = $('#machineModalAgent');
+  if (!el) return;
+  el.hidden = true; el.className = 'note';
+  const target = (CONFIG?.targets || []).find((x) => x.id === id);
+  if (target?.type !== 'http_push') return;
+  const rep = window.__lastSnap?.[id]?.extra?.agent;
+  const short = (s) => String(s || '').slice(0, 12);
+  let text, lv = '';
+  if (!rep?.sha256) {
+    text = t('agent_unreported');
+  } else {
+    let head;
+    try { head = (await agentHeads())[rep.file]; } catch { head = null; }
+    if (targetId !== id) return;                       // modal moved on meanwhile
+    if (!head) text = t('agent_head_unknown', short(rep.sha256));
+    else if (head === rep.sha256) { text = t('agent_head_match', short(head)); lv = 'lv-ok'; }
+    else { text = t('agent_head_mismatch', short(rep.sha256), short(head)); lv = 'lv-danger'; }
+  }
+  el.textContent = text;
+  if (lv) el.classList.add(lv);
+  el.hidden = false;
+}
+
 async function load() {
   const canvas = $('#machineModalCanvas');
   const legend = $('#machineModalLegend');
@@ -163,10 +278,23 @@ async function load() {
     const available = recorded.filter((k) => (series[k] || []).length >= 2);
     const role = roleOf(window.__lastSnap?.[targetId], recorded);
     const subs = seriesFor(role, available);
-    const split = SPLIT_ROLES.has(role);
+    const cardIdx = role === 'gpu' ? gpuCardIdx(window.__lastSnap?.[targetId], recorded) : [];
+    const multi = cardIdx.length > 0;
+    const split = SPLIT_ROLES.has(role) && !multi;
     const second = secondPanel(split);
+    const extra = extraGpuPanels(multi ? 3 : 0);
+    mainTitle(multi ? t('gpu_panel_util') : '');
     try {
-      if (split) {
+      if (multi) {
+        const gm = gpuMetrics(cardIdx);
+        const panels = gpuPanels(cardIdx);
+        const opts = { metrics: gm, emptyText: t('chart_no_data_range', range) };
+        drawMulti(canvas, series, legend, { ...opts, subs: panels[0].subs, height: 220 });
+        panels.slice(1).forEach((p, k) => {
+          extra[k].title.textContent = t(p.title);
+          drawMulti(extra[k].canvas, series, extra[k].legend, { ...opts, subs: p.subs, height: 200 });
+        });
+      } else if (split) {
         // One series per panel, each on its own auto-scaled axis.
         const one = (s) => (s ? [{ ...s, axis: 'R' }] : []);
         const opts = { metrics: metrics(), height: 220, emptyText: t('chart_no_data_range', range) };
@@ -214,6 +342,7 @@ export function openMachineModal(id, customRanges) {
   clearError();
   $('#machineModalRanges').innerHTML = ranges.map((r) =>
     `<button data-r="${esc(r)}" class="${r === range ? 'active' : ''}">${esc(r)}</button>`).join('');
+  showAgent(id);
   load();
 }
 
@@ -221,6 +350,7 @@ export function openMachineModal(id, customRanges) {
 export function relocalizeMachineModal() {
   if (!targetId || !$('#machineModal')?.classList.contains('open')) return;
   $('#machineModalTitle').textContent = modalTitle(targetId);
+  showAgent(targetId);
   load();   // the note and any error line are built from the dictionary too
 }
 

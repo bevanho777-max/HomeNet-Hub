@@ -90,6 +90,9 @@ agent 对任何响应都不做分支处理,唯一职责是"采集→推送→睡
 | `gpus[].vram_used_gb` / `vram_total_gb` | number | — | 显存,GB,1 位小数 |
 | `gpus[].temp_c` | int | — | 温度 ℃ |
 | `gpus[].power_w` | int | — | 实时功耗 W |
+| `gpus[].pci` | string | — | PCI 地址,如 `"0000:03:00.0"`(v2.18,AMD)|
+| `gpus[].temp_junction_c` / `temp_mem_c` | int | — | 热点 / 显存温度 ℃(v2.18,AMD;`temp_c` 仍是 edge)|
+| `gpus[].power_cap_w` | int | — | 功耗上限 W(`power1_cap`,v2.18,AMD)|
 | `extra` | object | ✅ | 自由扩展区,允许空对象;机器特有数据放这里(见 4.4) |
 
 ### 4.3 缺失与空值规则
@@ -104,6 +107,7 @@ agent 对任何响应都不做分支处理,唯一职责是"采集→推送→睡
 |---|---|---|
 | `extra.claude.remaining_min` | m110 | Claude Max 窗口剩余分钟,沿用 `claude-window.json` 自记录算法 |
 | `extra.claude.block_id` | m110 | 当前计费窗口 id |
+| `extra.agent.file` / `extra.agent.sha256` | Linux agent(v2.18) | 脚本名与脚本自身的 sha256;hub 与仓库里同名文件比对,机器明细弹窗显示「agent 与 HEAD 一致 / 不一致」|
 
 新增机器特有数据只允许加进 `extra.<命名空间>.*`,不得污染顶层。顶层字段的增删必须升 `v` 并更新本文档。
 
@@ -125,7 +129,18 @@ agent 对任何响应都不做分支处理,唯一职责是"采集→推送→睡
 
 配置经环境变量注入:`HUB_URL`、`AGENT_ID`、`PUSH_TOKEN`、`NET_IFACE`(可选,默认取默认路由网卡)。**脚本内不出现任何 HTTPS_PROXY/HTTP_PROXY 设置**;curl 加 `--noproxy '*'`,确保局域网推送不被宿主机代理环境劫持。
 
-> 注:AMD GPU 采集实际实现为 **amdgpu sysfs**(`/sys/class/drm/*/device/`),非 `rocm-smi`;sysfs 拿不到型号名,型号名经 `GPU_NAMES` 环境变量注入(逗号分隔,按 `idx` 对应)。
+> 注:AMD GPU 采集实际实现为 **amdgpu sysfs**(`/sys/class/drm/*/device/`),非 `rocm-smi`。
+>
+> **多卡(v2.18)**:只认 `vendor=0x1002` 的 `cardN`,张数不写死;按 PCI 地址排序编号,
+> 重启后 `cardN` 顺序变了 `idx` 也不变。温度按 hwmon 的 `tempN_label` 认 edge / junction /
+> mem(没有 label 时 `temp1` 视为 edge);功耗取 `power1_average` 或 `power1_input` 中存在的那个,
+> 微瓦换算成瓦;读不到的字段省略,不报 0。`util_pct` 是一个推送周期内 `GPU_SAMPLES`(默认 4)
+> 次读取 `gpu_busy_percent` 的平均。型号名优先取 `GPU_NAMES`(逗号分隔,按 `idx` 对应),其次
+> `product_name`,再按 PCI device id 认几种常见卡。多卡的合计与逐卡告警在 hub 侧做(见
+> `server/normalize.js` 与 `targets.yaml` 的 `gpu_count`),agent 只如实上报每张卡。
+>
+> **试跑**:`homenet-agent.sh --once` 采集一个周期、把 payload 打到 stdout 后退出,不推送,
+> 也不要求 `HUB_URL` / `PUSH_TOKEN`。部署前用它核对输出。
 
 ### 5.2 Windows(`agents/homenet-agent.ps1`)
 

@@ -1,14 +1,25 @@
 #!/usr/bin/env bash
 # HomeNet Hub push agent (Linux) — 协议 v1,契约见 docs/AGENT_PROTOCOL.md
-# 零依赖:bash + coreutils + /proc + /sys;AMD GPU 走 amdgpu sysfs,NVIDIA 走 nvidia-smi
+# 零依赖:bash + coreutils + /proc + /sys;AMD GPU 走 amdgpu sysfs(多卡按 PCI 排序),NVIDIA 走 nvidia-smi
 # 常驻循环进程,由 systemd service 拉起;采集失败只降级(省略字段),循环永不退出
 
 set -u
 
+# 试跑模式:`homenet-agent.sh --once` 采集一个周期、把 payload 打到 stdout 后退出,
+# 不推送,也不要求 HUB_URL / PUSH_TOKEN —— 部署前核对输出用。
+ONCE=0
+case "${1:-}" in --once) ONCE=1 ;; esac
+
 # ---------- 配置(环境变量注入,见 /etc/homenet-agent.env) ----------
-HUB_URL="${HUB_URL:?need HUB_URL, e.g. http://192.168.1.24:3100}"
-AGENT_ID="${AGENT_ID:?need AGENT_ID, e.g. m26}"
-PUSH_TOKEN="${PUSH_TOKEN:?need PUSH_TOKEN}"
+if [ "$ONCE" = "1" ]; then
+  HUB_URL="${HUB_URL:-http://127.0.0.1:3100}"
+  AGENT_ID="${AGENT_ID:-$(hostname)}"
+  PUSH_TOKEN="${PUSH_TOKEN:-}"
+else
+  HUB_URL="${HUB_URL:?need HUB_URL, e.g. http://192.168.1.24:3100}"
+  AGENT_ID="${AGENT_ID:?need AGENT_ID, e.g. m26}"
+  PUSH_TOKEN="${PUSH_TOKEN:?need PUSH_TOKEN}"
+fi
 INTERVAL="${INTERVAL:-2}"          # 推送间隔秒
 NET_IFACE="${NET_IFACE:-}"         # 主网卡,缺省取默认路由网卡
 GPU_NAMES="${GPU_NAMES:-}"         # 可选:逗号分隔卡名,按 idx 对应(AMD sysfs 拿不到型号名)
@@ -25,6 +36,11 @@ LITELLM_TTL="${LITELLM_TTL:-45}"        # 真正采集的间隔秒(远大于 INT
 LITELLM_STALE="${LITELLM_STALE:-180}"   # 缓存超过此秒数即丢弃,字段整体省略
 
 URL="${HUB_URL%/}/api/push/${AGENT_ID}"
+
+# 自报版本(v2.18):脚本自身的 sha256,随 extra.agent 上报,hub 拿去和仓库 HEAD 的
+# agents/homenet-agent.sh 比对。启动时算一次 —— 换脚本必然要重启 unit,不会算旧。
+AGENT_SELF="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "$0")"
+AGENT_SHA="$(sha256sum "$AGENT_SELF" 2>/dev/null | cut -d' ' -f1)"
 
 # ---------- 网卡探测(启动 + 运行期自愈) ----------
 # 用户显式给了 NET_IFACE 就固定用它,运行期不再改写;否则每次探测都重新取默认路由
@@ -57,20 +73,109 @@ net_probe() {
 }
 
 # ---------- GPU 探测(启动一次) ----------
+# AMD 多卡(v2.18):只认 vendor=0x1002 的 /sys/class/drm/cardN,张数不写死。按 PCI 地址
+# 排序编号 —— cardN 的 N 由驱动加载顺序决定,重启后可能互换;PCI 地址是插槽,不会变,
+# 所以 idx 0/1 永远对应同一块物理卡(m25:03:00.0=GPU0、03:02.0=GPU1)。虚拟机里的
+# VMware SVGA(0x15ad)之类自然被排除。
 GPU_MODE="none"
-AMD_CARDS=()
+AMD_CARDS=()      # device 目录(readlink -f 后的真实路径),已按 PCI 排序
+AMD_PCI=()        # PCI 地址,如 0000:03:00.0
+AMD_NAME=()       # 型号名;读不到则空
+AMD_HW=()         # hwmon 目录;没有则空
+AMD_T_EDGE=(); AMD_T_JUNC=(); AMD_T_MEM=(); AMD_PWR=()   # 各传感器文件路径;没有则空
+
+gpu_name_by_idx() {  # $1=idx → GPU_NAMES 里对应的名字或空(手动覆盖,优先于自动识别)
+  [ -z "$GPU_NAMES" ] && return 0
+  echo "$GPU_NAMES" | awk -F',' -v i="$(($1+1))" '{gsub(/^ +| +$/,"",$i); print $i}'
+}
+
+amd_model() {  # $1=device 目录 → 型号名。sysfs 只给 PCI device id,这里认识家里在用的几种
+  local d="$1" id pn=""
+  { read -r pn < "$d/product_name"; } 2>/dev/null
+  [ -n "$pn" ] && { echo "$pn"; return; }
+  { read -r id < "$d/device"; } 2>/dev/null
+  case "$id" in
+    0x744c) echo "RX 7900 XTX" ;;
+    0x73bf|0x73af) echo "RX 6900 XT" ;;
+    0x73a5) echo "RX 6950 XT" ;;
+    0x73df) echo "RX 6700 XT" ;;
+    "") ;;
+    *) echo "AMD $id" ;;
+  esac
+}
+
+amd_probe() {
+  local c d v pci hw f lbl i=0
+  while read -r pci d; do
+    [ -n "$d" ] || continue
+    AMD_CARDS+=("$d"); AMD_PCI+=("$pci")
+    v="$(gpu_name_by_idx "$i")"; [ -n "$v" ] || v="$(amd_model "$d")"
+    AMD_NAME+=("$v")
+    hw=$(ls -d "$d"/hwmon/hwmon* 2>/dev/null | head -1)
+    AMD_HW+=("$hw")
+    local te="" tj="" tm=""
+    if [ -n "$hw" ]; then
+      # 温度按 tempN_label 认 edge/junction/mem;老内核没有 label 时 temp1 就是 edge
+      for f in "$hw"/temp*_label; do
+        [ -f "$f" ] || continue
+        lbl=""; { read -r lbl < "$f"; } 2>/dev/null
+        case "$lbl" in
+          edge) te="${f%_label}_input" ;;
+          junction) tj="${f%_label}_input" ;;
+          mem) tm="${f%_label}_input" ;;
+        esac
+      done
+      [ -z "$te" ] && [ -f "$hw/temp1_input" ] && te="$hw/temp1_input"
+      # power1_average(RDNA2 及以前)与 power1_input(RDNA3 起部分内核)二选一
+      if [ -f "$hw/power1_average" ]; then AMD_PWR+=("$hw/power1_average")
+      elif [ -f "$hw/power1_input" ]; then AMD_PWR+=("$hw/power1_input")
+      else AMD_PWR+=(""); fi
+    else
+      AMD_PWR+=("")
+    fi
+    AMD_T_EDGE+=("$te"); AMD_T_JUNC+=("$tj"); AMD_T_MEM+=("$tm")
+    i=$((i+1))
+  done < <(
+    for c in /sys/class/drm/card*; do
+      case "${c##*/}" in card[0-9]|card[0-9][0-9]) ;; *) continue ;; esac   # 跳过 card0-DP-1 这类接口
+      d="$(readlink -f "$c/device" 2>/dev/null)" || continue
+      v=""; { read -r v < "$d/vendor"; } 2>/dev/null
+      [ "$v" = "0x1002" ] || continue
+      printf '%s %s\n' "${d##*/}" "$d"
+    done | sort -u
+  )
+}
+
 if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L >/dev/null 2>&1; then
   GPU_MODE="nvidia"
 else
-  for d in /sys/class/drm/card*/device; do
-    [ -f "$d/gpu_busy_percent" ] && AMD_CARDS+=("$d")
-  done
+  amd_probe
   [ "${#AMD_CARDS[@]}" -gt 0 ] && GPU_MODE="amd"
 fi
 
-gpu_name_by_idx() {  # $1=idx → 名称或空
-  [ -z "$GPU_NAMES" ] && return 0
-  echo "$GPU_NAMES" | awk -F',' -v i="$(($1+1))" '{gsub(/^ +| +$/,"",$i); print $i}'
+# 使用率采样(仅 AMD):gpu_busy_percent 是瞬时值,推理负载下一秒内能在 0 与 100 之间跳。
+# 每个上报周期内分 GPU_SAMPLES 次读取取平均,而不是只取推送那一刻的一个点。
+GPU_SAMPLES="${GPU_SAMPLES:-4}"
+case "$GPU_SAMPLES" in ''|*[!0-9]*|0) GPU_SAMPLES=4 ;; esac
+BUSY_SUM=(); BUSY_N=()
+busy_reset() { local i; for i in "${!AMD_CARDS[@]}"; do BUSY_SUM[$i]=0; BUSY_N[$i]=0; done; }
+busy_sample() {
+  local i v
+  for i in "${!AMD_CARDS[@]}"; do
+    v=""; { read -r v < "${AMD_CARDS[$i]}/gpu_busy_percent"; } 2>/dev/null
+    case "$v" in ''|*[!0-9]*) continue ;; esac
+    BUSY_SUM[$i]=$(( BUSY_SUM[$i] + v )); BUSY_N[$i]=$(( BUSY_N[$i] + 1 ))
+  done
+}
+# 代替主循环里的 sleep:总时长仍是 INTERVAL,其间均匀取 GPU_SAMPLES 个样
+interval_sleep() {
+  if [ "$GPU_MODE" != "amd" ] || [ "$GPU_SAMPLES" -le 1 ]; then
+    sleep "$INTERVAL"; [ "$GPU_MODE" = "amd" ] && busy_sample
+    return
+  fi
+  local k slice
+  slice=$(awk -v t="$INTERVAL" -v n="$GPU_SAMPLES" 'BEGIN{printf "%.3f", t/n}')
+  for ((k = 0; k < GPU_SAMPLES; k++)); do sleep "$slice"; busy_sample; done
 }
 
 # ---------- 采集函数(失败输出空串) ----------
@@ -233,8 +338,15 @@ llm_collect() {
   [ -n "$out" ] && printf '"litellm":{%s}' "${out%,}"
 }
 
+sysfs_int() {  # $1=文件 → 整数内容;读不到/非整数输出空串
+  local v=""
+  [ -n "$1" ] || return 0
+  { read -r v < "$1"; } 2>/dev/null
+  case "$v" in ''|*[!0-9]*) ;; *) printf '%s' "$v" ;; esac
+}
+
 gpus_json() {  # 输出完整 "gpus":[...] 片段(必填,无卡为 [])
-  local out="" i=0 d util vu vt hw tmp pw name frag
+  local out="" i d util vu vt t pw cap frag
   case "$GPU_MODE" in
     nvidia)
       out=$(nvidia-smi \
@@ -245,25 +357,35 @@ gpus_json() {  # 输出完整 "gpus":[...] 片段(必填,无卡为 [])
               (n++?",":""), $1, $2, $3, $4/1024, $5/1024, $6, $7 }')
       ;;
     amd)
-      for d in "${AMD_CARDS[@]}"; do
-        frag="{\"idx\":$i"
-        name=$(gpu_name_by_idx "$i");            [ -n "$name" ] && frag="$frag,\"name\":\"$name\""
-        util=$(cat "$d/gpu_busy_percent" 2>/dev/null); [ -n "$util" ] && frag="$frag,\"util_pct\":$util"
-        vu=$(cat "$d/mem_info_vram_used"  2>/dev/null)
-        vt=$(cat "$d/mem_info_vram_total" 2>/dev/null)
+      # 每卡一项,idx 即 PCI 排序后的序号。读不到的项省略(不报 0)。
+      #   util_pct      本周期内多次采样的平均(见 interval_sleep)
+      #   temp_c        edge —— 与其他机器、旧版 agent 同一个传感器,卡面温度沿用它
+      #   temp_junction_c / temp_mem_c  热点与显存温度,只进明细
+      #   power_w / power_cap_w         微瓦 → 瓦,四舍五入
+      for i in "${!AMD_CARDS[@]}"; do
+        d="${AMD_CARDS[$i]}"
+        frag="{\"idx\":$i,\"pci\":\"${AMD_PCI[$i]}\""
+        [ -n "${AMD_NAME[$i]}" ] && frag="$frag,\"name\":\"${AMD_NAME[$i]}\""
+        if [ "${BUSY_N[$i]:-0}" -gt 0 ]; then
+          util=$(( (BUSY_SUM[$i] + BUSY_N[$i] / 2) / BUSY_N[$i] ))
+        else
+          util=$(sysfs_int "$d/gpu_busy_percent")
+        fi
+        [ -n "$util" ] && frag="$frag,\"util_pct\":$util"
+        vu=$(sysfs_int "$d/mem_info_vram_used")
+        vt=$(sysfs_int "$d/mem_info_vram_total")
         if [ -n "$vu" ] && [ -n "$vt" ]; then
           frag="$frag,$(awk -v u="$vu" -v t="$vt" 'BEGIN{printf "\"vram_used_gb\":%.1f,\"vram_total_gb\":%.1f", u/1073741824, t/1073741824}')"
         fi
-        hw=$(ls -d "$d"/hwmon/hwmon* 2>/dev/null | head -1)
-        if [ -n "$hw" ]; then
-          tmp=$(cat "$hw/temp1_input" 2>/dev/null)
-          [ -n "$tmp" ] && frag="$frag,\"temp_c\":$((tmp/1000))"
-          pw=$(cat "$hw/power1_average" 2>/dev/null || cat "$hw/power1_input" 2>/dev/null)
-          [ -n "$pw" ] && frag="$frag,\"power_w\":$((pw/1000000))"
+        t=$(sysfs_int "${AMD_T_EDGE[$i]}"); [ -n "$t" ] && frag="$frag,\"temp_c\":$((t/1000))"
+        t=$(sysfs_int "${AMD_T_JUNC[$i]}"); [ -n "$t" ] && frag="$frag,\"temp_junction_c\":$((t/1000))"
+        t=$(sysfs_int "${AMD_T_MEM[$i]}");  [ -n "$t" ] && frag="$frag,\"temp_mem_c\":$((t/1000))"
+        pw=$(sysfs_int "${AMD_PWR[$i]}");   [ -n "$pw" ] && frag="$frag,\"power_w\":$(( (pw + 500000) / 1000000 ))"
+        if [ -n "${AMD_HW[$i]}" ]; then
+          cap=$(sysfs_int "${AMD_HW[$i]}/power1_cap")
+          [ -n "$cap" ] && [ "$cap" -gt 0 ] && frag="$frag,\"power_cap_w\":$(( (cap + 500000) / 1000000 ))"
         fi
-        frag="$frag}"
-        out="$out${out:+,}$frag"
-        i=$((i+1))
+        out="$out${out:+,}$frag}"
       done
       ;;
   esac
@@ -284,12 +406,14 @@ prev_ts=$(date +%s)
 # 推送用 curl -m 1,采集绝不能跟在它的预算里,所以这里跟 nas75 agent 的 DISKS_INTERVAL 同构。
 llm_cache=""; llm_cache_ts=0
 
-echo "[homenet-agent] id=$AGENT_ID hub=$URL iface=${NET_IFACE:-none} gpu=$GPU_MODE cards=${#AMD_CARDS[@]} litellm=$([ -n "$LITELLM_PG_DSN" ] && echo on || echo off)" >&2
+busy_reset
+
+echo "[homenet-agent] id=$AGENT_ID hub=$URL iface=${NET_IFACE:-none} gpu=$GPU_MODE cards=${#AMD_CARDS[@]}${AMD_PCI[*]:+ (${AMD_PCI[*]})} litellm=$([ -n "$LITELLM_PG_DSN" ] && echo on || echo off) sha=${AGENT_SHA:0:12}$([ "$ONCE" = 1 ] && echo ' once')" >&2
 NET_LOG=1                                  # 之后网卡状态每次变化都记一行
 
 # ---------- 主循环 ----------
 while :; do
-  sleep "$INTERVAL"
+  interval_sleep                           # = sleep $INTERVAL,AMD 卡顺带多次采样使用率
   now=$(date +%s)
   elapsed=$((now - prev_ts)); [ "$elapsed" -lt 1 ] && elapsed=1
 
@@ -342,10 +466,20 @@ while :; do
     [ -n "$llm_extra" ] && [ $((now - llm_cache_ts)) -gt "$LITELLM_STALE" ] && llm_extra=""
   fi
 
+  extra_json=""
+  [ -n "$AGENT_SHA" ] && extra_json="\"agent\":{\"file\":\"homenet-agent.sh\",\"sha256\":\"$AGENT_SHA\"}"
+  [ -n "$llm_extra" ] && extra_json="$extra_json${extra_json:+,}$llm_extra"
+
   payload=$(printf '{"v":1,"id":"%s","ts":%d,"os":"linux",%s%s%s%s%s%s,"extra":{%s}}' \
     "$AGENT_ID" "$now" \
     "$(uptime_json)" "$cpu_json" "$(mem_json)" "$(disk_json)" "$net_json" "$(gpus_json)" \
-    "$llm_extra")
+    "$extra_json")
+  busy_reset                               # gpus_json 跑在子 shell 里,清零只能在这里做
+
+  if [ "$ONCE" = "1" ]; then
+    printf '%s\n' "$payload"
+    exit 0
+  fi
 
   curl -sf -m 1 --noproxy '*' \
     -H "X-Push-Token: $PUSH_TOKEN" \

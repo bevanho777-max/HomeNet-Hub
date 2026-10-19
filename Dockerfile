@@ -27,6 +27,9 @@ COPY --from=builder /app/node_modules ./node_modules
 COPY package.json ./
 COPY server ./server
 COPY web ./web
+# agents/ is only hashed (GET /api/agent_heads), never executed here. docker-compose
+# bind-mounts the live checkout over this copy so the hash tracks HEAD without a rebuild.
+COPY agents ./agents
 # config/ and data/ are bind-mounted at runtime (see docker-compose.yml)
 
 EXPOSE 3100

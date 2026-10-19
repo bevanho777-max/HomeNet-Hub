@@ -35,6 +35,10 @@ services:
     volumes:
       - ./config:/app/config:ro          # YAML config, read-only mount (edit on host → chokidar hot-reload)
       - ./data:/app/data                 # SQLite timeseries volume (persisted)
+      # v2.18: agent scripts, read-only, hashed for the "agent matches HEAD" check in the
+      # machine modal. A directory mount (not a file mount), so a git checkout that
+      # replaces the file is seen at once -- no rebuild, no restart.
+      - ./agents:/app/agents:ro
       # The version string, and ONLY that. server/version.js reads `.version` out of
       # /app/package.json at startup and takes nothing else from it; deps were resolved
       # by `npm install` at BUILD time and live in the image's node_modules, so mounting
