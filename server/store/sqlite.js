@@ -305,7 +305,12 @@ export class Tsdb {
       if (typeof value !== 'number' || !Number.isFinite(value)) continue;
       const key = target + '|' + metric;
       const last = this._lastWrite.get(key) || 0;
-      if (tsSec - last < DOWNSAMPLE_SEC) continue;
+      // v2.18.1: a clock that stepped BACKWARDS (2026-10-20: the VM booted ~8h fast and
+      // NTP pulled it back) made `tsSec - last` negative, and the downsampler then
+      // dropped every sample until wall time caught up with the bogus `last` -- a silent
+      // 8-hour hole in every series. A last-write in the future is a clock fault, not a
+      // recent write, so it no longer suppresses anything.
+      if (tsSec >= last && tsSec - last < DOWNSAMPLE_SEC) continue;
       this._lastWrite.set(key, tsSec);
       keep.push([target, metric, value]);
     }
