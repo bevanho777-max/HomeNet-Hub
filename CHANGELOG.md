@@ -49,6 +49,23 @@ on screen is the one from `package.json`, and this file is what needs fixing.
 
 ---
 
+## v2.18.2 — 2026-10-20
+
+**NAS agent:自报版本、`--once` 试跑,只报真正挂载的卷。**
+
+*No rebuild — only `agents/` changed (plus the version string: `docker compose restart homenet-hub`).*
+
+- `agents/nas75-agent.sh`:
+  - `extra.agent = { file, sha256 }`,机器弹窗可显示与 HEAD 是否一致(与 Linux agent 同一套)。
+  - `--once`:采集一次、打印 payload、不推送、不碰 pidfile,可与在跑的 agent 并存。
+  - 只统计**已挂载**的 `/volume*`。卷丢失时目录还在,`df` 会退到 8G 系统分区,卡上显示成
+    健康的「Vol 1 2/8G」(2026-10-20 volume1 的 M.2 NVMe 断电后消失时就是这样)。
+  - 头部部署说明改成现行方式:`/usr/local/homenet/` + DSM 任务计划(开机任务 + 每分钟保活)
+    + `flock -n` 防重复。
+- 实配(私有):`vol1_bytes` / `vol2_bytes` 改为按卷名取值,卷丢失时显示 "—" 而不是下标前移。
+
+---
+
 ## v2.18.1 — 2026-10-20
 
 **时钟往回跳之后,时序数据不再静默断档。**

@@ -9,23 +9,36 @@
 #   extra.volumes[] (every /volume*, df -kP), extra.raid (from /proc/mdstat).
 #
 # ----------------------------------------------------------------------------------
-# DEPLOYMENT (Synology DSM has no systemd -- self-daemon + cron keep-alive):
-#   1) Put this script at e.g. /volume1/scripts/nas75-agent.sh ; chmod +x it.
-#   2) Provide config via env. Easiest: a wrapper the cron line sources, or inline env.
-#   3) DSM > Control Panel > Task Scheduler:
-#        - Boot-up triggered task (root or admin) running:
-#             HUB_URL=http://<hub>:3100 PUSH_TOKEN=<token> /volume1/scripts/nas75-agent.sh
-#        - A "Scheduled Task" repeating every 1 minute running the SAME line.
-#      The pidfile check below makes the minute-task a no-op while the loop is alive,
-#      and a relaunch if it ever died. (Equivalently, a crontab line:
-#        * * * * * HUB_URL=http://<hub>:3100 PUSH_TOKEN=<token> /volume1/scripts/nas75-agent.sh )
+# DEPLOYMENT (Synology DSM has no systemd unit for this -- DSM Task Scheduler + flock):
+#   Live layout on nas75 since 2026-10-20 (system partition, NOT a data volume -- the old
+#   copy on /volume1 vanished with that volume after a power loss and nothing restarted it):
+#     /usr/local/homenet/nas75-agent.sh      this script (byte-identical to the repo)
+#     /usr/local/homenet/nas75-agent.env     HUB_URL / AGENT_ID / PUSH_TOKEN, root 600
+#     /usr/local/homenet/nas75-agent-run.sh  launcher: sources the env, then
+#        nohup setsid flock -n /tmp/nas75-agent.lock nas75-agent.sh &
+#   DSM > Control Panel > Task Scheduler (both run as root, both call the launcher):
+#     - Triggered task "nas75-agent-boot" (event: Boot-up)
+#     - Scheduled task "nas75-agent-keepalive", every 1 minute
+#   flock -n makes every extra launch a no-op while an agent holds the lock, so the
+#   keep-alive can never start a second copy; the pidfile check below is a second guard.
+#   Try a new version first with:  nas75-agent.sh --once   (prints one payload, no push)
 # ----------------------------------------------------------------------------------
 
 set -u
 
+# Trial mode (v2.18.2): `nas75-agent.sh --once` collects one interval, prints the payload
+# to stdout and exits -- no push, no pidfile, HUB_URL / PUSH_TOKEN not required.
+ONCE=0
+case "${1:-}" in --once) ONCE=1 ;; esac
+
 # ---------- config (env-injected) ----------
-HUB_URL="${HUB_URL:?need HUB_URL, e.g. http://192.168.x.x:3100}"
-PUSH_TOKEN="${PUSH_TOKEN:?need PUSH_TOKEN}"
+if [ "$ONCE" = "1" ]; then
+  HUB_URL="${HUB_URL:-http://127.0.0.1:3100}"
+  PUSH_TOKEN="${PUSH_TOKEN:-}"
+else
+  HUB_URL="${HUB_URL:?need HUB_URL, e.g. http://192.168.x.x:3100}"
+  PUSH_TOKEN="${PUSH_TOKEN:?need PUSH_TOKEN}"
+fi
 AGENT_ID="${AGENT_ID:-nas75}"
 INTERVAL="${INTERVAL:-2}"                 # push interval seconds (same as other agents)
 NET_IFACE="${NET_IFACE:-}"                # main NIC; default = default-route interface
@@ -36,21 +49,27 @@ DISKS_STALE="${DISKS_STALE:-300}"         # drop the cached disk list after this
 
 URL="${HUB_URL%/}/api/push/${AGENT_ID}"
 
+# Self-reported version (v2.18.2): sha256 of this script, sent as extra.agent so the hub
+# can compare it with agents/nas75-agent.sh at HEAD (machine modal: "agent matches HEAD").
+AGENT_SELF="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "$0")"
+AGENT_SHA="$(sha256sum "$AGENT_SELF" 2>/dev/null | cut -d' ' -f1)"
+
 # ---------- self-daemon: exit if an instance is already running (cron keep-alive) ----------
-if [ -f "$PIDFILE" ]; then
+# (skipped in --once mode, which must be runnable next to the live agent)
+if [ "$ONCE" = "0" ] && [ -f "$PIDFILE" ]; then
   oldpid=$(cat "$PIDFILE" 2>/dev/null || echo "")
   if [ -n "$oldpid" ] && kill -0 "$oldpid" 2>/dev/null; then
     exit 0                                 # already running -> this launch is a no-op
   fi
 fi
-echo "$$" > "$PIDFILE" 2>/dev/null || true
-# Clean the pidfile on any exit. INT/TERM must exit explicitly: a handler that only
+[ "$ONCE" = "0" ] && { echo "$$" > "$PIDFILE" 2>/dev/null || true; }
+# Clean the pidfile on any exit (never in --once mode: that pidfile belongs to the live agent). INT/TERM must exit explicitly: a handler that only
 # cleans up lets bash resume the main loop afterwards, so the agent would ignore
 # SIGTERM entirely and could only be stopped with kill -9 (leaving the pidfile behind,
 # since kill -9 runs no trap). Exiting here re-triggers the EXIT trap, which does the
 # actual removal. Note the loop's `sleep` is a foreground child, so the signal is
 # handled after it returns -- up to INTERVAL seconds late.
-trap 'rm -f "$PIDFILE" 2>/dev/null' EXIT
+[ "$ONCE" = "0" ] && trap 'rm -f "$PIDFILE" 2>/dev/null' EXIT
 trap 'exit 143' TERM        # 128 + 15
 trap 'exit 130' INT         # 128 + 2
 
@@ -105,11 +124,18 @@ mem_json() {
        /proc/meminfo 2>/dev/null
 }
 
-# extra.volumes[] : every /volume* mount, GB used/total via df -kP (POSIX, single line)
+# A /volumeN directory exists even when its pool is gone (2026-10-20: the M.2 NVMe behind
+# volume1 vanished after a power loss); df on the bare directory then reports the 8G
+# system partition, which the card showed as a healthy "Vol 1 2/8G". Only real mount
+# points count -- a missing volume is now absent, and the card shows a dash.
+is_mounted() { awk -v m="$1" '$2 == m { f = 1 } END { exit f ? 0 : 1 }' /proc/mounts 2>/dev/null; }
+
+# extra.volumes[] : every mounted /volume*, GB used/total via df -kP (POSIX, single line)
 volumes_json() {
   local out="" v name line total used frag
   for v in /volume*; do
     [ -d "$v" ] || continue
+    is_mounted "$v" || continue
     line=$(df -kP "$v" 2>/dev/null | awk 'NR==2 && $2>0 {print $3, $2}')  # used_k total_k
     [ -z "$line" ] && continue
     used=${line% *}; total=${line#* }
@@ -128,6 +154,7 @@ disk_json() {
   local v line used total su=0 st=0
   for v in /volume*; do
     [ -d "$v" ] || continue
+    is_mounted "$v" || continue
     line=$(df -kP "$v" 2>/dev/null | awk 'NR==2 && $2>0 {print $3, $2}')  # used_k total_k
     [ -z "$line" ] && continue
     used=${line% *}; total=${line#* }
@@ -316,10 +343,17 @@ while :; do
   [ -n "$disks_out" ] && extra="$extra${extra:+,}$disks_out"
 
   # gpus is required by the protocol -> always [] on a NAS.
+  [ -n "$AGENT_SHA" ] && extra="$extra${extra:+,}\"agent\":{\"file\":\"nas75-agent.sh\",\"sha256\":\"$AGENT_SHA\"}"
+
   payload=$(printf '{"v":1,"id":"%s","ts":%d,"os":"linux",%s%s%s%s%s"gpus":[],"extra":{%s}}' \
     "$AGENT_ID" "$now" \
     "$(uptime_json)" "$cpu_json" "$(mem_json)" "$disk_out" "$net_json" \
     "$extra")
+
+  if [ "$ONCE" = "1" ]; then
+    printf '%s\n' "$payload"
+    exit 0
+  fi
 
   curl -sf -m 1 --noproxy '*' \
     -H "X-Push-Token: $PUSH_TOKEN" \
