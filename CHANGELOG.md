@@ -49,6 +49,27 @@ on screen is the one from `package.json`, and this file is what needs fixing.
 
 ---
 
+## v2.21.0 — 2026-10-20
+
+**多卡卡面只显示合计;网关卡按模型拆成五槽、三个 litellm 实例的请求量都算进来。**
+
+*Rebuild required — `web/` changed;`agents/homenet-agent.sh` 需在各 Linux 机器重新部署
+(行为变化只在网关机 m24;m24 的 `/etc/homenet-agent.env` 要加新容器名,见下)。*
+
+- **卡面去掉每卡小字**:多卡机器的 GPU / 显存环下方(「0:80% 1:82%」)与显存 / 温度 / 功耗格里的
+  每卡明细行都不再显示,卡面只留合计值。告警不变:hub 给合计值的 level 仍取各卡最差的一张
+  (显存 / 温度 / 功耗),环和格子按它着色 —— 任一张卡超阈值就变红。每卡曲线仍在机器弹窗里。
+- **agent:`reqs_by_model` 五槽** `27b` / `flashnext` / `m110` / `emb` / `other`(原四槽)。m110 槽的
+  SQL LIKE 模式与上标来自环境变量 `LITELLM_M110_LIKE` / `LITELLM_M110_LABEL`(只接受
+  `[A-Za-z0-9._%-]`,模式为空时该槽恒为 0),m110 换模型只改 env。卡片的 format 要同步改成
+  `{m1} {m2} {m3} {m4} {m5}`,target map 加 `m5` / `m5_label`。
+- **`reqs_5m` 三容器累加**:一机一个 litellm 实例后,m24 的 `LITELLM_CONTAINERS` 改为
+  `"litellm litellm-agent litellm-m26"`(加了引号,bash 直接 source 也不报错)。
+- `docs/AGENT_PROTOCOL.md`:五槽与 m110 env、三容器。
+- 实配(私有):m24 卡 `reqs_by_model` 加 m5;推理节点卡的 `instances` 加 4002(litellm-m26)。
+
+---
+
 ## v2.20.0 — 2026-10-20
 
 **推理节点卡:每台推理机器一栏,状态 / 速度 / 今日用量 / 实际路由的 litellm 实例合在一张全宽卡上。**
