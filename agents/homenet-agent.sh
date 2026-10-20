@@ -27,7 +27,7 @@ GPU_NAMES="${GPU_NAMES:-}"         # 可选:逗号分隔卡名,按 idx 对应(AM
 # litellm 采集(仅网关机启用):不设 LITELLM_PG_DSN 就整段跳过,其余机器行为完全不变。
 # DSN 走 homenet_ro 只读账号;psql 在 litellm-db 容器内执行,故主机名用 localhost。
 LITELLM_PG_DSN="${LITELLM_PG_DSN:-}"
-# 入站请求量按容器读访问日志,而两个 litellm 实例各收各的(4000 挂 27b,4001 挂 35b),
+# 入站请求量按容器读访问日志,而两个 litellm 实例各收各的(4000 / 4001 挂同一套模型,客户端各连各的),
 # 只读一个容器就只统计一半流量。这里收一份空格分隔的容器名列表并全部累加。旧的单容器
 # LITELLM_CONTAINER 仍然生效,作为未设新变量时的默认值,老机器的 env 不用改。
 LITELLM_CONTAINERS="${LITELLM_CONTAINERS:-${LITELLM_CONTAINER:-litellm}}"
@@ -226,7 +226,8 @@ uptime_json() {
 # 只算解析出模型的行(model<>''),滤掉鉴权失败噪声。
 # 成功率分母用 api_requests:该表满足 api_requests = successful + failed(全表 465 行
 # 无一例外),分母本就含失败数,不需要额外修正。
-# 请求量按 model(实际部署名)拆,不按 model_group:27b 与 35b 溢出节点共用同一个 group。
+# 请求量按 model(实际部署名,如 openai/qwen38-flashnext-256k)拆,不按 model_group:别名
+# (qwen3.8-27b-main-128k → qwen3.8-27b-ud-q3-k-xl-128k 等)会让同一个部署出现在多个 group 里。
 #
 # ── CHAT-ONLY 口径(v2.11)──────────────────────────────────────────────
 # cache_hit / success / reqs_today 只统计 **非 embedding** 行。理由是实测出来的:
@@ -270,15 +271,16 @@ SELECT 'S|'||COALESCE(ROUND(100.0*SUM(cache_read_input_tokens)/NULLIF(SUM(prompt
         ||'|'||COALESCE((SELECT SUM(api_requests) FROM llm)::text,'')
 FROM chat
 UNION ALL
--- 四槽固定顺序 27b/35b/emb/other。is_emb 先判,免得将来出现名字里同时含 "bge" 和
+-- 四槽固定顺序 27b/flashnext/emb/other。is_emb 先判,免得将来出现名字里同时含 "bge" 和
 -- "27b" 的向量模型被归进 chat 槽;other 槽补发,之前算了却不发 —— 全库请求数第一的
 -- chat 模型 qwen3.6-27b-main-128k(11,548 次)就整个落在里面、卡上完全看不到。
--- 27b/35b 的模式从写死的 %qwen3.8-27b% / %qwen3.6-35b% 放宽到 %27b% / %35b%,换
--- 一个小版本号的部署名不会再静默掉进 other。
+-- 27b 的模式用 %27b% 而不是写死的完整名,换一个小版本号的部署名不会静默掉进 other。
+-- v2.19.1:第二槽原是 35b(m25 旧硬件),35b 已于 2026-10-20 下线;现在是 m25 上
+-- 实际在跑的 flashnext。之后 m25 换模型,改这里的模式和下面 m2_label 即可。
 SELECT 'M|'||tag||'|'||reqs::text FROM (
   SELECT CASE WHEN is_emb              THEN 'emb'
               WHEN model LIKE '%27b%'  THEN '27b'
-              WHEN model LIKE '%35b%'  THEN '35b'
+              WHEN model LIKE '%flashnext%' THEN 'flashnext'
               ELSE 'other' END AS tag,
          SUM(api_requests) AS reqs
   FROM llm GROUP BY 1
@@ -308,14 +310,14 @@ llm_collect() {
     if llm_isnum "$ra"; then
       llm_isnum "$rt" || rt=0
       out="$out\"reqs_today\":$rt,"
-      # 四个槽位固定顺序 27b/35b/emb/other。桶内没有该类的请求记 0(而非缺失),避免小格错位。
+      # 四个槽位固定顺序 27b/flashnext/emb/other。桶内没有该类的请求记 0(而非缺失),避免小格错位。
       m1=$(printf '%s\n' "$raw" | awk -F'|' '$1=="M" && $2=="27b"{print $3; exit}')
-      m2=$(printf '%s\n' "$raw" | awk -F'|' '$1=="M" && $2=="35b"{print $3; exit}')
+      m2=$(printf '%s\n' "$raw" | awk -F'|' '$1=="M" && $2=="flashnext"{print $3; exit}')
       m3=$(printf '%s\n' "$raw" | awk -F'|' '$1=="M" && $2=="emb"{print $3; exit}')
       m4=$(printf '%s\n' "$raw" | awk -F'|' '$1=="M" && $2=="other"{print $3; exit}')
       llm_isnum "$m1" || m1=0; llm_isnum "$m2" || m2=0
       llm_isnum "$m3" || m3=0; llm_isnum "$m4" || m4=0
-      out="$out\"by_model\":{\"m1\":$m1,\"m1_label\":\"27b\",\"m2\":$m2,\"m2_label\":\"35b\",\"m3\":$m3,\"m3_label\":\"emb\",\"m4\":$m4,\"m4_label\":\"other\"},"
+      out="$out\"by_model\":{\"m1\":$m1,\"m1_label\":\"27b\",\"m2\":$m2,\"m2_label\":\"flashnext\",\"m3\":$m3,\"m3_label\":\"emb\",\"m4\":$m4,\"m4_label\":\"other\"},"
     fi
   fi
   # 近 5 分钟入站 LLM 请求:走访问日志,天然不含 litellm→后端的健康探测(那些不是入站 HTTP)。

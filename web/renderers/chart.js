@@ -86,10 +86,11 @@ function gapThreshold(pts) {
  * @param {Record<string,{ts:number,value:number}[]>} series  from /api/history
  * @param {HTMLElement|null} legendEl
  * @param {{subs:{k:string,color:string,axis:'L'|'R'}[], metrics:object, height?:number,
- *          emptyText?:string}} opts
+ *          emptyText?:string, maxGapSec?:number}} opts
+ *   maxGapSec: upper bound on the gap a line may bridge, for event-like series (see B25b).
  */
 export function drawMulti(canvas, series, legendEl, opts) {
-  const { subs, metrics, height = 240, emptyText = 'No data yet (collecting samples…)' } = opts;
+  const { subs, metrics, height = 240, emptyText = 'No data yet (collecting samples…)', maxGapSec = null } = opts;
   const dpr = window.devicePixelRatio || 1;
   const cssW = canvas.clientWidth || 360, cssH = height;
   canvas.width = cssW * dpr; canvas.height = cssH * dpr;
@@ -170,14 +171,28 @@ export function drawMulti(canvas, series, legendEl, opts) {
     // recording for nine hours is not a nine-hour ramp between the last value and the
     // first one after -- but that is exactly what a straight lineTo() drew, and on the
     // gateway's 7d chart it read as a confident slide from 98% to 21%.
-    const gap = gapThreshold(pts);
+    // B25b (v2.19.1): the p90 rule assumes a series that is normally continuous. An
+    // inference speed is only measured while requests run -- speed25 had samples in 38
+    // of 141 hours -- so the long idle gaps ARE the typical interval, p90 lands on one of
+    // them, nothing breaks, and days-apart measurements were joined into what read as
+    // one flat line. The caller can cap the bridgeable gap; the tighter rule wins.
+    const p90gap = gapThreshold(pts);
+    const gap = maxGapSec ? Math.min(p90gap ?? Infinity, maxGapSec) : p90gap;
+    const isBreak = (i) => i > 0 && gap != null && (pts[i].ts - pts[i - 1].ts) > gap;
+    const lone = [];
     ctx.beginPath();
     pts.forEach((p, i) => {
       const x = xPos(p.ts), y = yf(p.value);
-      const broken = i > 0 && gap != null && (p.ts - pts[i - 1].ts) > gap;
-      if (i === 0 || broken) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      if (i === 0 || isBreak(i)) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      // A sample with a break on both sides draws no segment at all; mark it with a dot
+      // so a single measurement still shows up.
+      if ((i === 0 || isBreak(i)) && (i === pts.length - 1 || isBreak(i + 1))) lone.push([x, y]);
     });
     ctx.strokeStyle = sub.color; ctx.lineWidth = 1.8; ctx.lineJoin = 'round'; ctx.stroke();
+    if (lone.length) {
+      ctx.fillStyle = sub.color;
+      for (const [x, y] of lone) { ctx.beginPath(); ctx.arc(x, y, 1.8, 0, Math.PI * 2); ctx.fill(); }
+    }
   }
 
   // B24 label placement. Each name anchors at its own line's last sample, then two

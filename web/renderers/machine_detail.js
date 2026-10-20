@@ -297,7 +297,12 @@ async function load() {
       } else if (split) {
         // One series per panel, each on its own auto-scaled axis.
         const one = (s) => (s ? [{ ...s, axis: 'R' }] : []);
-        const opts = { metrics: metrics(), height: 220, emptyText: t('chart_no_data_range', range) };
+        // Speed only exists while requests run: never bridge more than three read buckets
+        // (/api/history returns ~250 per window) or 15 minutes, whichever is longer --
+        // ~17 min at 1d, ~2 h at 7d. See B25b in chart.js.
+        const spanSec = { '1d': 86400, '24h': 86400, '3d': 259200, '7d': 604800, '30d': 2592000 }[range] || 86400;
+        const maxGapSec = Math.max(900, 3 * Math.ceil(spanSec / 250));
+        const opts = { metrics: metrics(), height: 220, emptyText: t('chart_no_data_range', range), maxGapSec };
         drawMulti(canvas, series, legend, { ...opts, subs: one(subs[0]) });
         drawMulti(second.canvas, series, second.legend, { ...opts, subs: one(subs[1]) });
       } else {
