@@ -277,6 +277,11 @@ const ZH = {
   agent_head_mismatch: (run, head) => `agent 与 HEAD 不一致：运行中 ${run}，HEAD ${head}`,
   agent_head_unknown: (sha) => `agent ${sha}（HEAD 版本未知）`,
   agent_unreported: 'agent 未上报版本（旧版 agent）',
+  // v2.19 service/stack: an expected-absent service, and measurement age
+  svc_idle: '目前无服务',
+  measured_at: (when) => `测量于 ${when}`,
+  measured_last: (when) => `最后测量 ${when}`,
+  measured_none: (span) => (span ? `近 ${span} 无测量` : '无测量记录'),
 
   // table card
   table_more: '查看全部',
@@ -505,6 +510,10 @@ const EN = {
   agent_head_mismatch: (run, head) => `Agent differs from HEAD: running ${run}, HEAD ${head}`,
   agent_head_unknown: (sha) => `Agent ${sha} (HEAD version unknown)`,
   agent_unreported: 'Agent does not report its version (old agent)',
+  svc_idle: 'No service right now',
+  measured_at: (when) => `Measured ${when}`,
+  measured_last: (when) => `Last measured ${when}`,
+  measured_none: (span) => (span ? `No measurement in ${span}` : 'No measurement on record'),
 
   table_more: 'View all',
   table_count: (n) => ` (${n} total)`,

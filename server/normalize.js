@@ -162,6 +162,68 @@ function normMetric(raw, mapEntry, metric, metricKey) {
   return { value, level, display };
 }
 
+// ── 功耗读数合理性(v2.19)────────────────────────────────────────────
+// 2026-10-20 m25 的 Dual Compare 功耗轴顶到 868W,而两张 7900 XTX 的 power1_cap 合计只有
+// 594W(291+303)。查原始样本:合计没有算错(每个时间点 gpu_power 都等于两卡之和),单位
+// 也没错(agent 微瓦→瓦);是 agent 每周期只读一次 power1_average,高负载切换时偶有单卡
+// 读数冲到 444–501W(上限的 1.5–1.7 倍)。10Hz 连采 40 秒满载最高只到 307W,所以这种值
+// 是瞬时尖峰/读数毛刺,不是这张卡的真实功耗。agent 已改成周期内多次采样取平均(根因),
+// 这里再挡一道:单卡读数超过自己 power_cap_w 的 1.5 倍就丢掉该卡这一样本的功耗值 ——
+// 不写库、不进合计(合计见下面 applyGpuMulti:缺任何一张卡就整体不写)。
+// 没有上报 power_cap_w 的卡(nvidia-smi 路径)无从判断,原样放行。
+const POWER_CAP_FACTOR = 1.5;
+const rejectedLog = new Map();   // "target|idx" -> 上次告警时间,同一张卡 10 分钟内只记一次
+
+function sanitizeGpuPower(raw, target) {
+  if (!Array.isArray(raw?.gpus)) return raw;
+  let changed = false;
+  const gpus = raw.gpus.map((g, pos) => {
+    const pw = num(g?.power_w), cap = num(g?.power_cap_w);
+    if (pw == null || cap == null || cap <= 0 || pw <= cap * POWER_CAP_FACTOR) return g;
+    changed = true;
+    const key = `${target?.id}|${g.idx ?? pos}`;
+    const now = Date.now();
+    if (now - (rejectedLog.get(key) || 0) > 600000) {
+      rejectedLog.set(key, now);
+      console.warn(`[normalize] ${target?.id} gpu${g.idx ?? pos}: power ${pw}W > ${POWER_CAP_FACTOR}x cap ${cap}W, sample dropped`);
+    }
+    const { power_w: _drop, ...rest } = g;
+    return rest;
+  });
+  return changed ? { ...raw, gpus } : raw;
+}
+
+// ── 测量时效(v2.19)──────────────────────────────────────────────────
+// Speed 卡以前用 last_over_time(...[24h]) 把最后一次非空闲的速度保留 24 小时:m25 的 35b
+// 在 10-19 20:26 之后就没有任何推理了,卡面却一直显示 209.8 / 26.2,而且每 30 秒把这个
+// 旧值当新样本写进历史。现在查询同时返回每个值的测量时间(Prometheus timestamp()),
+// 由这里判定:
+//   age ≤ FRESH_LIVE_SEC   正在测量 —— 正常显示,写历史
+//   age ≤ max_age          刚测过   —— 照常显示(卡面标测量时间),但不写历史(held)
+//   age > max_age / 无时间  过期     —— 显示 "—",保留 at 给卡面写「最后测量 …」,不写历史
+// 配置:target.freshness = { max_age: "10m", lookback: "7d", at: { <metric>: <JSONPath> } }
+const FRESH_LIVE_SEC = 120;      // 子查询步长 1m,活跃时 at 落在最近一两个步点上
+
+function durSec(v, fallback) {
+  if (typeof v === 'number' && Number.isFinite(v)) return v;
+  const m = typeof v === 'string' && v.trim().match(/^([\d.]+)\s*(s|m|h|d)?$/);
+  if (!m) return fallback;
+  return Number(m[1]) * ({ s: 1, m: 60, h: 3600, d: 86400 }[m[2] || 's']);
+}
+
+function applyFreshness(raw, target, metrics, nowSec) {
+  const f = target.freshness;
+  if (!f || !f.at || typeof f.at !== 'object') return;
+  const maxAge = durSec(f.max_age, 600);
+  for (const [k, path] of Object.entries(f.at)) {
+    if (!metrics[k]) continue;
+    const at = num(jp(raw, path));
+    const age = at == null ? Infinity : nowSec - at;
+    if (age > maxAge) metrics[k] = { value: null, level: 'cool', display: '—', at, expired: true };
+    else metrics[k] = { ...metrics[k], at, ...(age > FRESH_LIVE_SEC ? { held: true } : {}) };
+  }
+}
+
 // ── 多 GPU(v2.18)─────────────────────────────────────────────────────
 // 协议的 gpus[] 一直是数组,但 map 只取 gpus[0]:双卡机器的第二张卡从来没上过卡面。
 // 这里在 map 之后统一处理 —— 只在「payload 里 ≥2 张卡」或「target 声明 gpu_count ≥2」
@@ -176,6 +238,9 @@ function normMetric(raw, mapEntry, metric, metricKey) {
 //         gpuN_power —— 普通 metric,自动进历史,机器明细弹窗按卡画线。
 //   少卡:gpu_cards = 检测到的张数;少于 gpu_count 时 level=danger,卡面显示警告,
 //         免得只剩一张卡时合计值看起来一切正常。
+//   缺值(v2.19):检测到的卡里只要有一张这一项没读到(或功耗被上面的合理性检查丢掉),
+//         这一项的合计就是 null —— 不写库,卡面 "—"。只拿读到的几张去平均/相加,等于把
+//         缺的那张当 0,功耗合计会凭空掉一半。每卡 metric 不受影响,读到的照写。
 // 卡面小字由各合计 metric 上的 `cards` 数组提供(用 cards 而不是 parts,不触发 B20 的分段渲染)。
 const LV_RANK = { ok: 1, warn: 2, danger: 3 };
 const worstLevel = (levels) => levels.reduce((a, l) => ((LV_RANK[l] || 0) > (LV_RANK[a] || 0) ? l : a), null);
@@ -221,7 +286,8 @@ function applyGpuMulti(raw, target, tpls, metrics) {
   }
 
   const has = (k) => Object.prototype.hasOwnProperty.call(target.map || {}, k);
-  const vals = (k) => cards.map((c) => c[k]).filter((v) => v != null);
+  // 合计只在每张卡都读到这一项时才算(见上面「缺值」),否则返回空数组 → null。
+  const vals = (k) => (cards.every((c) => c[k] != null) ? cards.map((c) => c[k]) : []);
   const sum = (xs) => xs.reduce((a, b) => a + b, 0);
   const lvOf = (k) => cards.filter((c) => c[k] != null);
 
@@ -235,13 +301,14 @@ function applyGpuMulti(raw, target, tpls, metrics) {
   }
   if (has('vram_bytes')) {
     const ok = cards.filter((c) => c.used != null && c.total > 0);
+    const all = ok.length > 0 && ok.length === cards.length;
     const u = sum(ok.map((c) => c.used)), t = sum(ok.map((c) => c.total));
-    const v = ok.length ? Math.max(0, Math.min(100, (u / t) * 100)) : null;
+    const v = all ? Math.max(0, Math.min(100, (u / t) * 100)) : null;
     const tpl = T('vram_bytes');
     metrics.vram_bytes = {
       value: v,
-      level: ok.length ? worstLevel([computeLevel(v, { thresholds: vramTh }), ...ok.map((c) => c.lvVram)]) : 'cool',
-      display: ok.length ? applyFormat(tpl.format || '{v}/{max}G', { v: u, max: t }, 'vram_bytes', tpl.divide) : '—',
+      level: all ? worstLevel([computeLevel(v, { thresholds: vramTh }), ...ok.map((c) => c.lvVram)]) : 'cool',
+      display: all ? applyFormat(tpl.format || '{v}/{max}G', { v: u, max: t }, 'vram_bytes', tpl.divide) : '—',
       cards: ok.map((c) => ({ i: c.i, text: `${gb1(c.used)}G`, full: `${gb1(c.used)}/${gb1(c.total)}`, level: c.lvVram })),
     };
   }
@@ -258,7 +325,7 @@ function applyGpuMulti(raw, target, tpls, metrics) {
     const xs = vals('power');
     const v = xs.length ? sum(xs) : null;
     const caps = vals('cap');
-    const capSum = caps.length === cards.length && caps.length ? sum(caps) : null;
+    const capSum = caps.length ? sum(caps) : null;
     metrics.gpu_power = {
       value: v, level: xs.length ? worstLevel(lvOf('power').map((c) => c.lvPower)) : 'cool',
       display: v == null ? '—' : capSum ? `${Math.round(v)}/${Math.round(capSum)}W` : fmtScalar(v, T('gpu_power')),
@@ -277,14 +344,16 @@ function applyGpuMulti(raw, target, tpls, metrics) {
  * Normalize a raw collector payload into standard metrics for a target.
  * @returns {{ metrics: Record<string,{value,level,display}> }}
  */
-export function normalize(raw, target, metricTemplates) {
+export function normalize(raw0, target, metricTemplates) {
   const metrics = {};
   const map = target.map || {};
+  const raw = sanitizeGpuPower(raw0, target);
   for (const [metricKey, mapEntry] of Object.entries(map)) {
     const tpl = metricTemplates?.[metricKey] || {};
     metrics[metricKey] = normMetric(raw, mapEntry, tpl, metricKey);
   }
   applyGpuMulti(raw, target, metricTemplates, metrics);
+  applyFreshness(raw, target, metrics, Date.now() / 1000);
   return { metrics };
 }
 
@@ -307,6 +376,8 @@ const PART_REDUCERS = {
 export function samplableRows(targetId, normalized, metricTemplates) {
   const rows = [];
   for (const [metric, m] of Object.entries(normalized.metrics || {})) {
+    // held:还在时效内、但不是这一刻测到的值(见 applyFreshness)—— 卡面照显示,历史不重复写。
+    if (m.held) continue;
     if (typeof m.value === 'number' && Number.isFinite(m.value)) {
       rows.push([targetId, metric, m.value]);
     }

@@ -1,12 +1,41 @@
 // service renderer (§6) — no rings; KV list + header_right status/badge.
 import { card, mget, lvClass, esc, statusLevel } from './common.js';
-import { cv } from '../i18n.js';
+import { cv, t } from '../i18n.js';
+
+// v2.19 measurement age. A metric the hub tracks for freshness carries `at` (unix
+// seconds of the measurement, null = none inside the query's lookback) and, once older
+// than the target's max_age, `expired` with a "—" display. The card says when the
+// number was taken, so an old value can never pass for a current one.
+function fmtWhen(sec) {
+  const d = new Date(sec * 1000), now = new Date();
+  const p2 = (n) => ('0' + n).slice(-2);
+  const hm = `${p2(d.getHours())}:${p2(d.getMinutes())}`;
+  return d.toDateString() === now.toDateString() ? hm : `${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${hm}`;
+}
+
+function measuredNote(target, snap, keys) {
+  const ms = keys.map((k) => snap?.metrics?.[k]).filter((m) => m && 'at' in m);
+  if (!ms.length) return '';
+  const ats = ms.map((m) => m.at).filter((a) => typeof a === 'number');
+  const last = ats.length ? Math.max(...ats) : null;
+  const expired = ms.every((m) => m.expired);
+  const text = last == null ? t('measured_none', target.freshness?.lookback)
+    : expired ? t('measured_last', fmtWhen(last)) : t('measured_at', fmtWhen(last));
+  return `<div class="note measured${expired ? ' is-expired' : ''}">${esc(text)}</div>`;
+}
 
 export function renderService(gridCard, target, snap, metrics) {
   const title = target.name || target.id;
   const accent = target.color || '';
 
   if (!snap || snap.online === false) {
+    // v2.19 `when_down`: expected absence, shown neutral (see stack.js).
+    if (target.when_down) {
+      return card({
+        key: target.id, title, tag: '', accent, stale: true,
+        body: `<div class="note">${esc(cv(target.when_down, 'note') || t('svc_idle'))}</div>`,
+      });
+    }
     return card({
       key: target.id, title, tag: 'offline', accent, stale: true,
       body: `<div class="note">Unavailable${snap?.error ? ` (${esc(snap.error)})` : ''}</div>`,
@@ -36,6 +65,8 @@ export function renderService(gridCard, target, snap, metrics) {
   }).join('');
 
   // no items configured → show a note instead of a silent empty card body
-  const body = itemKeys.length ? `<div class="kv">${items}</div>` : '<div class="note">No fields configured</div>';
+  const body = itemKeys.length
+    ? `<div class="kv">${items}</div>${measuredNote(target, snap, itemKeys)}`
+    : '<div class="note">No fields configured</div>';
   return card({ key: target.id, title, tag, body, accent, stale: snap.stale });
 }

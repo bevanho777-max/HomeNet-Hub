@@ -3,7 +3,7 @@
 // / identity color); children share the outer .card frame, separated by a hairline.
 // The stack card's header_right/items/labels apply to every child.
 import { card, esc } from './common.js';
-import { cv } from '../i18n.js';
+import { cv, t } from '../i18n.js';
 import { renderService } from './service.js';
 
 export function renderStack(gc, resolve, metrics) {
@@ -29,6 +29,17 @@ export function renderStack(gc, resolve, metrics) {
     if (!snap || snap.online === false) {
       const skel = (gc.items || []).map((k) =>
         `<div class="item"><span class="label">${esc(label(k))}</span><span class="value">—</span></div>`).join('');
+      // v2.19 `when_down`: this target having no service is expected (m25 only runs an
+      // inference server while a model is being tried out), so it is a neutral grey
+      // state, not a fault. No badge either -- the badge describes the service, and the
+      // service is exactly what is not there.
+      if (target.when_down) {
+        return `<div class="stack-item stack-item-offline stack-item-idle" data-target="${esc(childId)}"${accentAttr}>`
+          + `<h2>${title}</h2>`
+          + `<div class="stack-offline"><div class="stack-offline-status">${esc(cv(target.when_down, 'note') || t('svc_idle'))}</div>`
+          + (skel ? `<div class="kv">${skel}</div>` : '') + '</div>'
+          + '</div>';
+      }
       const err = snap?.error ? ` (${esc(snap.error)})` : '';
       const badge = esc(target.badge || 'offline');
       return `<div class="stack-item stack-item-offline" data-target="${esc(childId)}"${accentAttr}>`

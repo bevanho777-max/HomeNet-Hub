@@ -89,15 +89,16 @@ agent 对任何响应都不做分支处理,唯一职责是"采集→推送→睡
 | `gpus[].util_pct` | number | — | GPU 利用率 0–100 |
 | `gpus[].vram_used_gb` / `vram_total_gb` | number | — | 显存,GB,1 位小数 |
 | `gpus[].temp_c` | int | — | 温度 ℃ |
-| `gpus[].power_w` | int | — | 实时功耗 W |
+| `gpus[].power_w` | int | — | 功耗 W。Linux AMD 自 v2.19 起是上报周期内多次采样的平均(同 `util_pct`),不是单次读数 |
 | `gpus[].pci` | string | — | PCI 地址,如 `"0000:03:00.0"`(v2.18,AMD)|
 | `gpus[].temp_junction_c` / `temp_mem_c` | int | — | 热点 / 显存温度 ℃(v2.18,AMD;`temp_c` 仍是 edge)|
-| `gpus[].power_cap_w` | int | — | 功耗上限 W(`power1_cap`,v2.18,AMD)|
+| `gpus[].power_cap_w` | int | — | 功耗上限 W(`power1_cap`,v2.18,AMD)。v2.19 起 hub 据此做合理性检查:`power_w` 超过它的 1.5 倍即视为读数毛刺,丢弃该卡这一样本的功耗(不写库,多卡合计也不写)|
 | `extra` | object | ✅ | 自由扩展区,允许空对象;机器特有数据放这里(见 4.4) |
 
 ### 4.3 缺失与空值规则
 
 - **采不到 = 不写该字段**(省略,而不是写 `null` 或 `0`)。前端对缺失字段显示 `—`。
+  多卡机器上只要有一张卡缺某一项,hub 就不写这一项的合计(v2.19)—— 拿剩下几张去平均/相加等于把缺的那张当 0。
 - 数值一律为 JSON number,**不带单位、不带字符串包装**(❌ `"31°C"` ✅ `31`)。
 - 服务端遇到**未知字段一律忽略**,不报错——这是向后兼容的基础。
 

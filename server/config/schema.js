@@ -177,6 +177,24 @@ const targetsSchema = {
           source: sourceSchema,
           map: { type: 'object', additionalProperties: mapEntry },
           classify: classifySchema,
+          gpu_count: { type: 'number' },
+          // v2.19: no service here is expected, not a fault -> neutral grey card.
+          when_down: {
+            type: 'object',
+            properties: { note: { type: 'string' }, note_en: enString },
+            additionalProperties: false,
+          },
+          // v2.19: per-metric measurement timestamps; older than max_age shows "—".
+          freshness: {
+            type: 'object',
+            required: ['at'],
+            properties: {
+              max_age: { type: ['string', 'number'] },
+              lookback: { type: 'string' },
+              at: { type: 'object', additionalProperties: { type: 'string' } },
+            },
+            additionalProperties: false,
+          },
         },
         additionalProperties: true,
       },

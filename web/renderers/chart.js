@@ -37,7 +37,22 @@ const fitText = (ctx, s, max) => {
 };
 
 const LBL_FONT = '600 11px system-ui, sans-serif';
-const LBL_LH = 13;          // minimum vertical distance between two stacked labels
+const LBL_GAP = 3;          // clear space between two stacked labels, on top of the text height
+
+// v2.19: the stacking distance used to be a fixed 13px for an 11px bold font. That is
+// exactly the height of the glyph box under a Latin system font, so two neighbours
+// touched, and under a CJK fallback (Windows: Microsoft YaHei's line box is ~1.32em,
+// ~14.5px) they overlapped outright -- m26's Temp / Power / GPU, all near the floor at
+// idle, read as one smudge. The distance now comes from the font actually in use:
+// its line box (ascent + descent, which covers descenders and the CJK em box) plus a
+// fixed gap.
+function labelPitch(ctx) {
+  const m = ctx.measureText('Ég°%国');
+  const asc = m.fontBoundingBoxAscent ?? m.actualBoundingBoxAscent;
+  const desc = m.fontBoundingBoxDescent ?? m.actualBoundingBoxDescent;
+  const h = Number.isFinite(asc + desc) && asc + desc > 0 ? asc + desc : 14;
+  return Math.ceil(h) + LBL_GAP;
+}
 
 // B25: how far apart two samples must be before the line is broken instead of drawn
 // across. Derived per series, because there is no single right number: /api/history
@@ -167,11 +182,22 @@ export function drawMulti(canvas, series, legendEl, opts) {
 
   // B24 label placement. Each name anchors at its own line's last sample, then two
   // deterministic sweeps (push down, then push back up off the floor) open at least
-  // LBL_LH between neighbours and clamp everything inside the plot band -- same data in,
+  // `pitch` between neighbours and clamp everything inside the plot band -- same data in,
   // same layout out, so a redraw of the same window never makes the labels jump.
   if (present.length) {
     const plotRight = cssW - padR, labelX = cssW - gutterW + 8;
-    const top = padT + 6, bot = padT + H - 2;
+    ctx.font = LBL_FONT;
+    let pitch = labelPitch(ctx);
+    let top = padT + 6, bot = padT + H - 2;
+    // More labels than the plot band holds (the multi-GPU temperature panel draws six):
+    // the gutter is bare background, so first let them use the canvas's full height, and
+    // only if even that is short squeeze the pitch -- never below the text itself.
+    const need = (present.length - 1) * pitch;
+    if (need > bot - top) {
+      const half = Math.ceil(pitch / 2);
+      top = Math.min(top, half); bot = Math.max(bot, cssH - half);
+      if (need > bot - top) pitch = Math.max(pitch - LBL_GAP, (bot - top) / (present.length - 1));
+    }
     const items = present.map((sub, i) => {
       const pts = series[sub.k];
       const last = pts[pts.length - 1];
@@ -183,11 +209,11 @@ export function drawMulti(canvas, series, legendEl, opts) {
     });
     items.sort((a, b) => a.y - b.y);
     let prev = -Infinity;
-    for (const it of items) { it.y = Math.max(it.y, prev + LBL_LH, top); prev = it.y; }
+    for (const it of items) { it.y = Math.max(it.y, prev + pitch, top); prev = it.y; }
     let next = Infinity;
     for (let i = items.length - 1; i >= 0; i--) {
       const it = items[i];
-      it.y = Math.max(top, Math.min(it.y, next - LBL_LH, bot));
+      it.y = Math.max(top, Math.min(it.y, next - pitch, bot));
       next = it.y;
     }
     ctx.textBaseline = 'middle';

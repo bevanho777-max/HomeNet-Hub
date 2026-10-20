@@ -155,16 +155,24 @@ fi
 
 # 使用率采样(仅 AMD):gpu_busy_percent 是瞬时值,推理负载下一秒内能在 0 与 100 之间跳。
 # 每个上报周期内分 GPU_SAMPLES 次读取取平均,而不是只取推送那一刻的一个点。
+# 功耗同理(v2.19):power1_average 在 RDNA3 高负载切换时偶有单次读数冲到上限的 1.5 倍以上
+# (m25 2026-10-20 见过 291W 上限的卡读到 501W),只取一个点就会把这种毛刺当成这 5 秒的功耗。
+# 和使用率一起在周期内多次读取取平均;一次都没读到就省略字段,不报 0。
 GPU_SAMPLES="${GPU_SAMPLES:-4}"
 case "$GPU_SAMPLES" in ''|*[!0-9]*|0) GPU_SAMPLES=4 ;; esac
-BUSY_SUM=(); BUSY_N=()
-busy_reset() { local i; for i in "${!AMD_CARDS[@]}"; do BUSY_SUM[$i]=0; BUSY_N[$i]=0; done; }
+BUSY_SUM=(); BUSY_N=(); PWR_SUM=(); PWR_N=()
+busy_reset() {
+  local i
+  for i in "${!AMD_CARDS[@]}"; do BUSY_SUM[$i]=0; BUSY_N[$i]=0; PWR_SUM[$i]=0; PWR_N[$i]=0; done
+}
 busy_sample() {
   local i v
   for i in "${!AMD_CARDS[@]}"; do
     v=""; { read -r v < "${AMD_CARDS[$i]}/gpu_busy_percent"; } 2>/dev/null
-    case "$v" in ''|*[!0-9]*) continue ;; esac
-    BUSY_SUM[$i]=$(( BUSY_SUM[$i] + v )); BUSY_N[$i]=$(( BUSY_N[$i] + 1 ))
+    case "$v" in ''|*[!0-9]*) ;; *) BUSY_SUM[$i]=$(( BUSY_SUM[$i] + v )); BUSY_N[$i]=$(( BUSY_N[$i] + 1 )) ;; esac
+    [ -n "${AMD_PWR[$i]}" ] || continue
+    v=""; { read -r v < "${AMD_PWR[$i]}"; } 2>/dev/null
+    case "$v" in ''|*[!0-9]*) ;; *) PWR_SUM[$i]=$(( PWR_SUM[$i] + v )); PWR_N[$i]=$(( PWR_N[$i] + 1 )) ;; esac
   done
 }
 # 代替主循环里的 sleep:总时长仍是 INTERVAL,其间均匀取 GPU_SAMPLES 个样
@@ -352,16 +360,24 @@ gpus_json() {  # 输出完整 "gpus":[...] 片段(必填,无卡为 [])
       out=$(nvidia-smi \
         --query-gpu=index,name,utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw \
         --format=csv,noheader,nounits 2>/dev/null \
-        | awk -F', *' 'NF>=7 {
-            printf "%s{\"idx\":%d,\"name\":\"%s\",\"util_pct\":%d,\"vram_used_gb\":%.1f,\"vram_total_gb\":%.1f,\"temp_c\":%d,\"power_w\":%.0f}", \
-              (n++?",":""), $1, $2, $3, $4/1024, $5/1024, $6, $7 }')
+        | awk -F', *' '
+            # 读不到的字段 nvidia-smi 给 "[N/A]" / "[Not Supported]";%d 会把它格式化成 0,
+            # 于是"没读到"变成"0%"/"0W"写进历史。v2.19 起读不到的字段直接省略(与 AMD 分支一致)。
+            function ok(x) { return x ~ /^[0-9]+(\.[0-9]+)?$/ }
+            NF>=7 {
+              f = sprintf("{\"idx\":%d,\"name\":\"%s\"", $1, $2)
+              if (ok($3)) f = f sprintf(",\"util_pct\":%d", $3)
+              if (ok($4) && ok($5)) f = f sprintf(",\"vram_used_gb\":%.1f,\"vram_total_gb\":%.1f", $4/1024, $5/1024)
+              if (ok($6)) f = f sprintf(",\"temp_c\":%d", $6)
+              if (ok($7)) f = f sprintf(",\"power_w\":%.0f", $7)
+              printf "%s%s}", (n++?",":""), f }')
       ;;
     amd)
       # 每卡一项,idx 即 PCI 排序后的序号。读不到的项省略(不报 0)。
       #   util_pct      本周期内多次采样的平均(见 interval_sleep)
       #   temp_c        edge —— 与其他机器、旧版 agent 同一个传感器,卡面温度沿用它
       #   temp_junction_c / temp_mem_c  热点与显存温度,只进明细
-      #   power_w / power_cap_w         微瓦 → 瓦,四舍五入
+      #   power_w / power_cap_w         微瓦 → 瓦,四舍五入;power_w 同 util_pct,是周期内多次采样的平均
       for i in "${!AMD_CARDS[@]}"; do
         d="${AMD_CARDS[$i]}"
         frag="{\"idx\":$i,\"pci\":\"${AMD_PCI[$i]}\""
@@ -380,7 +396,12 @@ gpus_json() {  # 输出完整 "gpus":[...] 片段(必填,无卡为 [])
         t=$(sysfs_int "${AMD_T_EDGE[$i]}"); [ -n "$t" ] && frag="$frag,\"temp_c\":$((t/1000))"
         t=$(sysfs_int "${AMD_T_JUNC[$i]}"); [ -n "$t" ] && frag="$frag,\"temp_junction_c\":$((t/1000))"
         t=$(sysfs_int "${AMD_T_MEM[$i]}");  [ -n "$t" ] && frag="$frag,\"temp_mem_c\":$((t/1000))"
-        pw=$(sysfs_int "${AMD_PWR[$i]}");   [ -n "$pw" ] && frag="$frag,\"power_w\":$(( (pw + 500000) / 1000000 ))"
+        if [ "${PWR_N[$i]:-0}" -gt 0 ]; then
+          pw=$(( PWR_SUM[$i] / PWR_N[$i] ))
+        else
+          pw=$(sysfs_int "${AMD_PWR[$i]}")
+        fi
+        [ -n "$pw" ] && frag="$frag,\"power_w\":$(( (pw + 500000) / 1000000 ))"
         if [ -n "${AMD_HW[$i]}" ]; then
           cap=$(sysfs_int "${AMD_HW[$i]}/power1_cap")
           [ -n "$cap" ] && [ "$cap" -gt 0 ] && frag="$frag,\"power_cap_w\":$(( (cap + 500000) / 1000000 ))"
