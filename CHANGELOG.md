@@ -65,6 +65,10 @@ on screen is the one from `package.json`, and this file is what needs fixing.
   读取桶宽取上限(3 个桶或 15 分钟取大:1d ≈ 17 分钟、7d ≈ 2 小时),前后都断开的孤立测量点
   画成小圆点。机器卡弹窗与 Dual Compare 不传这个选项,行为不变。
 - `docs/AGENT_PROTOCOL.md`:`reqs_by_model` 的槽位与匹配规则。
+- 实配(私有,不在本仓库;热重载生效):m27 没有独显,卡片由「GPU · 机器 27 / GPU Node」改为
+  「主机 · 机器 27 / Hermes」,环与格子换成 CPU / 内存 / 磁盘 / 负载(原来 GPU 相关读数恒为 "—");
+  状态栏 Telegram 灯原是 `type: demo` 的合成数据,改读 OpenClaw dashboard 接口里对
+  api.telegram.org 的真实探测。
 - 运维(不在仓库里,删除前 `.backup` 为 `data/homenet.db.pre-speedclean`):按 Prometheus 的
   推理活动记录删除 speed25 / speed26 历史里旧查询「保留 24 小时」写入的旧值 —— 原始层 23,222 个
   样本、5 分钟层 8,088 个桶;其余 31 个序列在核对窗口内的行数不变。剩下的样本逐个核对过,
