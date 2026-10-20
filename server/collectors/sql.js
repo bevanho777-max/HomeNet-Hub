@@ -115,6 +115,26 @@ export async function collectSqlRows(source, env, queryFile, paramInt) {
   return res.rows;
 }
 
+/**
+ * v2.24: a queries/ file bound to SEVERAL integer params (epoch seconds, so the 1..1000
+ * clamp of collectSqlRows does not fit). Same envelope: SQL only from queries/, zero
+ * concatenation, every param a whole number in [0, 4102444800] (year 2100) or the call
+ * is refused before it reaches the database.
+ */
+export async function collectSqlRowsInts(source, env, queryFile, ints) {
+  const dsn = env[source.dsn_env];
+  if (!dsn) throw new Error(`env ${source.dsn_env} not set`);
+  const params = (ints || []).map((v) => {
+    const n = Number(v);
+    if (!Number.isInteger(n) || n < 0 || n > 4102444800) throw new Error('illegal query param');
+    return n;
+  });
+  const sql = readQuery(queryFile);
+  const pool = await getPool(dsn);
+  const res = await pool.query(sql, params);
+  return res.rows;
+}
+
 export async function closeSqlPools() {
   for (const pool of _pools.values()) { try { await pool.end(); } catch { /* ignore */ } }
   _pools.clear();

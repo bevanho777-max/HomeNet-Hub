@@ -267,6 +267,11 @@ targets:
         counters:
           requests: ['strata:requests_total{instance="192.0.2.10:8080"}']
           tokens: ['llamacpp:prompt_tokens_total{instance="192.0.2.10:8080"}', 'llamacpp:prompt_tokens_cached_total{instance="192.0.2.10:8080"}', 'llamacpp:tokens_predicted_total{instance="192.0.2.10:8080"}']
+          # v2.24 (used by a `type: usage` token target): net = tokens actually computed
+          # (processed prompt + generated, cache hits excluded); generated = the counter the
+          # live "Generating X t/s" is a 1-minute rate of.
+          net: ['llamacpp:prompt_tokens_total{instance="192.0.2.10:8080"}', 'llamacpp:tokens_predicted_total{instance="192.0.2.10:8080"}']
+          generated: ['llamacpp:tokens_predicted_total{instance="192.0.2.10:8080"}']
       - id: gpu_b
         endpoints: ["192.0.2.11:12346"]
         embed_endpoints: ["192.0.2.11:12347"]
@@ -275,6 +280,50 @@ targets:
           requests: ['homenet_llama_requests_total{instance="192.0.2.11:9877",unit="llama-chat.service"}']
           embed_requests: ['homenet_llama_requests_total{instance="192.0.2.11:9877",unit="llama-embed.service"}']
           embed_tokens: ['homenet_llama_tokens_total{instance="192.0.2.11:9877",unit="llama-embed.service"}']
+          net: ['llamacpp:prompt_tokens_total{instance="192.0.2.11:12346"}', 'llamacpp:tokens_predicted_total{instance="192.0.2.11:12346"}']
+          generated: ['llamacpp:tokens_predicted_total{instance="192.0.2.11:12346"}']
+
+  # v2.24: ALL usage for the Token Usage card (point the layout's token card at this
+  # target instead of a `type: sql` one). The inference servers' own counters (from the
+  # inference_nodes target named in `nodes_target`) are the truth; LiteLLM fills the days
+  # before a counter existed and supplies the per-key split. A request that went through
+  # LiteLLM to a node is in that node's counter too, so from the moment a counter starts
+  # being collected (recorded per node and kind, shown on the card) LiteLLM rows that
+  # reached that node are no longer added. Days are Beijing (Asia/Shanghai) calendar days:
+  # LiteLLM_SpendLogs is read per request (queries/usage_rows.sql) from `logs_since` on;
+  # older days come from the UTC-bucketed daily table (queries/usage_legacy.sql) and keep
+  # their UTC label. Completed days are stored in the hub's database, so the ~7-day
+  # retention of SpendLogs does not lose them. The classify rule marked `counters: chat`
+  # (or `embed`) is where the counters land. Header speed: "Generating X t/s" =
+  # Σ rate(generated[1m]) over the nodes. See server/usage.js.
+  - id: usage_example
+    name: "Token Usage (all usage)"
+    enabled: false
+    source:
+      type: usage
+      nodes_target: nodes_example
+      driver: postgres
+      dsn_env: "PG_DSN"
+      rows_query_file: "queries/usage_rows.sql"
+      legacy_query_file: "queries/usage_legacy.sql"
+      logs_since: "2026-01-01T00:00:00Z"   # a UTC midnight on or after your oldest SpendLogs row
+      interval: "30s"
+    classify:
+      by: model
+      rules:
+        - { name: "Chat / Large", match: { regex: "chat|instruct|large|[0-9]{2,}b" }, color: "#4fe3d0", counters: chat }
+        - { name: "Embedding",    match: { regex: "embed|bge" },                       color: "#8b93a3", counters: embed }
+      fallback: { name: "Other", color: "#8b93a3" }
+    map:
+      token_speed: "$.token_speed"
+
+  # v2.24: the Per-Project table from the same engine -- one row per API key plus a
+  # "Direct (not via LiteLLM)" row (counters minus the LiteLLM part), so the rows add up
+  # to the Chat total of the usage target above.
+  - id: project_usage_example
+    name: "Per-Project Tokens (all usage)"
+    enabled: false
+    source: { type: usage_projects, usage_target: usage_example, interval: "30s", resolve_names: litellm_keys }
 
   - id: project_tokens_example
     name: "Per-Project Tokens (real sql)"

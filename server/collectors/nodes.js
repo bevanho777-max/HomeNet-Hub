@@ -49,6 +49,7 @@ async function modelInfo(url, key) {
 }
 
 const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
+export { hostPort, TZ_OFFSET_SEC };
 
 /** Seconds since local (Beijing) midnight, and that midnight as unix seconds. */
 export function localDay(nowSec = Date.now() / 1000) {
@@ -83,9 +84,9 @@ export function counterIncrease(values, base) {
   return inc;
 }
 
-const seriesKey = (metric) => JSON.stringify(Object.entries(metric || {}).sort());
+export const seriesKey = (metric) => JSON.stringify(Object.entries(metric || {}).sort());
 
-async function promQuery(promUrl, q, time) {
+export async function promQuery(promUrl, q, time) {
   const u = `${promUrl.replace(/\/+$/, '')}/api/v1/query?query=${encodeURIComponent(q)}&time=${time}`;
   const r = await fetch(u, { signal: AbortSignal.timeout(PROM_TIMEOUT_MS) });
   if (!r.ok) throw new Error(`prometheus HTTP ${r.status}`);
@@ -94,27 +95,51 @@ async function promQuery(promUrl, q, time) {
   return j.data?.result || [];
 }
 
-async function promIncrease(promUrl, selectors, nowSec) {
-  const { since, midnight } = localDay(nowSec);
+/**
+ * Exact counter increase over [startSec, endSec] (v2.24: any window, not only "today").
+ * Baseline per series (`@` pins the evaluation instant to the window start):
+ *   a sample in the hour before the start -> that value (the server ran through it);
+ *   seen in the week before but not in that hour -> 0: the server was down at the start
+ *     (m110 is switched off overnight), so everything it counts now started after it came
+ *     back -- a days-old value is not a baseline for a restarted process;
+ *   never seen in the week before -> null: a brand-new series (counterIncrease).
+ * Raw samples inside the window: a range vector ending at the window end.
+ */
+export async function promIncreaseRange(promUrl, selectors, startSec, endSec) {
+  const span = Math.floor(endSec) - Math.floor(startSec);
+  if (span <= 0) return 0;
   let total = 0;
   for (const sel of selectors) {
-    // Baseline per series (`@` pins the evaluation instant to midnight):
-    //   a sample in the hour before midnight -> that value (the server ran through 00:00);
-    //   seen in the past week but not in that hour -> 0: the server was down at midnight
-    //     (m110 is switched off overnight), so everything it counts now started after it
-    //     came back -- a days-old value is not a baseline for a restarted process;
-    //   never seen in the past week -> null: a brand-new series (counterIncrease).
-    // Raw samples after midnight: a range vector ending now.
-    const at = async (q) => new Map((await promQuery(promUrl, q, nowSec)).map((s) => [seriesKey(s.metric), Number(s.value?.[1])]));
-    const fresh = await at(`last_over_time(${sel}[1h] @ ${midnight})`);
-    const seen = await at(`last_over_time(${sel}[7d] @ ${midnight})`);
-    for (const s of await promQuery(promUrl, `${sel}[${since}s]`, nowSec)) {
+    const at = async (q) => new Map((await promQuery(promUrl, q, endSec)).map((s) => [seriesKey(s.metric), Number(s.value?.[1])]));
+    const fresh = await at(`last_over_time(${sel}[1h] @ ${Math.floor(startSec)})`);
+    const seen = await at(`last_over_time(${sel}[7d] @ ${Math.floor(startSec)})`);
+    for (const s of await promQuery(promUrl, `${sel}[${span}s] @ ${Math.floor(endSec)}`, endSec)) {
       const k = seriesKey(s.metric);
       const b = Number.isFinite(fresh.get(k)) ? fresh.get(k) : (seen.has(k) ? 0 : null);
       total += counterIncrease(s.values || [], b);
     }
   }
   return Math.round(total);
+}
+
+async function promIncrease(promUrl, selectors, nowSec) {
+  return promIncreaseRange(promUrl, selectors, localDay(nowSec).midnight, nowSec);
+}
+
+/**
+ * When a counter started being collected: the earliest sample Prometheus still has for
+ * every selector (the LATEST of the per-selector starts -- a sum is only complete once all
+ * its parts exist). null when any selector has no data at all.
+ */
+export async function promFirstSample(promUrl, selectors, nowSec, lookback = '30d') {
+  let start = null;
+  for (const sel of selectors) {
+    const r = await promQuery(promUrl, `min(min_over_time(timestamp(${sel})[${lookback}:5m]))`, nowSec);
+    const v = Number(r[0]?.value?.[1]);
+    if (!Number.isFinite(v)) return null;
+    start = start === null ? v : Math.max(start, v);
+  }
+  return start === null ? null : Math.floor(start);
 }
 
 export async function collectNodes(target, env) {
@@ -135,7 +160,7 @@ export async function collectNodes(target, env) {
       embed_requests: !!(c.embed_requests && c.embed_requests.length), embed_tokens: !!(c.embed_tokens && c.embed_tokens.length),
     };
     if (!src.prometheus) continue;
-    for (const [kind, key] of [['requests', 'reqs'], ['tokens', 'tokens'], ['embed_requests', 'emb_reqs'], ['embed_tokens', 'emb_tokens']]) {
+    for (const [kind, key] of [['requests', 'reqs'], ['tokens', 'tokens'], ['net', 'net'], ['embed_requests', 'emb_reqs'], ['embed_tokens', 'emb_tokens']]) {
       if (!c[kind] || !c[kind].length) continue;
       try { put(`${n.id}_${key}`, await promIncrease(src.prometheus, c[kind], nowSec)); }
       catch (e) { counterInfo[n.id][`${kind}_error`] = String(e?.message || e); }

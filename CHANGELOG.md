@@ -49,6 +49,40 @@ on screen is the one from `package.json`, and this file is what needs fixing.
 
 ---
 
+## v2.24.0 — 2026-10-21
+
+**Token Usage 改为所有用量(以推理服务自己的计数器为准);全站「今日」与日期统一为北京时间自然日;
+右上角改为实时生成吞吐。**
+
+*Rebuild required — `server/` + `web/` changed. 新增 `server/usage.js`、`queries/usage_rows.sql`、
+`queries/usage_legacy.sql`(config.example 同步);`agents/homenet-agent.sh` 的 LiteLLM 查询改写(网关机重新部署)。*
+
+- **Token Usage = 所有用量**:新 source `type: usage`。Chat = 三台推理节点 chat 计数器之和(m110、m25 的 Strata,
+  m26 的 llama.cpp),Embedding = m26 的 embedding exporter,Other 是没落到任何节点上的 LiteLLM 请求。每个框:
+  大数字为累计,下面是今日 / 净增(实算的 prompt + 生成,不含命中缓存)/ 今日请求数,灰色小字「其中经 LiteLLM」。
+  卡片标题去掉「经 LiteLLM」。
+- **不重复计算**:经 LiteLLM 的请求同时也在推理服务的计数器里。每个节点、每种计数器记下开始采集的时刻 T(只算
+  一次、存进库,Prometheus 保留期滚动也不会让它移动);T 之后打到这个节点端点的 LiteLLM 行不再相加,T 之前和
+  没有计数器的端点照常计入。卡片说明写明各节点「直连用量自 X 日起计入,此前只含经 LiteLLM」,弹窗列出每种计数器
+  的精确时刻。
+- **北京时间自然日**:LiteLLM 部分改读 `LiteLLM_SpendLogs` 逐笔记录(startTime 有索引,按分钟聚合),不再用按
+  UTC 分桶的日表。SpendLogs 只保留约 7 天,所以每个北京日结束 10 分钟后由 hub 落库(`usage_ll` / `usage_ctr`),
+  之后不再依赖 SpendLogs;`logs_since`(2026-10-13 00:00 UTC)之前的历史只有日表,保留其 UTC 日期标签并在弹窗注明。
+  今日部分每 30 秒算一次,计数器部分直接取推理节点卡的同一组数字(推理节点每次更新后立刻重算),两张卡按构造一致;
+  hub 刚启动、推理节点还没采到时先不出数(最多 3 分钟),不显示一个马上会跳的数。
+- **Per-Project**:由同一引擎计算,每把 API key 一行 + 一行「直连(未经 LiteLLM)」= 各节点计数器总量 − 经 LiteLLM
+  的部分,各行合计 = Token Usage 的 Chat 总量;7d / 30d / 首次 / 最近都按北京时间日。客户端面板的用量同一来源。
+- **按模型明细弹窗**:同一口径;「24h」改为「今日」(北京时间);表格加「经 LiteLLM」列与合计行。
+- **网关卡**:m24 agent 的 LiteLLM 查询改读 SpendLogs 北京时间今日 —— 今日请求 = 今天的行数(成功 + 失败,
+  非 embedding),Success = 成功行 / 全部行,Cache = 成功行的缓存命中 prompt / 全部 prompt,By Model = 各槽行数。
+  北京 0–8 点不再显示「—」。
+- **右上角速度**:原来是 SpendLogs 最近 10 个流式请求的 Σ(completion−1) / Σ(endTime − completionStartTime) —— 排除了
+  prefill,但只有经 LiteLLM 的请求、不限时间(可能是几小时前的)、几台机混在一起平均。现在 = 各节点生成 token
+  计数器近 1 分钟 rate 之和,「当前生成 X t/s」/「Generating X t/s」,都没在生成时显示「—」,悬停列出各节点。
+  节点计数器在请求结束时才累加,单个请求超过 1 分钟时这个数会滞后、呈脉冲。
+- 节点 `counters` 新增 `net`(实算 prompt + 生成)与 `generated`(实时 t/s);Chat 正则补上 `flash-?next|orcarouter|qwen`
+  (m110 的部署名原先落在 Other)。
+
 ## v2.23.0 — 2026-10-21
 
 **卡片之间零空洞(可拉宽卡片补满整行)、格子内部对齐与留白、m26 的请求数与 embedding 用量有了服务端计数。**

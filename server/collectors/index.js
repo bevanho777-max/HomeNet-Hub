@@ -48,6 +48,12 @@ export class Scheduler {
     // §12-step2 patch: token card front labels (e.g. total) for the pivot
     this.tokenLabels = (config.layout?.grid || []).find((c) => c.type === 'token')?.labels || {};
     const enabled = (config.targets.targets || []).filter((t) => t.enabled !== false);
+    // v2.24 usage: one engine, configured from the usage target + the inference_nodes
+    // target it names (nodes, endpoints, counters, Prometheus).
+    const usageT = enabled.find((t) => t.source?.type === 'usage');
+    if (usageT && this.ctx.usage) this.ctx.usage.configure(usageT, enabled.find((t) => t.id === usageT.source.nodes_target) || null);
+    this.usageProjects = enabled.filter((t) => t.source?.type === 'usage_projects');
+    this.usageTarget = usageT || null;
     this.ctx.snapshot.prune(enabled.map((t) => t.id));
 
     for (const target of enabled) {
@@ -60,7 +66,8 @@ export class Scheduler {
       // generic 8s fallback would mean a handshake every 8 seconds forever if a
       // hand-written target omitted `interval`.
       const interval = parseDuration(target.source?.interval,
-        type === 'http' ? 1500 : type === 'demo' ? 2000
+        type === 'usage' || type === 'usage_projects' ? 30000
+          : type === 'http' ? 1500 : type === 'demo' ? 2000
           : type === 'tls' ? 3600000 : type === 'tcp' ? 10000
             : type === 'prometheus' ? 10000 : type === 'ssh' ? 10000
               : type === 'inference_nodes' ? 60000 : 8000);
@@ -121,6 +128,45 @@ export class Scheduler {
         snapshot.update(target.id, { online: true, metrics: m, extra });
         const rows = samplableRows(target.id, { metrics: m }, metrics);
         if (rows.length) tsdb.record(rows);
+        // v2.24: the Token Usage card takes today's counters from this snapshot -- refresh it
+        // now, so the two cards never show different "today" figures for a whole poll
+        const ut = this.usageTarget;
+        if (ut && ut.source.nodes_target === target.id && !this._inflight.has(ut.id)) {
+          this._inflight.add(ut.id);
+          Promise.resolve(this._poll(ut, metrics)).catch(() => {}).finally(() => this._inflight.delete(ut.id));
+        }
+        return;
+      }
+      // v2.24: all usage (counters + LiteLLM) by Beijing day -- see server/usage.js
+      if (type === 'usage') {
+        const u = this.ctx.usage;
+        if (!u) throw new Error('usage engine not available');
+        await u.refresh();
+        // Right after a start the inference_nodes target has not been polled yet: today
+        // would read as LiteLLM only. Publish nothing for up to 3 minutes rather than a
+        // figure that is about to jump; after that, publish with the "partial" note.
+        if (u.nodesPending && process.uptime() < 180) return;
+        const card = u.card(this.tokenLabels?.total);
+        const norm = normalize({ token_speed: card.speed }, target, metrics);
+        snapshot.update(target.id, { online: true, metrics: norm.metrics, extra: { token: card } });
+        // the Per-Project table(s) from the SAME refresh, so its rows always add up to the
+        // Chat figure on screen (on its own timer it could be one refresh behind)
+        for (const pt of this.usageProjects || []) {
+          if (pt.source.usage_target !== target.id) continue;
+          const rows = u.projects().map((r) => ({ ...r }));
+          await this._resolveNames(pt, rows);
+          snapshot.update(pt.id, { online: true, metrics: {}, extra: { rows } });
+        }
+        return;
+      }
+      // Normally published by the usage poll above; this poll only covers the first moments
+      // after a (re)start and a usage target that is not the one it names.
+      if (type === 'usage_projects') {
+        const u = this.ctx.usage;
+        if (!u || !u.ready || snapshot.get(target.id)?.online) return;
+        const rows = u.projects().map((r) => ({ ...r }));
+        await this._resolveNames(target, rows);
+        snapshot.update(target.id, { online: true, metrics: {}, extra: { rows } });
         return;
       }
       if (type === 'sql' && target.source.shape === 'table') {

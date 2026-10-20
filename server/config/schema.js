@@ -64,7 +64,7 @@ const sourceSchema = {
   type: 'object',
   required: ['type'],
   properties: {
-    type: { enum: ['http', 'http_push', 'sql', 'exec', 'demo', 'tcp', 'tls', 'prometheus', 'ssh', 'inference_nodes'] },
+    type: { enum: ['http', 'http_push', 'sql', 'exec', 'demo', 'tcp', 'tls', 'prometheus', 'ssh', 'inference_nodes', 'usage', 'usage_projects'] },
     // http
     url: { type: 'string' },
     interval: { type: 'string' },     // duration string e.g. "1.5s", "8s", "30s"
@@ -119,6 +119,10 @@ const sourceSchema = {
     { if: { properties: { type: { const: 'ssh' } } }, then: { required: ['host', 'credential_id'] } },
     // v2.20: per-node usage (a queries/ file, same door as sql) + litellm route discovery.
     { if: { properties: { type: { const: 'inference_nodes' } } }, then: { required: ['query_file', 'dsn_env'] } },
+    // v2.24 usage: all usage (inference-server counters + LiteLLM) by Beijing day. The
+    // node list, endpoints and counters come from the inference_nodes target it names.
+    { if: { properties: { type: { const: 'usage' } } }, then: { required: ['nodes_target', 'dsn_env', 'rows_query_file', 'legacy_query_file', 'logs_since'] } },
+    { if: { properties: { type: { const: 'usage_projects' } } }, then: { required: ['usage_target'] } },
   ],
 };
 
@@ -138,6 +142,9 @@ const classifySchema = {
         properties: {
           name: { type: 'string' },
           color: { type: 'string' },
+          // v2.24 usage: this class is where the inference servers' own counters land
+          // (chat = the nodes' chat endpoints, embed = their embedding endpoints).
+          counters: { enum: ['chat', 'embed'] },
           match: {
             type: 'object',
             required: ['regex'],
@@ -202,6 +209,10 @@ const targetsSchema = {
                     tokens: { type: 'array', items: { type: 'string' } },
                     embed_requests: { type: 'array', items: { type: 'string' } },
                     embed_tokens: { type: 'array', items: { type: 'string' } },
+                    // v2.24: actually-computed tokens (processed prompt + generated, no
+                    // cache hits) and the generated-token counter for the live t/s
+                    net: { type: 'array', items: { type: 'string' } },
+                    generated: { type: 'array', items: { type: 'string' } },
                   },
                   additionalProperties: false,
                 },
@@ -290,6 +301,7 @@ const gridCard = {
       },
     },
     header_right: { anyOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }] }, // B13: single or combined
+    header_right_en: enString,        // v2.24: English variant of a header_right template
     clickable: { type: 'string' },
     // Windows offered by this card's detail modal (default 24h/7d/30d). Keys of RANGE_SEC.
     detail_ranges: { type: 'array', minItems: 1, items: { enum: ['1h', '6h', '24h', '1d', '3d', '7d', '30d'] } },

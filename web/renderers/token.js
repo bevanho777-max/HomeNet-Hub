@@ -2,17 +2,38 @@
 // Data comes from snap.extra.token (pivoted server-side, see token_detail.js).
 // clickable:detail → app.js opens the /api/token_detail modal.
 import { card, mget, esc } from './common.js';
-import { cmap, cv } from '../i18n.js';
+import { cmap, cv, t } from '../i18n.js';
+
+// v2.24: "MM-DD" of a unix-seconds instant, Beijing calendar
+const bjDay = (sec) => new Date((sec + 8 * 3600) * 1000).toISOString().slice(5, 10);
+
+/** "m26 10-13 · m25 10-20 · m110 10-20": when each node's direct usage starts counting */
+export function coverageList(coverage, kinds = ['tokens', 'embed_tokens']) {
+  const byNode = new Map();
+  for (const c of coverage || []) {
+    if (!kinds.includes(c.kind) || typeof c.since !== 'number') continue;
+    if (!byNode.has(c.node) || c.since < byNode.get(c.node)) byNode.set(c.node, c.since);
+  }
+  return [...byNode].sort((a, b) => a[1] - b[1]).map(([n, s]) => `${n} ${bjDay(s)}`).join(' · ');
+}
 
 export function renderToken(gridCard, target, snap) {
   const title = target.name || target.id;
   const accent = target.color || '';
   const tk = snap?.extra?.token;
 
-  // header_right template e.g. "LiteLLM · {token_speed} t/s"
+  // header_right template e.g. "当前生成 {token_speed} t/s" (header_right_en for EN).
+  // v2.24: no speed (nothing generating) reads "—", not "— t/s"; hovering lists the nodes.
   let tag = '';
-  if (gridCard.header_right) {
-    tag = gridCard.header_right.replace(/\{(\w+)\}/g, (_, k) => mget(snap, k).display || '—');
+  const tpl = cv(gridCard, 'header_right');
+  if (typeof tpl === 'string' && tpl) {
+    const sp = mget(snap, 'token_speed');
+    const text = (sp.value == null ? tpl.replace(/\{token_speed\}\s*t\/s/, '—') : tpl)
+      .replace(/\{(\w+)\}/g, (_, k) => mget(snap, k).display || '—');
+    const nodes = tk?.speed_nodes;
+    const title = Array.isArray(nodes) && nodes.length
+      ? nodes.map((n) => `${n.node} ${n.tps == null ? '—' : `${n.tps} t/s`}`).join(' · ') : '';
+    tag = title ? `<span title="${esc(title)}">${esc(text)}</span>` : esc(text);
   }
 
   if (!tk || !tk.columns?.length) {
@@ -46,6 +67,9 @@ export function renderToken(gridCard, target, snap) {
   // a null must not become a "0" that reads like real data. The all-time counterpart
   // lives in the detail modal's table, where there is room for it.
   const netLabel = L.net || 'Net';
+  // v2.24 (usage source): the requests line is today's, and a grey last line gives the
+  // part of today's tokens that went through LiteLLM.
+  const llLabel = L.via_ll || 'via LiteLLM';
   const colHtml = cols.map((c) => `
     <div class="tk-col">
       <div class="tk-h" style="color:${esc(c.color)}">${esc(c.label)}</div>
@@ -53,7 +77,8 @@ export function renderToken(gridCard, target, snap) {
       <div class="tk-all">${esc(c.all)}</div>
       <div class="tk-sub">${esc(todayLabel)} ${esc(c.today)}</div>
       ${c.net_today != null ? `<div class="tk-sub">${esc(netLabel)} ${esc(c.net_today)}</div>` : ''}
-      <div class="tk-sub">${esc(c.requests ?? 0)} ${esc(reqLabel)}</div>
+      <div class="tk-sub">${esc(Number(c.requests ?? 0).toLocaleString('en-US'))} ${esc(reqLabel)}</div>
+      ${c.ll_today != null ? `<div class="tk-sub tk-ll">${esc(llLabel)} ${esc(c.ll_today)}</div>` : ''}
     </div>`).join('');
 
   // v2.23: bar heights are fractions (--f), not pixels, so the chart grows with the space it
@@ -65,9 +90,15 @@ export function renderToken(gridCard, target, snap) {
   }).join('');
 
   // click hint is externalized (gridCard.hint); shown only when clickable + set.
+  // v2.24: the card says from when direct (non-LiteLLM) usage is in it -- per node, the day
+  // its counter started -- and when some counter is missing right now.
+  const parts = [];
+  const cov = coverageList(tk.coverage);
+  if (cov) parts.push(t('tk_cov', cov));
+  if (Array.isArray(tk.partial) && tk.partial.includes(tk.today)) parts.push(t('tk_partial'));
   const hintText = cv(gridCard, 'hint');
-  const note = (gridCard.clickable === 'detail' && hintText)
-    ? `<div class="note">${esc(hintText)}</div>` : '';
+  if (gridCard.clickable === 'detail' && hintText) parts.push(hintText);
+  const note = parts.length ? `<div class="note">${esc(parts.join(' · '))}</div>` : '';
   // Boxes per row in the compact arrangements (narrow card, or beside the chart on a wide
   // one): four boxes go 2x2, fewer stay on one row -- never a 2+1 with a hole.
   const n = cols.length;

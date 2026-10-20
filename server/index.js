@@ -24,6 +24,7 @@ import { Scheduler } from './collectors/index.js';
 import { collectSql, collectSqlRows, clearQueryCache } from './collectors/sql.js';
 import { demoTokenRows } from './collectors/demo.js';
 import { pivotTokens, TOKEN_RANGE_DAYS } from './token_detail.js';
+import { UsageEngine } from './usage.js';
 import { discoverTarget } from './collectors/discovery.js';
 import { UserStore } from './store/user_store.js';
 import { EffectiveStore } from './config/effective.js';
@@ -97,7 +98,10 @@ const REQUIRE_LOGIN_TO_VIEW = VIEW_LAN_OPEN || /^(1|true|yes|on)$/i.test(VIEW_MO
 // including the Per-Project card, keeps working on digests alone.
 const litellmKeys = createLitellmKeys();
 // The scheduler is built after the vault so the ssh collector can reach it through ctx.
-const scheduler = new Scheduler({ snapshot, tsdb, env: process.env, vault, credStore, litellmKeys });
+// v2.24: all-usage engine (Token Usage, Per-Project, Clients); its day tables live in the
+// same database file.
+const usage = new UsageEngine(join(DATA_DIR, 'homenet.db'), { snapshot, env: process.env });
+const scheduler = new Scheduler({ snapshot, tsdb, env: process.env, vault, credStore, litellmKeys, usage });
 console.log(`[litellm] key API ${litellmKeys.configured ? `enabled (${litellmKeys.status().base_url})` : `off — ${litellmKeys.reason}`}`);
 console.log(`[vault] ${vault.locked ? `locked — ${vault.reason}` : 'unlocked'}`
   + ` (${credStore.count()} credential(s) stored)`);
@@ -555,6 +559,10 @@ app.get('/api/token_detail', VIEW, async (req, reply) => {
   const tt = tokenTarget();
   if (!tt) return reply.code(404).send({ error: 'no sql token target configured' });
   const tokenCard = (effective.get().layout?.grid || []).find((c) => c.type === 'token');
+  if (tt.source?.type === 'usage') {
+    if (!usage.ready) return reply.code(503).send({ error: 'usage not computed yet' });
+    return { range, ...usage.detail(days, tokenCard?.labels?.total) };
+  }
   try {
     const rows = tt.source?.type === 'demo'
       ? demoTokenRows(tt.classify, days)
@@ -697,6 +705,8 @@ const litellmOff = (reply) => {
 // have to know that, and neither should the arithmetic below.
 async function clientUsage() {
   const tt = tokenTarget();
+  // v2.24: the usage engine's per-key chat usage (Beijing days) -- the Per-Project numbers
+  if (tt?.source?.type === 'usage') return usage.ready ? usage.clientUsage() : new Map();
   if (!tt || tt.source?.type !== 'sql') return new Map();
   const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
   try {

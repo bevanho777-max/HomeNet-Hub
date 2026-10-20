@@ -4,15 +4,18 @@
 // entirely a layout decision (gridCard.columns). No per-purpose logic here — a
 // new table card is a new query file + a type:table card, zero code changes.
 import { card, esc } from './common.js';
-import { colmap, cv, t } from '../i18n.js';
+import { colmap, cv, getLang, t } from '../i18n.js';
 
 // Same compact scale the token pivot uses server-side, so a token count reads
 // identically on both cards.
 function compact(n) {
-  if (n >= 1e9) return (n / 1e9).toFixed(2) + 'B';
-  if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M';
-  if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K';
-  return String(Math.round(n));
+  // v2.24: the Per-Project "direct" row is a difference and may dip below zero
+  const sg = n < 0 ? '-' : '';
+  n = Math.abs(n);
+  if (n >= 1e9) return sg + (n / 1e9).toFixed(2) + 'B';
+  if (n >= 1e6) return sg + (n / 1e6).toFixed(2) + 'M';
+  if (n >= 1e3) return sg + (n / 1e3).toFixed(1) + 'K';
+  return sg + String(Math.round(n));
 }
 
 // pg hands back bigint as a string, so "601847029" must still count as numeric.
@@ -46,6 +49,10 @@ export function parseColumns(gridCard, field) {
 }
 
 export { cell };
+
+// v2.24: a row may carry an English variant of a value (`<key>_en`) -- the Per-Project
+// "direct" row is the hub's own row, so its label is translated like any other UI text.
+export const val = (r, key) => (getLang() === 'en' && r[`${key}_en`] != null ? r[`${key}_en`] : r[key]);
 
 // v2.23: a column is a figure column -- right-aligned under a right-aligned header, tabular
 // digits -- unless it is the row's identity (the first column) or declared `format: text`
@@ -86,7 +93,7 @@ export function renderTable(gridCard, target, snap) {
   const head = allCols.map((c, i) => `<th${cls(c, i)}>${esc(c.label)}</th>`).join('');
   const body = shown.map((r) => `<tr>${
     // v2.22: the identity cell may ellipsise on a narrow card; its title carries the full text
-    allCols.map((c, i) => { const v = esc(cell(r[c.key], c.format)); return i ? `<td${cls(c, i)}>${v}</td>` : `<td title="${v}">${v}</td>`; }).join('')
+    allCols.map((c, i) => { const v = esc(cell(val(r, c.key), c.format)); return i ? `<td${cls(c, i)}>${v}</td>` : `<td title="${v}">${v}</td>`; }).join('')
   }</tr>`).join('');
 
   // Two different notes, and only one of them is a call to action. `hint` is the card's

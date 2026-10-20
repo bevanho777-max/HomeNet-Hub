@@ -488,9 +488,11 @@ h2:empty { display: none; } /* 堆叠卡外框无标题时不留空行 */
 .tk-div { height: 1px; margin: 0 0 5px; background: linear-gradient(90deg, transparent, var(--hair), transparent); }
 .tk-all { font-size: var(--cell-value); font-weight: 500; line-height: var(--cell-lh); }
 .tk-sub { font-size: var(--cell-label); color: var(--muted); margin-top: 3px; }
+/* v2.24: the LiteLLM share of today's figure -- a footnote, one step greyer */
+.tk-sub.tk-ll { color: var(--muted2); }
 @container card (min-width: 860px) {
   .tk-main { flex-direction: row; align-items: stretch; gap: var(--s4); }
-  .tk-main > .tk-grid { flex: 0 0 auto; width: min(40%, 400px); grid-template-columns: repeat(var(--tk-c, 2), minmax(0, 1fr)); }
+  .tk-main > .tk-grid { flex: 0 0 auto; width: min(45%, calc(var(--tk-c, 2) * 185px)); grid-template-columns: repeat(var(--tk-c, 2), minmax(0, 1fr)); }
   .tk-main > .spark { margin-top: 0; }
   .tk-main > .spark .col .b { max-width: 30px; }
 }
@@ -627,7 +629,10 @@ h2:empty { display: none; } /* 堆叠卡外框无标题时不留空行 */
    box, identity column pinned, instead of pushing past the modal. */
 .modal .tbl th, .modal .tbl td { white-space: nowrap; }
 .modal .tbl .pct { color: var(--muted); font-size: 0.88em; }
+.modal .tbl tr.tot td { font-weight: 600; color: var(--text); }
 #tableModalBody, #tokenModalTable { overflow-x: auto; }
+/* v2.24: the Per-Project detail has 8 columns and a long "direct" row label */
+#tableModal .modal { width: min(880px, 96vw); }
 @media (max-width: 560px) {
   .modal { padding: var(--s4); }
   .modal .tbl { font-size: 12px; }

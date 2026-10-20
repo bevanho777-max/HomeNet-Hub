@@ -219,21 +219,10 @@ uptime_json() {
 }
 
 # ---------- litellm 采集(仅网关机;整段受 LITELLM_PG_DSN 开关保护) ----------
-# 读 LiteLLM_DailyUserSpend 预聚合表(SpendLogs 明细未启用)。
-#
-# 取桶方式:按 **北京当前日期** 去匹配 date 列,而不是容器的 UTC 日期。
-# date 列是 litellm 硬编码 UTC 写的、且只有天粒度,这一点改不了;能选的只是读哪个桶。
-# 取北京日期的效果:归零落在北京 00:00(而非 08:00),且北京 08:00-24:00 整个白天
-# 显示值与取 UTC 桶完全一致 —— 差异只发生在北京 00:00-08:00。
-#
-# 无法解决的局限:北京 00:00-08:00 的请求写在 UTC 前一天的桶里,永远不会出现在
-# "今天"的数里。该时段目标桶尚未创建,SUM 返回 NULL —— 这里刻意不 COALESCE 成 0,
-# 让字段整体省略、卡片显示 "—"(无数据),而不是谎报成 0 个请求。
+# 读 LiteLLM_SpendLogs 逐笔记录(v2.24;之前读 DailyUserSpend 日表,见下面 llm_sql 前的说明)。
 #
 # 保留原有两个过滤:排除 litellm 自身的后端探活(api_key=litellm-internal-health-check),
 # 只算解析出模型的行(model<>''),滤掉鉴权失败噪声。
-# 成功率分母用 api_requests:该表满足 api_requests = successful + failed(全表 465 行
-# 无一例外),分母本就含失败数,不需要额外修正。
 # 请求量按 model(实际部署名,如 openai/qwen38-flashnext-256k)拆,不按 model_group:别名
 # (qwen3.8-27b-main-128k → qwen3.8-27b-ud-q3-k-xl-128k 等)会让同一个部署出现在多个 group 里。
 #
@@ -253,16 +242,22 @@ uptime_json() {
 # 不对是因为 RAG"的那条线索。因此四个槽之和 ≠ reqs_today,这是刻意的。
 # 排除模式与 queries/project_tokens.sql 的 excluded_models 保持同一份。
 #
-# 桶存在性与"今天没有对话"是两回事,所以多带一个 reqs_any(全模型请求数)出去:
-# 北京 00:00-08:00 目标桶尚未创建 -> reqs_any 为空 -> reqs_today/by_model 整体省略、
-# 卡片显 "—";桶存在但当天只有 embedding 流量 -> reqs_any 有值而 chat 侧 SUM 为
-# NULL -> 解析层把 reqs_today 记 0(今天确实零次对话),by_model 照常发出 emb 槽。
+# v2.24:改读 LiteLLM_SpendLogs(逐笔记录,startTime 为不带时区的 UTC,有索引),按**北京时间
+# 自然日**统计。原来读 DailyUserSpend,它按 UTC 日期分桶:用北京日期去找桶,北京 00:00-08:00
+# 桶还不存在(卡片整段 "—"),08:00 之后的桶又只含 08:00 以后的量。现在从北京 0 点起就有数,
+# 没有对话就是 0。口径(都只算非 embedding 行):
+#   • reqs_today = 今天的行数(成功 + 失败,= 网关收到的请求数);
+#   • success    = 成功行 / 全部行(日表的 failed_requests 只记了一部分失败,逐笔记录是全的);
+#   • cache_hit  = 成功行里 KV 缓存命中的 prompt / 全部 prompt;
+#   • by_model   = 各槽的行数(emb 槽照旧是 embedding 的行数)。
 llm_sql() {
   cat <<'SQL'
 WITH t AS (
-  SELECT * FROM "LiteLLM_DailyUserSpend"
-  WHERE date = to_char(now() AT TIME ZONE 'Asia/Shanghai','YYYY-MM-DD')
-    AND api_key <> 'litellm-internal-health-check'
+  SELECT model, status, prompt_tokens,
+         COALESCE((metadata->'usage_object'->'prompt_tokens_details'->>'cached_tokens')::bigint, 0) AS cached
+  FROM "LiteLLM_SpendLogs"
+  WHERE "startTime" >= (date_trunc('day', now() AT TIME ZONE 'Asia/Shanghai') AT TIME ZONE 'Asia/Shanghai') AT TIME ZONE 'UTC'
+    AND COALESCE(api_key, '') <> 'litellm-internal-health-check'
 ), llm AS (
   SELECT *,
          (lower(model) LIKE '%embed%'    -- text-embedding-*, mxbai-embed-*, nomic-embed-*
@@ -273,27 +268,20 @@ WITH t AS (
 ), chat AS (
   SELECT * FROM llm WHERE NOT is_emb
 )
-SELECT 'S|'||COALESCE(ROUND(100.0*SUM(cache_read_input_tokens)/NULLIF(SUM(prompt_tokens),0),1)::text,'')
-        ||'|'||COALESCE(ROUND(100.0*SUM(successful_requests)/NULLIF(SUM(api_requests),0),1)::text,'')
-        ||'|'||COALESCE(SUM(api_requests)::text,'')
-        ||'|'||COALESCE((SELECT SUM(api_requests) FROM llm)::text,'')
+SELECT 'S|'||COALESCE(ROUND(100.0*SUM(cached) FILTER (WHERE status = 'success')
+                            /NULLIF(SUM(prompt_tokens) FILTER (WHERE status = 'success'),0),1)::text,'')
+        ||'|'||COALESCE(ROUND(100.0*COUNT(*) FILTER (WHERE status = 'success')/NULLIF(COUNT(*),0),1)::text,'')
+        ||'|'||COUNT(*)::text
+        ||'|'||(SELECT COUNT(*) FROM llm)::text
 FROM chat
 UNION ALL
--- 五槽固定顺序 27b/flashnext/m110/emb/other(v2.21 起;之前是四槽)。is_emb 先判,免得将来出现名字里同时含 "bge" 和
--- "27b" 的向量模型被归进 chat 槽;other 槽补发,之前算了却不发 —— 全库请求数第一的
--- chat 模型 qwen3.6-27b-main-128k(11,548 次)就整个落在里面、卡上完全看不到。
--- 27b 的模式用 %27b% 而不是写死的完整名,换一个小版本号的部署名不会静默掉进 other。
--- v2.19.1:第二槽原是 35b(m25 旧硬件),35b 已于 2026-10-20 下线;现在是 m25 上
--- 实际在跑的 flashnext。之后 m25 换模型,改这里的模式和下面 m2_label 即可。
--- m110 槽的模式来自 env(__M110_LIKE__ 由 llm_collect 替换),先于 27b/flashnext 判,
--- 免得 m110 的部署名里恰好带 27b 之类的字样被别的槽抢走。
 SELECT 'M|'||tag||'|'||reqs::text FROM (
   SELECT CASE WHEN is_emb              THEN 'emb'
               WHEN model LIKE '__M110_LIKE__' THEN 'm110'
               WHEN model LIKE '%27b%'  THEN '27b'
               WHEN model LIKE '%flashnext%' THEN 'flashnext'
               ELSE 'other' END AS tag,
-         SUM(api_requests) AS reqs
+         COUNT(*) AS reqs
   FROM llm GROUP BY 1
 ) x;
 SQL
@@ -314,12 +302,10 @@ llm_collect() {
     ch=$(printf '%s' "$stats" | cut -d'|' -f2)   # chat-only cache_hit
     sp=$(printf '%s' "$stats" | cut -d'|' -f3)   # chat-only success
     rt=$(printf '%s' "$stats" | cut -d'|' -f4)   # chat-only reqs_today
-    ra=$(printf '%s' "$stats" | cut -d'|' -f5)   # 全模型请求数,只用来判断今天的桶存不存在
+    ra=$(printf '%s' "$stats" | cut -d'|' -f5)   # 全模型行数(v2.24 起恒有值;查询失败时为空)
     llm_isnum "$ch" && out="$out\"cache_hit_pct\":$ch,"
     llm_isnum "$sp" && out="$out\"success_pct\":$sp,"
-    # 桶存在(ra 有值)就一定发 reqs_today:当天只有 embedding 流量时 chat 侧 SUM 为
-    # NULL,那是"零次对话"而不是"没数据",记 0。桶整个不存在(北京 00:00-08:00)才
-    # 连同 by_model 一起省略,卡片显 "—"。
+    # 查询成功(ra 有值)就一定发 reqs_today 与 by_model:没有对话就是 0,不是 "—"。
     if llm_isnum "$ra"; then
       llm_isnum "$rt" || rt=0
       out="$out\"reqs_today\":$rt,"

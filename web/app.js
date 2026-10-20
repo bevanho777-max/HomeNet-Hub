@@ -18,7 +18,7 @@ import { bindClients, closeClientsPanel, relocalizeClientsPanel } from './render
 import { bindSession, refreshSession, sessionLost, closeLoginPanel, closeSetupPanel, maybeOpenSetup, isAuthed, openLoginPanel, relocalizeSession } from './renderers/session.js';
 import { bindDemoBar, applyDemoBar, emptyBoardHtml } from './renderers/demo.js';
 import { esc, statusLevel } from './renderers/common.js';
-import { applyDocumentLang, applyStaticText, cmap, colmap, cv, getLang, onLangChange, setLang } from './i18n.js';
+import { applyDocumentLang, applyStaticText, cmap, colmap, cv, getLang, onLangChange, setLang, t } from './i18n.js';
 
 const FAST_MS = 1500;     // snapshot poll (machine/GPU rhythm)
 const CONFIG_MS = 10000;  // config re-check (hot-reload pickup)
@@ -585,7 +585,8 @@ async function openTokenModal(targetId) {
   $('#tokenModalTitle').textContent = cv(tokenCardCfg(), 'detail_title') || 'Detail';
   $('#tokenModal').classList.add('open');
   $('#tokenModalRanges').innerHTML = TOKEN_RANGES.map((r) =>
-    `<button data-r="${r}" class="${r === tokenRange ? 'active' : ''}">${r}</button>`).join('');
+    // v2.24: "24h" is the Beijing calendar day (usage source), so it says "today"
+    `<button data-r="${r}" class="${r === tokenRange ? 'active' : ''}">${r === '24h' ? esc(t('tk_range_today')) : r}</button>`).join('');
   $('#tokenModalRanges').onclick = (e) => {
     const b = e.target.closest('button'); if (!b) return;
     tokenRange = b.dataset.r;
@@ -603,6 +604,20 @@ function relocalizeTokenModal() {
   loadTokenDetail();
 }
 
+// v2.24: when each counter started being used (before that, LiteLLM only), per node and
+// kind, plus the days that are LiteLLM's UTC-date buckets.
+function tokenCoverageNote(j) {
+  if (!Array.isArray(j.coverage)) return '';
+  const p2 = (x) => String(x).padStart(2, '0');
+  const at = (sec) => { const d = new Date((sec + 8 * 3600) * 1000); return `${p2(d.getUTCMonth() + 1)}-${p2(d.getUTCDate())} ${p2(d.getUTCHours())}:${p2(d.getUTCMinutes())}`; };
+  // net switches with tokens (same counters' start), so it is not listed separately
+  const list = j.coverage.filter((c) => c.kind !== 'net').map((c) => `${c.node} ${t(`tk_kind_${c.kind}`)} ${at(c.since)}`).join(' · ');
+  const lines = [];
+  if (list) lines.push(t('tk_cov_detail', list));
+  if (j.legacy_before) lines.push(t('tk_legacy', j.legacy_before.slice(5)));
+  return lines.length ? `<div class="note">${lines.map(esc).join('<br>')}</div>` : '';
+}
+
 async function loadTokenDetail() {
   const tbl = $('#tokenModalTable');
   try {
@@ -618,12 +633,16 @@ async function loadTokenDetail() {
     const hasNet = (j.table || []).some((row) => row.net != null);
     // v2.23: figures right-aligned under right-aligned headers (.num), the model name left.
     const netTh = hasNet ? `<th class="num">${th('net', 'Net')}</th>` : '';
+    // v2.24 usage source: the LiteLLM share per class, a total row, and a note on where the
+    // counters start (before that: LiteLLM only) and which days are UTC buckets.
+    const hasLl = (j.table || []).some((row) => row.ll != null);
+    const llTh = hasLl ? `<th class="num opt">${th('ll', 'via LiteLLM')}</th>` : '';
     // .opt columns step aside on a phone-width modal (tokens.css) so the rest fit unclipped.
-    tbl.innerHTML = `<table class="tbl"><thead><tr><th>${th('model', 'Model')}</th><th class="num">${th('tokens', 'Tokens')}</th>${netTh}<th class="num">${th('requests', 'Requests')}</th><th class="num opt">${th('share', 'Share')}</th></tr></thead><tbody>${
-      (j.table || []).map((row) => `<tr><td><span class="sw" style="background:${esc(row.color)}"></span>${esc(row.label)}</td><td class="num">${esc(row.tokens)}</td>${
+    tbl.innerHTML = `<table class="tbl"><thead><tr><th>${th('model', 'Model')}</th><th class="num">${th('tokens', 'Tokens')}</th>${netTh}<th class="num">${th('requests', 'Requests')}</th>${llTh}<th class="num opt">${th('share', 'Share')}</th></tr></thead><tbody>${
+      (j.table || []).map((row) => `<tr${row.total ? ' class="tot"' : ''}><td><span class="sw" style="background:${esc(row.color)}"></span>${esc(row.label)}</td><td class="num">${esc(row.tokens)}</td>${
         hasNet ? `<td class="num">${esc(row.net ?? '—')}${row.net_pct != null ? ` <span class="pct">${esc(row.net_pct)}%</span>` : ''}</td>` : ''
-      }<td class="num">${esc(row.requests)}</td><td class="num opt">${esc(row.share)}%</td></tr>`).join('')
-    }</tbody></table>`;
+      }<td class="num">${esc(Number(row.requests ?? 0).toLocaleString('en-US'))}</td>${hasLl ? `<td class="num opt">${esc(row.ll ?? '—')}</td>` : ''}<td class="num opt">${esc(row.share)}%</td></tr>`).join('')
+    }</tbody></table>${tokenCoverageNote(j)}`;
   } catch (e) {
     tbl.innerHTML = `<div class="note">Detail request failed</div>`;
   }

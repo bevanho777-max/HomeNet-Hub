@@ -30,7 +30,7 @@
 // silently disagreeing with the card the operator is looking at.
 import { esc } from './common.js';
 import { cv, t } from '../i18n.js';
-import { parseColumns, cell, isNumCol } from './table.js';
+import { parseColumns, cell, isNumCol, val } from './table.js';
 
 const $ = (s) => document.querySelector(s);
 
@@ -75,7 +75,7 @@ function render() {
   }
   const head = cols.map((c, i) => `<th${isNumCol(c, i) ? ' class="num"' : ''}>${esc(c.label)}</th>`).join('');
   const body = rows.map((r) => `<tr>${
-    cols.map((c, i) => `<td${isNumCol(c, i) ? ' class="num"' : ''}>${esc(cell(r[c.key], c.format))}</td>`).join('')
+    cols.map((c, i) => `<td${isNumCol(c, i) ? ' class="num"' : ''}>${esc(cell(val(r, c.key), c.format))}</td>`).join('')
   }</tr>`).join('');
   const hintText = cv(gridCard, 'hint');
   const hint = hintText ? `<div class="note">${esc(hintText)}</div>` : '';
