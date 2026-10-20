@@ -37,7 +37,7 @@ export function renderStack(gc, resolve, metrics) {
         return `<div class="stack-item stack-item-offline stack-item-idle" data-target="${esc(childId)}"${accentAttr}>`
           + `<h2>${title}</h2>`
           + `<div class="stack-offline"><div class="stack-offline-status">${esc(cv(target.when_down, 'note') || t('svc_idle'))}</div>`
-          + (skel ? `<div class="kv">${skel}</div>` : '') + '</div>'
+          + (skel ? `<div class="kv" data-n="${(gc.items || []).length}">${skel}</div>` : '') + '</div>'
           + '</div>';
       }
       const err = snap?.error ? ` (${esc(snap.error)})` : '';
@@ -45,7 +45,7 @@ export function renderStack(gc, resolve, metrics) {
       return `<div class="stack-item stack-item-offline" data-target="${esc(childId)}"${accentAttr}>`
         + `<h2>${title}<span class="tag">${badge}</span></h2>`
         + `<div class="stack-offline"><div class="stack-offline-status">Offline${err}</div>`
-        + (skel ? `<div class="kv">${skel}</div>` : '') + '</div>'
+        + (skel ? `<div class="kv" data-n="${(gc.items || []).length}">${skel}</div>` : '') + '</div>'
         + '</div>';
     }
 

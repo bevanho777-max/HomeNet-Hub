@@ -237,6 +237,13 @@ targets:
   #     `public` names the domain the instance is published under ("Public · lm2").
   # Needs PG_DSN + LITELLM_MASTER_KEY. A node without a request counter (llama.cpp has none)
   # just omits `requests`; the card says so instead of showing 0.
+  #   llama.cpp has no request counter, and an --embedding server counts nothing at all.
+  #   agents/llama-log-exporter.py (v2.23) fills that gap without touching the server: it
+  #   counts the "slot release" line every finished task writes to the journal and serves
+  #   homenet_llama_requests_total{unit} (and, for units marked :embed, the input tokens as
+  #   homenet_llama_tokens_total{unit}). Point `requests` / `embed_requests` /
+  #   `embed_tokens` at those series; the card shows the embedding share on the second
+  #   line of its request / token cells.
   # Each column's status/latency/model comes from an ordinary http probe target — give
   # a machine that is often switched off `always_on: false` so "unreachable" reads as a
   # grey "no service" instead of a red fault.
@@ -263,8 +270,11 @@ targets:
       - id: gpu_b
         endpoints: ["192.0.2.11:12346"]
         embed_endpoints: ["192.0.2.11:12347"]
-        counters:            # llama.cpp: token counters only, no request counter
+        counters:            # llama.cpp: token counters only; requests via llama-log-exporter.py
           tokens: ['llamacpp:prompt_tokens_total{instance="192.0.2.11:12346"}', 'llamacpp:prompt_tokens_cached_total{instance="192.0.2.11:12346"}', 'llamacpp:tokens_predicted_total{instance="192.0.2.11:12346"}']
+          requests: ['homenet_llama_requests_total{instance="192.0.2.11:9877",unit="llama-chat.service"}']
+          embed_requests: ['homenet_llama_requests_total{instance="192.0.2.11:9877",unit="llama-embed.service"}']
+          embed_tokens: ['homenet_llama_tokens_total{instance="192.0.2.11:9877",unit="llama-embed.service"}']
 
   - id: project_tokens_example
     name: "Per-Project Tokens (real sql)"

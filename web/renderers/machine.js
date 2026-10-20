@@ -20,7 +20,14 @@ export function renderMachine(gridCard, target, snap, metrics) {
   // both languages rather than falling back to the bare key.
   const label = (k) => cv(metrics?.[k], 'label') || k;
   const rings = (gridCard.rings || []).map((k) => ring(label(k), mget(snap, k))).join('');
-  const items = (gridCard.items || []).map((k) => kvItem(label(k), mget(snap, k), metrics?.[k])).join('');
+  // A table-like cell (By Model) takes a whole row on a narrow card (tokens.css); when the
+  // remaining plain cells are an odd number, the last of them takes a whole row as well, so
+  // the cell grid never ends in a half-empty row.
+  const keys = gridCard.items || [];
+  const isTable = (k) => !!(mget(snap, k).parts && metrics?.[k]?.parts_layout === 'table');
+  const plain = keys.filter((k) => !isTable(k));
+  const fill = plain.length < keys.length && plain.length % 2 === 1 ? plain[plain.length - 1] : null;
+  const items = keys.map((k) => kvItem(label(k), mget(snap, k), metrics?.[k], k === fill ? 'item-fill' : '')).join('');
 
   // header_right: 'badge' → target.badge, else a metric key → its display.
   // B13: an array combines parts with a vertical hairline, e.g. [badge, uptime]
@@ -39,7 +46,11 @@ export function renderMachine(gridCard, target, snap, metrics) {
   const warn = gc && gc.expected && typeof gc.value === 'number' && gc.value < gc.expected
     ? `<div class="gpu-missing">${esc(t('gpu_cards_missing', gc.value, gc.expected))}</div>` : '';
 
-  const body = `${warn}<div class="rings">${rings}</div>${items ? `<div class="kv">${items}</div>` : ''}`;
+  // v2.23: rings and cells sit in one .mach block so a card the grid has widened can put
+  // them side by side (tokens.css); data-n lets the cell grid pick a column count that
+  // divides its cell count, so a wider card never leaves a half-empty last row.
+  const n = keys.length;
+  const body = `${warn}<div class="mach"><div class="rings">${rings}</div>${items ? `<div class="kv" data-n="${n}">${items}</div>` : ''}</div>`;
   return card({
     key: target.id, title, tag, body, accent, stale: snap.stale,
     kind: 'machine', clickable: gridCard.clickable === 'detail',

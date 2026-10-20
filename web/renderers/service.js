@@ -59,14 +59,15 @@ export function renderService(gridCard, target, snap, metrics) {
   const itemKeys = gridCard.items || [];
   const items = itemKeys.map((k) => {
     const m = mget(snap, k);
-    const small = (k === 'model' || k === 'role') ? ' style="font-size:12px"' : '';
+    // v2.23: one type scale in every cell (the 12px model/role override is gone); a long
+    // model name wraps inside its cell instead.
     const cls = k === 'status' ? lvClass(statusLevel(m.value)) : lvClass(m.level);
-    return `<div class="item"><span class="label">${esc(label(k))}</span><span class="value ${cls}"${small}>${esc(m.display)}</span></div>`;
+    return `<div class="item"><span class="label">${esc(label(k))}</span><span class="value ${cls}">${esc(m.display)}</span></div>`;
   }).join('');
 
   // no items configured → show a note instead of a silent empty card body
   const body = itemKeys.length
-    ? `<div class="kv">${items}</div>${measuredNote(target, snap, itemKeys)}`
+    ? `<div class="kv" data-n="${itemKeys.length}">${items}</div>${measuredNote(target, snap, itemKeys)}`
     : '<div class="note">No fields configured</div>';
   return card({ key: target.id, title, tag, body, accent, stale: snap.stale });
 }

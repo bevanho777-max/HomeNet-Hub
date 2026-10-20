@@ -608,6 +608,13 @@ anything needing a custom `map`, declare it in YAML:
 
 Add a card for it in `config/layout.yaml`, save, and it appears within ~3 s.
 
+**llama.cpp request counts (optional).** llama-server's `/metrics` has token counters but no
+request counter, and an `--embedding` server counts nothing. `agents/llama-log-exporter.py`
+(stdlib Python, read-only) counts the line every finished task writes to the journal and
+serves `homenet_llama_requests_total{unit}` (plus input tokens for units marked `:embed`)
+for Prometheus; point an `inference_nodes` node's `counters` at it (see
+`config.example/targets.yaml`). It never touches the inference server itself.
+
 ---
 
 ## Environment

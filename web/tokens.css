@@ -53,6 +53,9 @@
 }
 
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+/* v2.23: every number on the board uses tabular digits, so figures in a column line up and
+   a changing value does not jitter. body sets it; form controls do not inherit it. */
+button, input, select, textarea { font-variant-numeric: tabular-nums; }
 
 /* `el.hidden = true` must actually hide the element — everywhere, once.
    The browser's own [hidden]{display:none} lives in the UA stylesheet, which ANY author
@@ -192,12 +195,14 @@ html, body {
    auto-fit: auto-fit kept adding columns on wide screens until a card was ~310px, which
    is what squeezed the token boxes and the gateway's By Model. A card takes 1 column by
    default; layout `span: 2` / `span: full` widens it (span-2 falls back to the whole row
-   when there is only one column). Dense packing lets a later single card fill a gap left
-   by a wider one; stretch makes every card in a row as tall as the tallest. */
+   when there is only one column). Stretch makes every card in a row as tall as the tallest.
+   v2.23: WHERE each card goes is decided by packGrid() in app.js (explicit grid-row /
+   grid-column, rows closed by widening `stretch` cards, never a hole); the span classes
+   below are only the no-JS fallback. --cols is read back by packGrid(). */
 .grid { display: grid; gap: var(--s4);
   padding: var(--s4) max(var(--gutter-min), calc((100% - var(--page-max)) / 2)) var(--s5);
   --cols: 1; grid-template-columns: repeat(var(--cols), minmax(0, 1fr));
-  grid-auto-flow: row dense; align-items: stretch; }
+  align-items: stretch; }
 @media (min-width: 700px)  { .grid { --cols: 2; } }
 @media (min-width: 1200px) { .grid { --cols: 3; } }
 @media (min-width: 1800px) { .grid { --cols: 4; } }
@@ -209,6 +214,9 @@ html, body {
   min-width: 0; /* grid item: stay within track (don't let wide content grow the card) */
   /* v2.22: card internals respond to the CARD's width (@container), not the screen's */
   container-type: inline-size; container-name: card;
+  /* v2.23: header + body as a column; the body takes whatever height the grid row gives
+     the card, so a card stretched to its row can grow its content (token chart) into it */
+  display: flex; flex-direction: column;
   background:
     linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0.006) 40%),
     var(--card-bg);
@@ -245,6 +253,7 @@ html, body {
   border-color: color-mix(in srgb, var(--accent) 30%, transparent);
 }
 .card.clickable { cursor: pointer; }
+.card > .card-body { flex: 1 1 auto; min-width: 0; }
 .card.stale { opacity: 0.55; }
 
 /* ---------- B12: 堆叠卡(多 service 共享外框,各留头部)---------- */
@@ -271,21 +280,30 @@ html, body {
 /* Stack: align section title->first KV gap with regular cards (was 45px vs 33px) */
 .stack .stack-item h2 { margin-bottom: 0; }
 
-/* Stack: KV boxes always single-file (both row and column mode) */
-.stack .stack-item .kv {
-  display: grid;
-  grid-template-columns: 1fr;
-} /* column: compact (status only) */
+/* Stack: KV boxes single-file while a stack child is narrow; v2.23: a stack child is a
+   size container, so a wide one lays its cells out like a card would (rules by data-n). */
+.stack-item { container-type: inline-size; }
+.stack .stack-item .kv { display: grid; grid-template-columns: minmax(0, 1fr); }
+@container (min-width: 300px) { .stack .stack-item .kv[data-n="2"], .stack .stack-item .kv[data-n="4"], .stack .stack-item .kv[data-n="6"] { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@container (min-width: 480px) { .stack .stack-item .kv[data-n="3"], .stack .stack-item .kv[data-n="6"] { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@container (min-width: 640px) { .stack .stack-item .kv[data-n="4"] { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
 h2:empty { display: none; } /* 堆叠卡外框无标题时不留空行 */
 
 /* ---------- v2.20 推理节点 / Inference Nodes(全宽,一机一栏)---------- */
+/* v2.23: one grid for the whole card. Each node column is a subgrid of its rows (head,
+   model, then --r rows of cells), so a row of cells is the same height in all three
+   columns -- tops and bottoms line up even when only one column has a wrapped second line.
+   --r = rows of cells: 2 (three per row) while a column is narrower than ~700px, 1 (six in
+   a row) when it is wider; --kcols is the matching column template. Columns are separated by a hairline drawn in the gap, so
+   all three columns have exactly the same content width. */
 .card.card-wide { grid-column: 1 / -1; }
-.nodes-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0; }
-.node-col { min-width: 0; padding: 0 var(--s4); display: flex; flex-direction: column; }
-.node-col + .node-col { border-left: 1px solid var(--hair); }
-.node-col:first-child { padding-left: 0; }
-.node-col:last-child { padding-right: 0; }
-.node-head { display: flex; align-items: center; gap: var(--s2); font-size: 13px; font-weight: 600; letter-spacing: 1px; color: var(--accent, var(--muted)); }
+.nodes-grid { --r: 2; --kcols: minmax(min-content, 0.6fr) minmax(min-content, 1fr) minmax(min-content, 1.4fr);
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-rows: auto auto repeat(var(--r), auto); column-gap: 33px; row-gap: 0; }
+.node-col { position: relative; min-width: 0; grid-row: 1 / -1; display: grid; grid-template-rows: subgrid; }
+.node-col + .node-col::before { content: ""; position: absolute; left: -17px; top: 0; bottom: 0; width: 1px; background: var(--hair); }
+.node-head { grid-row: 1; display: flex; align-items: center; flex-wrap: wrap; gap: var(--s2); row-gap: 2px;
+  font-size: 13px; font-weight: 600; letter-spacing: 1px; color: var(--accent, var(--muted)); }
 .node-port { color: var(--muted); font-weight: 500; letter-spacing: 0.5px; }
 .node-pub {
   font-size: 10.5px; font-weight: 600; letter-spacing: 0.5px; padding: 1px 7px; border-radius: 9px;
@@ -296,22 +314,35 @@ h2:empty { display: none; } /* 堆叠卡外框无标题时不留空行 */
 .node-route-stale s { text-decoration-thickness: 1px; }
 .node-route-pending { color: var(--muted2); font-style: italic; }
 .node-route-sep { margin: 0 4px; color: var(--muted2); }
-.node-head { flex-wrap: wrap; row-gap: 2px; }
-.node-ll { margin-top: 2px; }
-.node-model { margin-top: var(--s2); font-size: 12px; color: var(--text); word-break: break-all; min-height: 1.3em; }
+.node-model { grid-row: 2; margin-top: var(--s2); font-size: 12px; color: var(--text); word-break: break-all; min-height: 1.3em; }
 .node-model.is-last { color: var(--muted2); font-style: italic; }
-.node-col .kv { margin-top: var(--s3); }
-.node-note { margin-top: var(--s2); }
-.node-emb { margin-top: 2px; }
+/* (.kv.node-kv: must outrank the generic .kv grid further down) Cells flow down the
+   columns: with three per row the columns are health (status / latency), speed (prefill /
+   decode) and usage (requests / tokens), and the short health readings get the narrowest
+   column; with six per row they sit side by side in the same order, equal width. */
+.kv.node-kv { grid-row: 3 / span var(--r); grid-template-rows: subgrid; row-gap: var(--s2); grid-auto-flow: column;
+  grid-template-columns: var(--kcols); margin-top: var(--s3); }
+/* a node cell is three stacked lines: label, value, second line (always present) */
+.kv.node-kv .item { flex-direction: column; flex-wrap: nowrap; align-items: stretch; row-gap: 2px; }
+.kv.node-kv .item::before { content: none; }
+.kv.node-kv .item .value { margin-left: 0; text-align: left; }
+.kv.node-kv .item .label { white-space: nowrap; }
 /* always_on:false 且连不上:整栏变灰(不是故障,不着红)*/
 .node-idle { filter: grayscale(0.85) opacity(0.62); }
 .node-idle-text { color: var(--muted); }
+/* a ~550-700px column: the usage column would be the emptiest, so it gives some back */
+@container card (min-width: 1700px) { .nodes-grid { --kcols: minmax(min-content, 0.7fr) minmax(min-content, 1fr) minmax(min-content, 1.3fr); } }
+@container card (min-width: 2166px) { .nodes-grid { --r: 1; --kcols: repeat(6, minmax(0, 1fr)); } }
+/* narrow card: the three nodes stack, each with its own rows */
 @container card (max-width: 900px) {
-  .nodes-grid { grid-template-columns: 1fr; }
-  .node-col { padding: var(--s3) 0; }
-  .node-col + .node-col { border-left: 0; border-top: 1px solid var(--hair); }
+  .nodes-grid { grid-template-columns: minmax(0, 1fr); grid-template-rows: none; }
+  .node-col { grid-row: auto; grid-template-rows: auto auto repeat(var(--r), auto); padding: var(--s3) 0; }
+  .node-col + .node-col { border-top: 1px solid var(--hair); }
+  .node-col + .node-col::before { content: none; }
   .node-col:first-child { padding-top: 0; }
+  .node-col:last-child { padding-bottom: 0; }
 }
+@container card (min-width: 560px) and (max-width: 900px) { .nodes-grid { --r: 1; --kcols: repeat(6, minmax(0, 1fr)); } }
 
 /* ---------- 环形仪表 ---------- */
 .rings { display: flex; gap: var(--s4); flex-wrap: wrap; }
@@ -355,30 +386,66 @@ h2:empty { display: none; } /* 堆叠卡外框无标题时不留空行 */
 @keyframes comet { to { --comet: 360deg; } }
 
 /* ---------- 键值区（玻璃底块）---------- */
-.kv { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s2); margin-top: var(--s4); }
+/* v2.23 cell: label left, value right on one line (the label's baseline is the value's);
+   a value that does not fit beside its label drops to its own line, right-aligned, and a
+   table-like value (By Model) always takes its own line. Same type scale in every cell on
+   the board: label 10.5px, value 15.5px, padding 9px 11px, line 20px. The zero-width
+   ::before strut carries the value's font, so the first line of every cell has the same
+   baseline whether or not its value is on it -- labels line up across a row of cells. */
+:root { --cell-lh: 20px; --cell-label: 10.5px; --cell-value: 15.5px; --cell-pad: 9px 11px; }
+.kv { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s2); margin-top: var(--s4); }
 .kv .item {
-  display: flex; flex-direction: column; gap: 4px;
+  display: flex; flex-wrap: wrap; align-items: baseline; align-content: flex-start;
+  column-gap: var(--s2); row-gap: 3px; min-width: 0;
   background: linear-gradient(180deg, rgba(255,255,255,0.045), rgba(255,255,255,0.012));
   border: 1px solid var(--hair);
   border-radius: 11px;
-  padding: 9px 11px;
+  padding: var(--cell-pad);
   box-shadow: 0 0 10px -2px var(--accent, rgba(80,120,180,0.15));
   transition: border-color .3s, background .3s;
 }
+.kv .item::before { content: "\200b"; width: 0; font-size: var(--cell-value); line-height: var(--cell-lh); margin-right: calc(-1 * var(--s2)); }
 .kv .item:hover { border-color: var(--hair2); }
-.kv .item .label { font-size: 10.5px; color: var(--muted2); letter-spacing: 0.6px; text-transform: uppercase; opacity: 0.7; }
-.kv .item .value { font-size: 15.5px; font-weight: 500; letter-spacing: 0.2px; }
+.kv .item .label { min-width: 0; font-size: var(--cell-label); line-height: var(--cell-lh); color: var(--muted2); letter-spacing: 0.6px; text-transform: uppercase; opacity: 0.7; }
+.kv .item .value { margin-left: auto; text-align: right; min-width: 0; overflow-wrap: anywhere; font-size: var(--cell-value); line-height: var(--cell-lh); font-weight: 500; letter-spacing: 0.2px; }
+.kv .item .sub { font-size: var(--cell-label); line-height: 1.35; color: var(--muted); }
 /* B20: parts metric — one span per subfield, each colored by its own level. */
-.kv .item .value.parts { display: flex; flex-wrap: wrap; gap: 0 9px; }
+.kv .item .value.parts { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 0 9px; white-space: normal; }
 /* v2.22 parts_layout: table (gateway By Model): a 2-column mini table, label left and
    number right in every cell, so numbers line up down each column. */
-.kv .item .value.parts-table { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 14px; row-gap: 1px;
-  font-size: 14px; }
-.kv .item .value.parts-table .pt { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; min-width: 0; }
+.kv .item .value.parts-table { flex-basis: 100%; margin-left: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: 12px; row-gap: 0; font-size: 13px; line-height: 19px; }
+.kv .item .value.parts-table .pt { display: flex; justify-content: space-between; align-items: baseline; gap: 5px; min-width: 0; }
 .kv .item .value.parts-table .pt-l { font-size: 10.5px; color: var(--muted2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .kv .item .value.parts-table .pt-v { font-variant-numeric: tabular-nums; }
-/* On a narrow card the mini table gets the whole KV row, so labels like "orcarouter" fit. */
-@container card (max-width: 420px) { .kv .item:has(.parts-table) { grid-column: 1 / -1; } }
+/* On a narrow card the mini table gets a whole KV row (moved to the end, three entries per
+   line), so labels like "orcarouter" fit; the renderer marks one plain cell .item-fill to
+   take a whole row too when the rest would leave the last row half empty. */
+@container card (max-width: 341px) {
+  .kv .item.has-table { order: 1; grid-column: 1 / -1; }
+  .kv .item.item-fill { grid-column: 1 / -1; }
+  .kv .item .value.parts-table { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+/* Cell grids outside machine cards (info, service, stack children): the column count
+   follows the cell count so the last row is never half empty, and grows with the room --
+   the nearest container is the card, or the stack child for a card inside a stack. */
+.kv[data-n="1"], .kv[data-n="3"], .kv[data-n="5"] { grid-template-columns: minmax(0, 1fr); }
+@container (min-width: 480px) { .kv[data-n="3"]:not(.node-kv) { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@container (min-width: 520px) { .card-body > .kv[data-n="4"] { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+@container (min-width: 820px) { .kv[data-n="5"]:not(.node-kv) { grid-template-columns: repeat(5, minmax(0, 1fr)); } }
+/* machine card: rings above cells; 6 plain cells go 3 x 2 once the card has room */
+@container card (min-width: 520px) { .kv[data-n="6"]:not(:has(.has-table)) { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+/* a machine card the grid has widened: rings on the left, cells beside them */
+@container card (min-width: 900px) {
+  .mach { display: grid; grid-template-columns: minmax(260px, 1fr) minmax(0, 2.6fr); column-gap: var(--s5); align-items: center; }
+  .mach > .kv { margin-top: 0; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .mach > .kv[data-n="4"], .mach > .kv[data-n="8"] { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+/* very wide (a machine card stretched across 3 of 4 columns): all six cells in one row */
+@container card (min-width: 1400px) {
+  .mach { grid-template-columns: minmax(300px, 0.8fr) minmax(0, 3.6fr); }
+  .mach > .kv[data-n="6"] { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+}
 .kv .item .value.parts i { font-style: normal; }
 /* Part label (e.g. the DSM bay number): a tag, not data -- small and always the muted
    grey, never the value's status color, so it cannot be mistaken for a reading. */
@@ -402,23 +469,39 @@ h2:empty { display: none; } /* 堆叠卡外框无标题时不留空行 */
 .big.sub { font-size: 13px; color: var(--muted); font-weight: 500; margin-top: var(--s1); letter-spacing: 0.5px; }
 
 /* ---------- Token 三栏 ---------- */
-.tk-grid { display: grid; grid-template-columns: repeat(var(--tk-n, 3), minmax(0, 1fr)); gap: var(--s2); margin-bottom: var(--s4); }
-/* v2.22: one row of N boxes while the card is wide enough; two per row when it is not
-   (4 boxes -> 2x2). Never wider than the card. */
-@container card (max-width: 560px) { .tk-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-.tk-col { text-align: center; padding: var(--s3) var(--s2); background: var(--glass2); border: 1px solid var(--hair); border-radius: 12px;
+/* v2.23: the card body is a column and .tk-main takes all of its height, the chart taking
+   whatever the boxes leave -- so a token card stretched to a taller row grows its bars
+   instead of ending in a blank strip. Box type matches every other cell (label 10.5px,
+   value 15.5px, padding 9px 11px). Three arrangements by card width:
+     narrow  (< 560): --tk-c boxes per row (4 -> 2x2, fewer -> one row), chart below
+     medium         : all boxes in one row, chart below
+     wide   (>= 860): boxes 2x2 on the left, chart beside them filling the rest */
+.card[data-kind="token"] > .card-body { display: flex; flex-direction: column; }
+.tk-main { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; }
+.tk-grid { display: grid; grid-template-columns: repeat(var(--tk-n, 3), minmax(0, 1fr)); gap: var(--s2); }
+@container card (max-width: 559px) { .tk-grid { grid-template-columns: repeat(var(--tk-c, 2), minmax(0, 1fr)); } }
+.tk-col { display: flex; flex-direction: column; justify-content: center; text-align: center;
+  padding: var(--cell-pad); background: var(--glass2); border: 1px solid var(--hair); border-radius: 12px;
   min-width: 0; overflow-wrap: anywhere; }
-.tk-h { font-size: 11px; font-weight: 600; margin-bottom: 5px; letter-spacing: 0.4px; }
+.tk-h { font-size: var(--cell-label); font-weight: 600; margin-bottom: 5px; letter-spacing: 0.4px; }
 /* B6追加: Token stat-box 类目名↔数值 灰色渐变分隔(复用 --hair,不引新色) */
 .tk-div { height: 1px; margin: 0 0 5px; background: linear-gradient(90deg, transparent, var(--hair), transparent); }
-.tk-all { font-size: 18px; font-weight: 500; line-height: 1.1; }
-.tk-sub { font-size: 11px; color: var(--muted); margin-top: 3px; }
+.tk-all { font-size: var(--cell-value); font-weight: 500; line-height: var(--cell-lh); }
+.tk-sub { font-size: var(--cell-label); color: var(--muted); margin-top: 3px; }
+@container card (min-width: 860px) {
+  .tk-main { flex-direction: row; align-items: stretch; gap: var(--s4); }
+  .tk-main > .tk-grid { flex: 0 0 auto; width: min(40%, 400px); grid-template-columns: repeat(var(--tk-c, 2), minmax(0, 1fr)); }
+  .tk-main > .spark { margin-top: 0; }
+  .tk-main > .spark .col .b { max-width: 30px; }
+}
 
 /* ---------- 趋势柱（固定框，不裁切，数字在框内）---------- */
+/* v2.23: at least 92px tall, taller when the card has room (see .tk-main). Bar height is
+   the fraction --f of the column's bar area, so it scales with the chart. */
 .spark {
-  height: 92px; max-height: 92px; overflow: visible;
-  display: flex; align-items: flex-end; gap: 12px;
-  padding: 0 4px; margin-top: var(--s3);
+  flex: 1 1 auto; min-height: 92px; overflow: visible;
+  display: flex; align-items: stretch; gap: 12px;
+  padding: 0 4px; margin-top: var(--s4);
   position: relative;
 }
 /* B6追加: 柱状图 柱↔日期标签 之间一条横贯灰色渐变分隔(复用 --hair) */
@@ -427,9 +510,10 @@ h2:empty { display: none; } /* 堆叠卡外框无标题时不留空行 */
   background: linear-gradient(90deg, transparent, var(--hair), transparent);
   pointer-events: none;
 }
-.spark .col { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: 4px; height: 100%; }
+.spark .col { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.spark .col .bw { flex: 1 1 auto; min-height: 0; width: 100%; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: 4px; }
 .spark .col .n { font-size: 9.5px; color: var(--muted); line-height: 1; }
-.spark .col .b { width: 56%; max-width: 18px; border-radius: 5px 5px 0 0; background: linear-gradient(180deg, var(--cyan), rgba(79,227,208,0.18)); box-shadow: 0 0 10px -2px rgba(79,227,208,0.5); min-height: 3px; }
+.spark .col .b { width: 56%; max-width: 18px; height: calc((100% - 14px) * var(--f, 0) + 4px); border-radius: 5px 5px 0 0; background: linear-gradient(180deg, var(--cyan), rgba(79,227,208,0.18)); box-shadow: 0 0 10px -2px rgba(79,227,208,0.5); min-height: 3px; }
 .spark .col .d { font-size: 9.5px; color: var(--muted2); line-height: 1; }
 
 /* ---------- 状态色文本 ---------- */
@@ -460,6 +544,18 @@ h2:empty { display: none; } /* 堆叠卡外框无标题时不留空行 */
 .card .tbl th:last-child, .card .tbl td:last-child { padding-right: 0; }
 .card .tbl tbody tr:last-child td { border-bottom: none; }
 .card .tbl td:first-child { color: var(--muted); }
+/* v2.23: a table card the grid widened also shows its modal-only columns (.col-x), and
+   every column then sizes to its content instead of the identity column taking all the
+   slack -- the figures spread across the card rather than huddling at its right edge. */
+.card .tbl .col-x { display: none; }
+@container card (min-width: 760px) {
+  .card .tbl .col-x { display: table-cell; }
+  .card .tbl th:first-child, .card .tbl td:first-child { width: auto; max-width: none; }
+  .card .tbl th.num, .card .tbl td.num { width: auto; }
+  .card .tbl th, .card .tbl td { padding-left: 14px; }
+  /* a left-aligned text column right after a right-aligned figure: keep them apart */
+  .card .tbl th.num + th:not(.num), .card .tbl td.num + td:not(.num) { padding-left: 36px; }
+}
 
 /* 客户端面板:一次性 key 展示框。红框是刻意的 —— 这段文本关掉就再也拿不回来,
    视觉上必须比周围任何东西都更"现在就处理我"。.cliKey 用等宽并允许折行,
@@ -468,6 +564,12 @@ h2:empty { display: none; } /* 堆叠卡外框无标题时不留空行 */
   border: 1px solid color-mix(in srgb, var(--lv-danger) 55%, transparent);
   background: color-mix(in srgb, var(--lv-danger) 8%, transparent);
   display: flex; flex-direction: column; gap: 4px; }
+/* v2.23 client list: a table like every other one -- name left, figures right-aligned */
+.modal .cliTbl { margin-top: var(--s2); font-size: 12.5px; }
+.modal .cliTbl td, .modal .cliTbl th { padding: 7px 8px; white-space: nowrap; }
+.modal .cliTbl td:first-child .addDot { display: inline-block; margin-right: var(--s2); vertical-align: middle; }
+.modal .cliTbl td b { color: var(--text); font-weight: 600; }
+.modal .cliTbl .cliAct { width: 1%; text-align: right; }
 .cliKeyRow { display: flex; gap: var(--s2); align-items: center; margin-top: var(--s2); }
 .cliKey { flex: 1; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px;
   word-break: break-all; user-select: all; color: var(--text);
@@ -519,6 +621,21 @@ h2:empty { display: none; } /* 堆叠卡外框无标题时不留空行 */
 /* 弹窗表格的数字列右对齐 + 等宽数字,和卡面那张表读起来一致(.card .tbl 早有同款规则,
    .modal .tbl 之前没有,因为在此之前弹窗里只有 token 那张全是短数字的表)。 */
 .modal .tbl th.num, .modal .tbl td.num { text-align: right; font-variant-numeric: tabular-nums; }
+/* v2.23: a modal table never wraps a cell (a figure split over two lines breaks the
+   column's right edge). On a phone-width modal the .opt columns step aside; a table that
+   still does not fit (the 8-column Per-Project detail) scrolls sideways inside its own
+   box, identity column pinned, instead of pushing past the modal. */
+.modal .tbl th, .modal .tbl td { white-space: nowrap; }
+.modal .tbl .pct { color: var(--muted); font-size: 0.88em; }
+#tableModalBody, #tokenModalTable { overflow-x: auto; }
+@media (max-width: 560px) {
+  .modal { padding: var(--s4); }
+  .modal .tbl { font-size: 12px; }
+  .modal .tbl th, .modal .tbl td { padding: 7px 6px; }
+  .modal .tbl .opt { display: none; }
+  #tableModalBody .tbl th:first-child, #tableModalBody .tbl td:first-child { position: sticky; left: 0; z-index: 1; background: #10161f; }
+  .modal .cliTbl .cliName { width: 100%; max-width: 0; overflow: hidden; text-overflow: ellipsis; }
+}
 /* "查看全部(共 N)" —— 这条是行动号召,和 hint 那种常驻说明区分开,所以给它正文色。 */
 .card .tblMore { color: var(--text); font-weight: 500; }
 
@@ -666,3 +783,9 @@ h2:empty { display: none; } /* 堆叠卡外框无标题时不留空行 */
 .langBtn:hover { color: var(--text); }
 .langBtn.active { color: var(--text); background: var(--glass); }
 @media (max-width: 560px) { .langBtn { padding: 4px 8px; font-size: 11px; } }
+/* v2.23: header controls keep their words on one line; on a phone the row wraps instead
+   of squeezing the language switch (it used to clip to "中 E") or a button to one
+   character per line. */
+.addOpen, .langBtn { white-space: nowrap; }
+.langSw { flex: none; }
+@media (max-width: 560px) { .meta { flex-wrap: wrap; justify-content: flex-end; gap: var(--s2) var(--s3); } }

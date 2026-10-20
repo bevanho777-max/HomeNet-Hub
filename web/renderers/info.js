@@ -19,5 +19,6 @@ export function renderInfo(gridCard, target, snap) {
     return `<div class="item"><span class="label">${esc(cv(it, 'label'))}</span><span class="value ${cls}">${esc(val)}</span></div>`;
   }).join('');
 
-  return card({ key: gridCard.target || title, title, body: `<div class="kv">${items}</div>`, accent });
+  const n = (gridCard.items || []).filter((it) => it && typeof it === 'object').length;
+  return card({ key: gridCard.target || title, title, body: `<div class="kv" data-n="${n}">${items}</div>`, accent });
 }

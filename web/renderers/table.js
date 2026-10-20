@@ -47,6 +47,11 @@ export function parseColumns(gridCard, field) {
 
 export { cell };
 
+// v2.23: a column is a figure column -- right-aligned under a right-aligned header, tabular
+// digits -- unless it is the row's identity (the first column) or declared `format: text`
+// (dates, names), which read left-aligned like any text.
+export const isNumCol = (c, i) => i > 0 && c.format !== 'text';
+
 export function renderTable(gridCard, target, snap) {
   const title = cv(gridCard, 'title') || target?.name || target?.id || 'Table';
   const accent = target?.color || '';
@@ -54,6 +59,12 @@ export function renderTable(gridCard, target, snap) {
 
   // columns is an ordered map: key → "Label" | { label, format }
   const cols = parseColumns(gridCard, 'columns');
+  // v2.23: when the grid widens the card (layout `stretch`), the table widens with it: the
+  // modal-only columns (detail_columns not on the front) are rendered too, marked .col-x,
+  // and tokens.css shows them once the card is wide enough to hold them.
+  const front = new Set(cols.map((c) => c.key));
+  const extra = parseColumns(gridCard, 'detail_columns').filter((c) => !front.has(c.key)).map((c) => ({ ...c, x: true }));
+  const allCols = [...cols, ...extra];
 
   const rows = Array.isArray(snap?.extra?.rows) ? snap.extra.rows : null;
 
@@ -71,10 +82,11 @@ export function renderTable(gridCard, target, snap) {
   const shown = overflow ? rows.slice(0, frontMax) : rows;
 
   // First column is the row's identity (left-aligned); the rest are figures.
-  const head = cols.map((c, i) => `<th${i ? ' class="num"' : ''}>${esc(c.label)}</th>`).join('');
+  const cls = (c, i) => { const k = [isNumCol(c, i) ? 'num' : '', c.x ? 'col-x' : ''].filter(Boolean).join(' '); return k ? ` class="${k}"` : ''; };
+  const head = allCols.map((c, i) => `<th${cls(c, i)}>${esc(c.label)}</th>`).join('');
   const body = shown.map((r) => `<tr>${
     // v2.22: the identity cell may ellipsise on a narrow card; its title carries the full text
-    cols.map((c, i) => { const v = esc(cell(r[c.key], c.format)); return i ? `<td class="num">${v}</td>` : `<td title="${v}">${v}</td>`; }).join('')
+    allCols.map((c, i) => { const v = esc(cell(r[c.key], c.format)); return i ? `<td${cls(c, i)}>${v}</td>` : `<td title="${v}">${v}</td>`; }).join('')
   }</tr>`).join('');
 
   // Two different notes, and only one of them is a call to action. `hint` is the card's
@@ -90,7 +102,7 @@ export function renderTable(gridCard, target, snap) {
     key, title, accent, kind: 'table',
     clickable: overflow,
     tag: gridCard.header_right ? String(gridCard.header_right) : '',
-    body: `<div class="tbl-wrap"><table class="tbl"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>${more}${hint}`,
+    body: `<div class="tbl-wrap"><table class="tbl${extra.length ? ' has-x' : ''}"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>${more}${hint}`,
     // Handed to the modal as-is: it needs every row and every column, not the slice the
     // card front shows. These are the same objects the server sent, which have already
     // had anything unsafe removed — see table_detail.js for the second line of defence.

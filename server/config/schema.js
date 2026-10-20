@@ -200,6 +200,8 @@ const targetsSchema = {
                   properties: {
                     requests: { type: 'array', items: { type: 'string' } },
                     tokens: { type: 'array', items: { type: 'string' } },
+                    embed_requests: { type: 'array', items: { type: 'string' } },
+                    embed_tokens: { type: 'array', items: { type: 'string' } },
                   },
                   additionalProperties: false,
                 },
@@ -243,6 +245,8 @@ const gridCard = {
     // v2.22: columns the card takes in the grid (default 1). 2 falls back to the whole row
     // when the screen only has one column; 'full' is always the whole row.
     span: { enum: [1, 2, 'full'] },
+    // v2.23: the grid packer may widen this card to close a gap at the end of its row.
+    stretch: { type: 'boolean' },
     // v2.20 nodes card: one column per inference node, in instance-port order.
     nodes: {
       type: 'array',

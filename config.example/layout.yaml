@@ -68,8 +68,14 @@ grid:
   # span (v2.22, optional): how many grid columns a card takes. The grid has 1 / 2 / 3 / 4
   # columns by screen width (<700 / 700-1200 / 1200-1800 / >=1800px), centred, max 2400px.
   #   1 (default) one column · 2 two columns (the whole row on a one-column phone) · full the whole row
-  # Cards pack densely (a later single card fills a gap) and every card in a row is as tall
-  # as the tallest. Leaving span out keeps today's behaviour: one column per card.
+  # Every card in a row is as tall as the tallest. Leaving span out keeps today's
+  # behaviour: one column per card.
+  # stretch (v2.23, optional, true/false): the card may be WIDENED to close a gap. Rows are
+  # filled in the order below by span; a row that ends short first widens its stretch cards
+  # (in proportion to their span), and only when it has none pulls a later card up that
+  # fits. So no column count (1/2/3/4) leaves a hole, and no filler card is ever added.
+  # A widened card lays itself out for the room: token boxes go beside the chart, a table
+  # card shows its detail_columns too, a machine card puts its cells beside the rings.
   # row 1 — four machine cards
   - target: gateway
     type: machine
@@ -101,48 +107,7 @@ grid:
     rings: [gpu, vram_pct, cpu]
     items: [vram_bytes, mem_bytes, gpu_temp, gpu_power, disk_bytes, net]
 
-  # row 2 — token / api / inference
-  - target: token
-    type: token
-    span: 2                         # the class boxes + spark need the room on wide screens
-    clickable: detail               # click → /api/token_detail modal
-    front_max: 3                    # §12-step6: max class boxes on card front (modal shows all)
-    header_right: "LiteLLM · {token_speed} t/s"
-    hint: "Click the card for per-model detail"
-    hint_en: "Click the card for per-model detail"
-    detail_title: "Token Detail · by Model"
-    detail_title_en: "Token Detail · by Model"
-    columns:
-      model: "Model"
-      tokens: "Tokens"
-      # Actually-new tokens: prompt minus the KV-cached prefix, plus completion — what
-      # the backend really had to process. The bracketed percentage is that as a share
-      # of the class's own total; a low one means the class is mostly replayed context.
-      # Shown only when the queries/ files supply a net_tokens column (this file's
-      # neutral examples do not — see queries/token_summary.sql).
-      net: "Net"
-      requests: "Requests"
-      share: "Share"
-    # The EN half of `columns`, same keys. A bare string replaces just the label; an
-    # object is merged over the base entry (so it can also change `format`).
-    columns_en:
-      model: "Model"
-      tokens: "Tokens"
-      net: "Net"
-      requests: "Requests"
-      share: "Share"
-    labels:                              # §12-step2 patch: token card front labels
-      today: "Today"                     # stat-box "today" prefix
-      net: "Net"                         # stat-box "actually-new" prefix (today only;
-                                         # the all-time figure lives in the modal table)
-      requests_suffix: "req"             # stat-box request-count suffix
-      total: "Total"                     # the total/aggregate column label
-    labels_en:                           # the EN half, same keys
-      today: "Today"
-      net: "Net"
-      requests_suffix: "req"
-      total: "Total"
-
+  # row 2 — api / inference / about
   - target: svc_api
     type: service
     header_right: status
@@ -207,6 +172,8 @@ grid:
   #
   # - target: project_tokens_example
   #   type: table
+  #   span: 2
+  #   stretch: true              # widened, it also shows the detail_columns not listed in columns
   #   title: "Per-Project Tokens · chat only"
   #   columns:
   #     project:        "Project"
@@ -256,6 +223,7 @@ grid:
   - type: info
     title: "About"
     title_en: "About"
+    stretch: true                   # closes its row on 2- and 4-column screens
     # An info row's `value` is a literal sentence as often as it is a number, so both
     # halves take a variant — unlike a metric key elsewhere, which is a reference.
     items:
@@ -263,6 +231,49 @@ grid:
       - { label: "Mode", label_en: "Mode", value: "Demo (synthetic data)", value_en: "Demo (synthetic data)" }
       - { label: "Nodes", value: "3 GPU + gateway" }
       - { label: "Source", value: "config-driven YAML" }
+
+  # token usage — span 2 + stretch: on a 4-column screen it is widened to the whole row
+  - target: token
+    type: token
+    span: 2                         # the class boxes + spark need the room on wide screens
+    stretch: true                   # v2.23: may be widened to close a gap at the end of its row
+    clickable: detail               # click → /api/token_detail modal
+    front_max: 3                    # §12-step6: max class boxes on card front (modal shows all)
+    header_right: "LiteLLM · {token_speed} t/s"
+    hint: "Click the card for per-model detail"
+    hint_en: "Click the card for per-model detail"
+    detail_title: "Token Detail · by Model"
+    detail_title_en: "Token Detail · by Model"
+    columns:
+      model: "Model"
+      tokens: "Tokens"
+      # Actually-new tokens: prompt minus the KV-cached prefix, plus completion — what
+      # the backend really had to process. The bracketed percentage is that as a share
+      # of the class's own total; a low one means the class is mostly replayed context.
+      # Shown only when the queries/ files supply a net_tokens column (this file's
+      # neutral examples do not — see queries/token_summary.sql).
+      net: "Net"
+      requests: "Requests"
+      share: "Share"
+    # The EN half of `columns`, same keys. A bare string replaces just the label; an
+    # object is merged over the base entry (so it can also change `format`).
+    columns_en:
+      model: "Model"
+      tokens: "Tokens"
+      net: "Net"
+      requests: "Requests"
+      share: "Share"
+    labels:                              # §12-step2 patch: token card front labels
+      today: "Today"                     # stat-box "today" prefix
+      net: "Net"                         # stat-box "actually-new" prefix (today only;
+                                         # the all-time figure lives in the modal table)
+      requests_suffix: "req"             # stat-box request-count suffix
+      total: "Total"                     # the total/aggregate column label
+    labels_en:                           # the EN half, same keys
+      today: "Today"
+      net: "Net"
+      requests_suffix: "req"
+      total: "Total"
 
 history:                            # bottom — dual-pane compare
   type: compare                     # B10: N-pane compare (dual_compare still accepted)

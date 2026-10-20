@@ -20,6 +20,7 @@
 // Metrics (numbers; written to the timeseries, charted by the node modal). A metric whose
 // source does not exist for that node (llama.cpp has no request counter) is left out:
 //   <node>_reqs  <node>_tokens            total, from Prometheus counters
+//   <node>_emb_reqs  <node>_emb_tokens    embedding total (counters.embed_*), if declared
 //   <node>_ll_reqs  <node>_ll_tokens      via LiteLLM (chat endpoints)
 //   <node>_emb_ll_reqs  <node>_emb_ll_tokens   via LiteLLM (embed endpoints), if any
 //   unassigned_ll_reqs  unassigned_ll_tokens   LiteLLM rows that reached no known node
@@ -55,37 +56,63 @@ export function localDay(nowSec = Date.now() / 1000) {
   return { since, midnight: Math.floor(nowSec) - since };
 }
 
-/** Reset-aware sum of increments of one counter series since `midnight`. */
-export function counterIncrease(values, midnight) {
-  // values: [[ts, "v"], ...] sorted by ts
-  let base = null;
+/**
+ * Reset-aware sum of increments of one counter series since midnight.
+ * values: [[ts, "v"], ...] after midnight, sorted.  base: the series' last value at or
+ * before midnight (looked back up to 7 days), or null when the series never existed
+ * before midnight.
+ *   base known  -> every step from it counts; a drop means the server restarted and the
+ *                  new value counted from 0. (A server that was down at midnight gets base 0
+ *                  from promIncrease, so its first sample after boot counts in full.)
+ *   base null   -> a brand-new series (a new scrape target, e.g. an exporter added mid-day):
+ *                  nothing tells how much of its first value predates midnight, so the
+ *                  first sample is the baseline. That can undercount by whatever happened
+ *                  before the first scrape; counting a whole lifetime as "today" would be
+ *                  far worse.
+ */
+export function counterIncrease(values, base) {
   let inc = 0;
-  let prev = null;
-  for (const [ts, v] of values) {
+  let prev = base;
+  for (const [, v] of values) {
     const x = Number(v);
     if (!Number.isFinite(x)) continue;
-    if (ts <= midnight) { base = x; continue; }
-    if (prev === null) prev = base === null ? 0 : base;
+    if (prev === null) { prev = x; continue; }
     inc += x >= prev ? x - prev : x;   // a drop = restart: the new process counted x from 0
     prev = x;
   }
   return inc;
 }
 
+const seriesKey = (metric) => JSON.stringify(Object.entries(metric || {}).sort());
+
+async function promQuery(promUrl, q, time) {
+  const u = `${promUrl.replace(/\/+$/, '')}/api/v1/query?query=${encodeURIComponent(q)}&time=${time}`;
+  const r = await fetch(u, { signal: AbortSignal.timeout(PROM_TIMEOUT_MS) });
+  if (!r.ok) throw new Error(`prometheus HTTP ${r.status}`);
+  const j = await r.json();
+  if (j.status !== 'success') throw new Error(`prometheus: ${j.error || 'error'}`);
+  return j.data?.result || [];
+}
+
 async function promIncrease(promUrl, selectors, nowSec) {
   const { since, midnight } = localDay(nowSec);
-  // An hour before midnight so the baseline sample is in the window even if Prometheus
-  // missed a few scrapes around 00:00. No sample in that hour = the series is new today
-  // (a server that started after midnight), and it rightly starts from 0.
-  const range = since + 3600;
   let total = 0;
   for (const sel of selectors) {
-    const u = `${promUrl.replace(/\/+$/, '')}/api/v1/query?query=${encodeURIComponent(`${sel}[${range}s]`)}&time=${nowSec}`;
-    const r = await fetch(u, { signal: AbortSignal.timeout(PROM_TIMEOUT_MS) });
-    if (!r.ok) throw new Error(`prometheus HTTP ${r.status}`);
-    const j = await r.json();
-    if (j.status !== 'success') throw new Error(`prometheus: ${j.error || 'error'}`);
-    for (const s of j.data?.result || []) total += counterIncrease(s.values || [], midnight);
+    // Baseline per series (`@` pins the evaluation instant to midnight):
+    //   a sample in the hour before midnight -> that value (the server ran through 00:00);
+    //   seen in the past week but not in that hour -> 0: the server was down at midnight
+    //     (m110 is switched off overnight), so everything it counts now started after it
+    //     came back -- a days-old value is not a baseline for a restarted process;
+    //   never seen in the past week -> null: a brand-new series (counterIncrease).
+    // Raw samples after midnight: a range vector ending now.
+    const at = async (q) => new Map((await promQuery(promUrl, q, nowSec)).map((s) => [seriesKey(s.metric), Number(s.value?.[1])]));
+    const fresh = await at(`last_over_time(${sel}[1h] @ ${midnight})`);
+    const seen = await at(`last_over_time(${sel}[7d] @ ${midnight})`);
+    for (const s of await promQuery(promUrl, `${sel}[${since}s]`, nowSec)) {
+      const k = seriesKey(s.metric);
+      const b = Number.isFinite(fresh.get(k)) ? fresh.get(k) : (seen.has(k) ? 0 : null);
+      total += counterIncrease(s.values || [], b);
+    }
   }
   return Math.round(total);
 }
@@ -103,9 +130,12 @@ export async function collectNodes(target, env) {
   const counterInfo = {};
   for (const n of nodes) {
     const c = n.counters || {};
-    counterInfo[n.id] = { requests: !!(c.requests && c.requests.length), tokens: !!(c.tokens && c.tokens.length) };
+    counterInfo[n.id] = {
+      requests: !!(c.requests && c.requests.length), tokens: !!(c.tokens && c.tokens.length),
+      embed_requests: !!(c.embed_requests && c.embed_requests.length), embed_tokens: !!(c.embed_tokens && c.embed_tokens.length),
+    };
     if (!src.prometheus) continue;
-    for (const [kind, key] of [['requests', 'reqs'], ['tokens', 'tokens']]) {
+    for (const [kind, key] of [['requests', 'reqs'], ['tokens', 'tokens'], ['embed_requests', 'emb_reqs'], ['embed_tokens', 'emb_tokens']]) {
       if (!c[kind] || !c[kind].length) continue;
       try { put(`${n.id}_${key}`, await promIncrease(src.prometheus, c[kind], nowSec)); }
       catch (e) { counterInfo[n.id][`${kind}_error`] = String(e?.message || e); }

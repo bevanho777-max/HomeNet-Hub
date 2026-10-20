@@ -52,7 +52,7 @@ export function ring(label, m) {
 // B20: a metric normalized with `part_thresholds` arrives with `parts` — each
 // subfield already carries its own level, so render them as separately colored
 // spans instead of tinting the whole value one color.
-export function kvItem(label, m, tpl = null) {
+export function kvItem(label, m, tpl = null, extraCls = '') {
   const cls = lvClass(m.level);
   // v2.22 `parts_layout: table` (metrics.yaml): parts as a 2-column mini table -- label
   // left, number right -- so a many-part cell (the gateway's By Model) stays aligned
@@ -69,7 +69,8 @@ export function kvItem(label, m, tpl = null) {
   // the worst part). ok/cool keep the neutral frame, so a healthy card looks exactly
   // as it did before and a warm drive is the only thing that lights up.
   const edge = (m.level === 'warn' || m.level === 'danger') ? ` ${cls}` : '';
-  return `<div class="item${edge}"><span class="label">${esc(label)}</span>${body}</div>`;
+  const more = [table ? 'has-table' : '', extraCls].filter(Boolean).join(' ');
+  return `<div class="item${edge}${more ? ` ${more}` : ''}"><span class="label">${esc(label)}</span>${body}</div>`;
 }
 
 // Card model consumed by mountCards (matches the .24 shell-persist contract).

@@ -49,6 +49,50 @@ on screen is the one from `package.json`, and this file is what needs fixing.
 
 ---
 
+## v2.23.0 — 2026-10-21
+
+**卡片之间零空洞(可拉宽卡片补满整行)、格子内部对齐与留白、m26 的请求数与 embedding 用量有了服务端计数。**
+
+*Rebuild required — `server/` + `web/` changed. 新增 `agents/llama-log-exporter.py`;config.example 同步 `stretch`
+与 `embed_requests` / `embed_tokens`。*
+
+- **排版:显式排位,任何栏数都没有空洞**:layout 新增 `stretch: true`(可拉宽)。前端先按 span 逐行排卡;某行有剩余
+  栏位时,把这一行里可拉宽的卡按 span 比例加宽补满;这一行没有可拉宽的卡,就把后面放得下的卡搬上来;都不行才
+  加宽行尾那张卡。从不插入空白卡。推理节点卡仍独占一行。位置写成显式 `grid-row` / `grid-column`(CSS 的
+  `grid-auto-flow: dense` 去掉,span 类只作无 JS 时的后备)。私有 layout 顺序回到「六台机器在前、Token / Per-Project
+  在后」,Token Usage、Per-Project、网关卡设为可拉宽。
+- **被拉宽的卡内部跟着展开**:Token Usage 宽时四个框排成 2×2 放左边、柱状图在右边填满(柱高改为按比例,
+  卡片被行高拉高时柱子跟着变高,不再留一条空白);Per-Project 宽时把弹窗才有的列(7d / 30d / 首次 / 最近)也显示
+  出来,各列按内容分配宽度;机器卡宽时环在左、格子在右。
+- **格子统一**:全站格子同一套字号与内边距(标签 10.5px / 数值 15.5px / 9px 11px / 行高 20px)。机器卡格子改为
+  「标签左、数值右」一行,放不下时数值换到下一行右对齐;By Model 等表格型数值独占一行。同一行的机器卡,第 n 排
+  格子等高、标签基线对齐(按格子实际落位计算,不同列数的卡也对得上)。6 个格子的机器卡在卡宽 ≥520px 时排 3×2;
+  手机宽度下 By Model 占整排、排到最后,剩余格子为奇数时最后一个也占整排,格子网格不留半空的行。
+- **推理节点卡**:每栏六格按栏宽排 —— 三格一行(两行,按列分组:状态/延迟、Prefill/Decode、今日请求/tokens,
+  状态那列最窄),栏宽 ≥ ~700px 时六格一行。原来栏底下的灰字收进格子第二行:Prefill / Decode 格写「测量于 HH:MM」
+  或「最后 HH:MM · 上次读数」,今日请求 / tokens 格写「经 LiteLLM X · 嵌入 Y」。整张卡用 subgrid:三栏同一排格子
+  顶边、底边对齐,没有第二行字的格子也同高。
+- **表格对齐**:数字列右对齐(表头同)、文字列左对齐、全站 `tabular-nums`(表单控件也加上)。Token 明细弹窗的
+  数字列补上右对齐;Per-Project 卡与弹窗按列的 `format` 判断(`text` 的日期列左对齐);客户端面板的列表改成带表头
+  的表格(客户端 / Tokens / 净增 / 请求 / 今日)。
+- **其它卡型同一套格子规则**:info / service / stack 子卡的格子数按 `data-n` 选列数(3、5 个时先单列,
+  4 个在卡宽 ≥520px 时一行四格),stack 子卡自身就是尺寸容器;service 卡 model/role 的 12px 特例去掉(全站同一字号,
+  长模型名在格子里折行);格子数值允许在格子内折行,长文本不再撑出卡片。config.example(演示)把 About 设为可拉宽并
+  排到 Token 之前,4 栏屏上不再出现一张 2400px 宽、只有四行字的 About。
+- **手机宽度的弹窗与页头**:弹窗表格单元格不再折行;≤560px 时次要列让位(Token 明细的 Share、客户端的净增 / 今日),
+  客户端名过长省略(悬停看全名);仍放不下的 8 列 Per-Project 明细在自己的框里横向滑动、首列固定,不再撑出弹窗。
+  页头按钮与语言开关不再被挤成一字一行 / 被裁成「中 E」,窄屏时整行换行。
+- **m26 请求数(BACKLOG 18)**:新增 `agents/llama-log-exporter.py`,在 m26 上以只读方式数 llama-server 每个任务结束
+  时写进 journal 的 `slot release … n_tokens = K` 行,出 `homenet_llama_requests_total{unit}` 与 embedding 的
+  `homenet_llama_tokens_total`(不碰推理服务)。`inference_nodes` 的 `counters` 新增 `embed_requests` /
+  `embed_tokens`;每条序列的午夜基线:午夜前 1 小时内有样本 → 用它;过去 7 天出现过但午夜前后不在
+  (机器夜里关着,如 m110)→ 从 0 算;7 天内从没出现过的新序列(新加的 exporter)→ 取当天第一个样本。节点历史弹窗多一条「Embedding(服务端计数)」。
+  核对:exporter 与日志手数全量一致(27b 83/83,embedding 110/110 请求、1132/1132 tokens);窗口
+  00:28:57–01:00:42 日志 = Prometheus 增量 = 卡上数字(27b 10;embedding 5 请求 / 70 tokens)。
+- **自动检查**:390 / 1280 / 1440 / 1920 / 2560 × 中英文,用真实 payload 跑溢出、越界、卡片与卡内元素重叠、页面横滚、
+  网格空洞、对齐(同行卡片底边、推理节点三栏格子顶/底边、所有表格数字列右边缘)、留白(格子最宽一行文字 < 25%),
+  页头与三个弹窗(Token 明细、Per-Project 明细、客户端)也在检查范围内,全部为 0 才部署。
+
 ## v2.22.0 — 2026-10-20
 
 **推理节点的用量改从推理服务自己的计数器统计(直连的请求也算);宽屏版面重做:按屏宽分 1–4 栏、

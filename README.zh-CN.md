@@ -533,6 +533,12 @@ docker compose restart homenet-hub
 
 在 `config/layout.yaml` 里给它加一张卡,保存,约 3 秒内出现。
 
+**llama.cpp 的请求数(可选)。** llama-server 的 `/metrics` 只有 token 计数器、没有请求计数器,
+`--embedding` 服务更是什么都不计。`agents/llama-log-exporter.py`(只用标准库、只读)数每个任务结束时
+写进 journal 的那一行,给 Prometheus 提供 `homenet_llama_requests_total{unit}`(标了 `:embed` 的单元再加
+输入 token 数);把 `inference_nodes` 节点的 `counters` 指过去即可(见 `config.example/targets.yaml`)。
+它从不碰推理服务本身。
+
 ---
 
 ## 环境变量

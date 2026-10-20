@@ -187,6 +187,12 @@ const ZH = {
   cli_revoked: '已撤销',
   cli_usage: (tok, net, reqs) => `${tok} tok · 净 ${net} · ${reqs} 次`,
   cli_today: (n) => `今日 ${n} 次`,
+  // v2.23 client list as a table
+  cli_col_name: '客户端',
+  cli_col_tokens: 'Tokens',
+  cli_col_net: '净增',
+  cli_col_reqs: '请求',
+  cli_col_today: '今日',
   cli_empty: '还没有客户端 key。',
   cli_unattributed: (keys, reqs) => `另有 ${keys} 个无法归属的 key 值(鉴权失败/扫描噪声),`
     + `共 ${reqs} 次请求 —— 出于安全不显示内容。`,
@@ -310,6 +316,7 @@ const ZH = {
   node_series_total: '总计（服务端计数）',
   node_series_ll: '经 LiteLLM',
   node_series_emb_ll: 'Embedding（经 LiteLLM）',
+  node_series_emb_total: 'Embedding（服务端计数）',
   node_via_ll: (r, k) => `其中经 litellm：${r} 请求 / ${k} tokens`,
   node_emb_ll: (r, k) => `embedding（经 litellm）· ${r} 请求 · ${k} tokens`,
   node_no_req_counter: '服务端没有请求计数器',
@@ -317,6 +324,10 @@ const ZH = {
   node_route_stale: '待移除',
   node_route_pending: '未接入',
   node_public_via: (d) => `对外 ${d}`,
+  // v2.23 cell second lines (inference nodes card)
+  node_sub_last: (when, v) => `最后 ${when} · ${v}`,
+  node_sub_ll: (n) => `经 LiteLLM ${n}`,
+  node_sub_emb: (n) => `嵌入 ${n}`,
 
   // table card
   table_more: '查看全部',
@@ -455,6 +466,11 @@ const EN = {
   cli_revoked: 'revoked',
   cli_usage: (tok, net, reqs) => `${tok} tok · net ${net} · ${reqs} reqs`,
   cli_today: (n) => `${n} today`,
+  cli_col_name: 'Client',
+  cli_col_tokens: 'Tokens',
+  cli_col_net: 'Net',
+  cli_col_reqs: 'Requests',
+  cli_col_today: 'Today',
   cli_empty: 'No client keys yet.',
   cli_unattributed: (keys, reqs) => `Another ${keys} key value(s) could not be attributed `
     + `(failed auth / scanner noise), ${reqs} requests in total — their content is withheld.`,
@@ -558,7 +574,7 @@ const EN = {
   node_latency: 'Latency',
   node_prefill: 'Prefill t/s',
   node_decode: 'Decode t/s',
-  node_reqs: 'Requests today',
+  node_reqs: 'Reqs today',
   node_tokens: 'Tokens today',
   node_public: 'Public',
   node_unrouted: 'not in litellm',
@@ -576,6 +592,7 @@ const EN = {
   node_series_total: 'Total (server counters)',
   node_series_ll: 'Via LiteLLM',
   node_series_emb_ll: 'Embedding (via LiteLLM)',
+  node_series_emb_total: 'Embedding (server counters)',
   node_via_ll: (r, k) => `Via LiteLLM: ${r} req / ${k} tokens`,
   node_emb_ll: (r, k) => `embedding (via LiteLLM) · ${r} req · ${k} tokens`,
   node_no_req_counter: 'no request counter on the server',
@@ -583,6 +600,9 @@ const EN = {
   node_route_stale: 'to be removed',
   node_route_pending: 'not connected',
   node_public_via: (d) => `Public · ${d}`,
+  node_sub_last: (when, v) => `Last ${when} · ${v}`,
+  node_sub_ll: (n) => `via LiteLLM ${n}`,
+  node_sub_emb: (n) => `emb ${n}`,
 
   table_more: 'View all',
   table_count: (n) => ` (${n} total)`,

@@ -56,18 +56,25 @@ export function renderToken(gridCard, target, snap) {
       <div class="tk-sub">${esc(c.requests ?? 0)} ${esc(reqLabel)}</div>
     </div>`).join('');
 
+  // v2.23: bar heights are fractions (--f), not pixels, so the chart grows with the space it
+  // is given -- a card stretched to its row's height gets taller bars, not a blank strip.
   const max = Math.max(1, ...(tk.spark || []).map((s) => s.value || 0));
   const sparkHtml = (tk.spark || []).map((s) => {
-    const h = Math.round(((s.value || 0) / max) * 58) + 4;
-    return `<div class="col"><div class="n">${esc(s.display)}</div><div class="b" style="height:${h}px"></div><div class="d">${esc(s.label)}</div></div>`;
+    const f = ((s.value || 0) / max).toFixed(3);
+    return `<div class="col"><div class="bw"><div class="n">${esc(s.display)}</div><div class="b" style="--f:${f}"></div></div><div class="d">${esc(s.label)}</div></div>`;
   }).join('');
 
   // click hint is externalized (gridCard.hint); shown only when clickable + set.
   const hintText = cv(gridCard, 'hint');
   const note = (gridCard.clickable === 'detail' && hintText)
     ? `<div class="note">${esc(hintText)}</div>` : '';
-  const body = `<div class="tk-grid" style="--tk-n:${cols.length}">${colHtml}</div>`
+  // Boxes per row in the compact arrangements (narrow card, or beside the chart on a wide
+  // one): four boxes go 2x2, fewer stay on one row -- never a 2+1 with a hole.
+  const n = cols.length;
+  const compactCols = n <= 3 ? n : Math.ceil(n / 2);
+  const body = `<div class="tk-main"><div class="tk-grid" style="--tk-n:${n};--tk-c:${compactCols}">${colHtml}</div>`
     + (sparkHtml ? `<div class="spark">${sparkHtml}</div>` : '')
+    + '</div>'
     + note;
 
   return card({ key: target.id, title, tag, body, accent, kind: 'token', clickable: gridCard.clickable === 'detail' });

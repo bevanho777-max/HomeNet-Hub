@@ -78,9 +78,13 @@ function mountCards(containerId, cards) {
     el.classList.toggle('clickable', !!c.clickable);
     el.classList.toggle('stale', !!c.stale);
     el.classList.toggle('card-wide', !!c.wide);   // v2.20: full-row card (nodes)
-    // v2.22 layout `span`: 2 = two columns (whole row when there is only one), full = row
+    // v2.22 layout `span`: 2 = two columns (whole row when there is only one), full = row.
+    // v2.23 `stretch`: the packer may widen this card to close a gap at the end of its row.
     el.classList.toggle('span-2', String(c.span) === '2');
     el.classList.toggle('span-full', c.span === 'full');
+    el.dataset.span = c.span != null ? String(c.span) : (c.wide ? 'full' : '1');
+    el.dataset.stretch = c.stretch ? '1' : '0';
+    if (c.kind && el.dataset.kind !== c.kind) el.dataset.kind = c.kind;   // CSS hooks per card type
     // B23: dispatch by card type. Every clickable card used to open the token modal,
     // which was fine while the token card was the only one; a machine card needs its
     // own. `onclick` (not addEventListener) so a re-render replaces the handler
@@ -139,12 +143,24 @@ function updateBodyKeepRings(body, newHTML) {
       const nl = nr.parentElement?.querySelector('.ring-label');
       if (ol && nl && ol.textContent !== nl.textContent) ol.textContent = nl.textContent;
     });
+    // Keep the .rings box itself (moving it would restart the comets) and swap in the new
+    // markup around it, one level at a time up to the card body -- v2.23 machine cards
+    // nest the rings in a .mach wrapper, and whatever sits before them (the missing-GPU
+    // warning) has to update too, not only what follows.
     const oldBox = body.querySelector('.rings');
     const newBox = tmp.querySelector('.rings');
-    if (oldBox && newBox) {
-      while (oldBox.nextSibling) body.removeChild(oldBox.nextSibling);
-      let n = newBox.nextSibling;
-      while (n) { const next = n.nextSibling; body.appendChild(n); n = next; }
+    const depth = (el, root) => { let d = 0; for (let x = el; x && x !== root; x = x.parentNode) d += 1; return d; };
+    if (oldBox && newBox && body.contains(oldBox) && depth(oldBox, body) === depth(newBox, tmp)) {
+      let o = oldBox, nw = newBox;
+      while (o !== body) {
+        const op = o.parentNode, np = nw.parentNode;
+        while (o.nextSibling) op.removeChild(o.nextSibling);
+        while (nw.nextSibling) op.appendChild(nw.nextSibling);
+        while (o.previousSibling) op.removeChild(o.previousSibling);
+        while (np.firstChild !== nw) op.insertBefore(np.firstChild, o);
+        if (op !== body && op.className !== np.className) op.className = np.className;
+        o = op; nw = np;
+      }
       return;
     }
   }
@@ -197,6 +213,114 @@ function autoColor(target, snap, cardType) {
   return roles[role] || '';
 }
 
+// ── v2.23 grid packing: explicit rows, never a hole ───────────────────────
+// CSS decides HOW MANY columns (1/2/3/4 by screen width, see .grid in tokens.css); this
+// decides WHERE each card goes. Rows are filled in config order by span. A row that ends
+// short is closed by (1) widening the row's `stretch` cards in proportion to their span,
+// or, when it has none, (2) pulling up later cards that fit, and only then (3) widening
+// its last card -- so no column count leaves an empty cell, and no filler card is ever
+// inserted. Full-width cards (nodes; Dual Compare lives outside the grid) take a row alone.
+// Placement is written as explicit grid-row / grid-column, so CSS `span` classes are just
+// the no-JS fallback.
+export function packLayout(cards, cols) {
+  const pending = cards.map((c) => ({ ...c, w: c.full ? cols : Math.min(c.span || 1, cols) }));
+  const rows = [];
+  const widen = (list, free) => {
+    const total = list.reduce((a, r) => a + r.w, 0);
+    let given = 0;
+    const shares = list.map((r) => { const x = (free * r.w) / total; const f = Math.floor(x); given += f; return { r, f, rem: x - f }; });
+    let left = free - given;
+    shares.sort((a, b) => b.rem - a.rem).forEach((sh) => { if (left > 0) { sh.f += 1; left -= 1; } });
+    shares.forEach((sh) => { sh.r.w += sh.f; });
+  };
+  while (pending.length) {
+    const row = [];
+    let used = 0;
+    while (pending.length && used + pending[0].w <= cols) { const it = pending.shift(); row.push(it); used += it.w; }
+    let free = cols - used;
+    if (free > 0) {
+      let st = row.filter((r) => r.stretch);
+      if (!st.length) {
+        for (let i = 0; i < pending.length && free > 0;) {
+          const it = pending[i];
+          if (!it.full && it.w <= free) { row.push(it); free -= it.w; pending.splice(i, 1); } else i += 1;
+        }
+        st = row.filter((r) => r.stretch);
+      }
+      if (free > 0) {
+        if (st.length) widen(st, free);
+        else { row[row.length - 1].w += free; row[row.length - 1].fallback = true; }
+      }
+    }
+    rows.push(row);
+  }
+  return rows;
+}
+
+function packGrid() {
+  const grid = document.getElementById('grid');
+  if (!grid) return;
+  const cols = parseInt(getComputedStyle(grid).getPropertyValue('--cols'), 10) || 1;
+  const els = [...grid.children].filter((el) => el.classList.contains('card'));
+  const rows = packLayout(els.map((el) => ({
+    el, full: el.dataset.span === 'full', span: parseInt(el.dataset.span, 10) || 1, stretch: el.dataset.stretch === '1',
+  })), cols);
+  rows.forEach((row, ri) => {
+    let col = 1;
+    for (const it of row) {
+      const r = String(ri + 1), c = `${col} / span ${it.w}`;
+      if (it.el.style.gridRow !== r) it.el.style.gridRow = r;
+      if (it.el.style.gridColumn !== c) it.el.style.gridColumn = c;
+      it.el.dataset.w = String(it.w);
+      it.el.classList.toggle('packed-fallback', !!it.fallback);
+      col += it.w;
+    }
+  });
+}
+
+// v2.23: cards side by side in one grid row line their key/value rows up -- the n-th row
+// of cells sits at the same height in every card (labels and values on one baseline),
+// even when one card's cell holds two lines (a disk-temperature list, the By Model table).
+// Only cards whose cell grids have the same column count are matched.
+function alignKvRows() {
+  const grid = document.getElementById('grid');
+  if (!grid) return;
+  const kvs = [...grid.querySelectorAll(':scope > .card .card-body .mach > .kv')];
+  kvs.forEach((kv) => { kv.style.gridTemplateRows = ''; });
+  const groups = new Map();
+  for (const kv of kvs) {
+    const row = kv.closest('.card').style.gridRow;
+    if (!groups.has(row)) groups.set(row, []);
+    groups.get(row).push(kv);
+  }
+  for (const list of groups.values()) {
+    if (list.length < 2) continue;
+    // n-th cell row of every card in the grid row gets the tallest n-th row's height,
+    // whatever each card's column count (a 4-cell card in 2 columns still has 2 rows that
+    // line up with its 6-cell neighbours' 2 rows of 3).
+    // rows are read from where the cells actually landed (a narrow card moves By Model to
+    // the end and lets it span the row, so the DOM index says nothing about the row)
+    const heights = list.map((kv) => {
+      const rows = new Map();
+      for (const it of kv.children) {
+        const r = it.getBoundingClientRect();
+        const top = Math.round(r.top);
+        rows.set(top, Math.max(rows.get(top) || 0, r.height));
+      }
+      return [...rows.entries()].sort((a, b) => a[0] - b[0]).map(([, h]) => h);
+    });
+    const n = Math.max(...heights.map((h) => h.length));
+    const max = Array.from({ length: n }, (_, r) => Math.max(...heights.map((h) => h[r] || 0)));
+    list.forEach((kv, i) => { kv.style.gridTemplateRows = heights[i].map((_, r) => `${Math.ceil(max[r])}px`).join(' '); });
+  }
+}
+
+let packRaf = 0;
+window.addEventListener('resize', () => {
+  cancelAnimationFrame(packRaf);
+  packRaf = requestAnimationFrame(() => { packGrid(); alignKvRows(); });
+});
+
 // B12-row: a row-stack lays out horizontally only when its measured width meets
 // the threshold (data-min = min_row_width, else children × 180px); otherwise it
 // wraps back to column. CSS container queries can't take a configurable px value,
@@ -236,7 +360,10 @@ function render() {
     else if (gc.type === 'info') cards.push(renderInfo(gc, target, snap));
     else if (gc.type === 'table') cards.push(renderTable(gc, target, snap));
     else if (gc.type === 'nodes') cards.push(renderNodes(gc, (id) => ({ target: targetById(id), snap: lastSnap[id] })));
-    if (gc.span != null && cards.length > before) cards[cards.length - 1].span = gc.span;
+    if (cards.length > before) {
+      if (gc.span != null) cards[cards.length - 1].span = gc.span;
+      if (gc.stretch) cards[cards.length - 1].stretch = true;
+    }
   }
   // P2: an empty grid is a normal state now — it is what a cleared demo board looks
   // like, and what a fresh install looks like before the first target is added. Say so
@@ -248,6 +375,8 @@ function render() {
   } else {
     mountCards('grid', cards);
     layoutStacks();
+    packGrid();
+    alignKvRows();
   }
 
   // The banner reads the same config payload everything else does, so it appears and
@@ -487,11 +616,13 @@ async function loadTokenDetail() {
     // an older queries/ file or the demo collector yields null, and a blank column
     // would read as "zero new tokens" rather than "not measured".
     const hasNet = (j.table || []).some((row) => row.net != null);
-    const netTh = hasNet ? `<th>${th('net', 'Net')}</th>` : '';
-    tbl.innerHTML = `<table class="tbl"><thead><tr><th>${th('model', 'Model')}</th><th>${th('tokens', 'Tokens')}</th>${netTh}<th>${th('requests', 'Requests')}</th><th>${th('share', 'Share')}</th></tr></thead><tbody>${
-      (j.table || []).map((row) => `<tr><td><span class="sw" style="background:${esc(row.color)}"></span>${esc(row.label)}</td><td>${esc(row.tokens)}</td>${
-        hasNet ? `<td>${esc(row.net ?? '—')}${row.net_pct != null ? ` (${esc(row.net_pct)}%)` : ''}</td>` : ''
-      }<td>${esc(row.requests)}</td><td>${esc(row.share)}%</td></tr>`).join('')
+    // v2.23: figures right-aligned under right-aligned headers (.num), the model name left.
+    const netTh = hasNet ? `<th class="num">${th('net', 'Net')}</th>` : '';
+    // .opt columns step aside on a phone-width modal (tokens.css) so the rest fit unclipped.
+    tbl.innerHTML = `<table class="tbl"><thead><tr><th>${th('model', 'Model')}</th><th class="num">${th('tokens', 'Tokens')}</th>${netTh}<th class="num">${th('requests', 'Requests')}</th><th class="num opt">${th('share', 'Share')}</th></tr></thead><tbody>${
+      (j.table || []).map((row) => `<tr><td><span class="sw" style="background:${esc(row.color)}"></span>${esc(row.label)}</td><td class="num">${esc(row.tokens)}</td>${
+        hasNet ? `<td class="num">${esc(row.net ?? '—')}${row.net_pct != null ? ` <span class="pct">${esc(row.net_pct)}%</span>` : ''}</td>` : ''
+      }<td class="num">${esc(row.requests)}</td><td class="num opt">${esc(row.share)}%</td></tr>`).join('')
     }</tbody></table>`;
   } catch (e) {
     tbl.innerHTML = `<div class="note">Detail request failed</div>`;

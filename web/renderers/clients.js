@@ -65,23 +65,26 @@ async function refresh() {
     }
     if (j.error) setStatus(t('cli_api_down', esc(j.error)), 'warn');
     const rows = j.clients || [];
-    box.innerHTML = rows.length ? rows.map((c) => {
-      const u = c.usage || {};
-      // A system row (the proxy master key) has no key row to delete, and a revoked one
-      // is already gone — both keep their usage on screen but lose the button.
-      const del = (c.system || c.revoked)
-        ? `<span class="addChip">${esc(c.system ? t('cli_system') : t('cli_revoked'))}</span>`
-        : `<button type="button" class="addDel">${esc(t('del'))}</button>`;
-      return `
-      <div class="addItem" data-id="${esc(c.id)}">
-        <span class="addDot ${c.revoked ? '' : 'ok'}"></span>
-        <b>${esc(c.name)}</b>
-        <span class="addMuted">${esc(t('cli_usage', compact(u.tokens_total), compact(u.net_total), u.requests_total ?? 0))}</span>
-        ${u.requests_today ? `<span class="addChip">${esc(t('cli_today', u.requests_today))}</span>` : ''}
-        ${del}
-      </div>`;
-    }).join('') : `<div class="addMuted">${esc(t('cli_empty'))}</div>`;
-    box.querySelectorAll('.addDel').forEach((b) => { b.onclick = () => removeOne(b.closest('.addItem')); });
+    // v2.23: a real table -- name left, the figures right-aligned in their own columns
+    // under right-aligned headers, so a column of token counts reads down one edge.
+    box.innerHTML = rows.length ? `<table class="tbl cliTbl"><thead><tr>`
+      + `<th>${esc(t('cli_col_name'))}</th><th class="num">${esc(t('cli_col_tokens'))}</th>`
+      + `<th class="num opt">${esc(t('cli_col_net'))}</th><th class="num">${esc(t('cli_col_reqs'))}</th>`
+      + `<th class="num opt">${esc(t('cli_col_today'))}</th><th></th></tr></thead><tbody>${rows.map((c) => {
+        const u = c.usage || {};
+        // A system row (the proxy master key) has no key row to delete, and a revoked one
+        // is already gone — both keep their usage on screen but lose the button.
+        const del = (c.system || c.revoked)
+          ? `<span class="addChip">${esc(c.system ? t('cli_system') : t('cli_revoked'))}</span>`
+          : `<button type="button" class="addDel">${esc(t('del'))}</button>`;
+        return `<tr class="cliRow" data-id="${esc(c.id)}">`
+          + `<td class="cliName" title="${esc(c.name)}"><span class="addDot ${c.revoked ? '' : 'ok'}"></span><b>${esc(c.name)}</b></td>`
+          + `<td class="num">${esc(compact(u.tokens_total))}</td><td class="num opt">${esc(compact(u.net_total))}</td>`
+          + `<td class="num">${esc(Number(u.requests_total ?? 0).toLocaleString('en-US'))}</td>`
+          + `<td class="num opt">${esc(u.requests_today ? Number(u.requests_today).toLocaleString('en-US') : '—')}</td>`
+          + `<td class="cliAct">${del}</td></tr>`;
+      }).join('')}</tbody></table>` : `<div class="addMuted">${esc(t('cli_empty'))}</div>`;
+    box.querySelectorAll('.addDel').forEach((b) => { b.onclick = () => removeOne(b.closest('.cliRow')); });
     // Rejected-auth traffic, counted but deliberately not named: that column of the
     // spend table holds whatever a caller sent as its key, including things people
     // pasted by mistake, so the server never echoes an unrecognised value.
