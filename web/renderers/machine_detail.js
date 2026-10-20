@@ -414,19 +414,25 @@ async function loadNode(canvas, legend) {
     const sOpts = { metrics: m, height: 190, emptyText: noSpeed, maxGapSec };
     drawMulti(canvas, sp, legend, { ...sOpts, subs: [{ k: 'prefill_speed', color: '#6aa9ff', axis: 'R' }] });
     drawMulti(second.canvas, sp, second.legend, { ...sOpts, subs: [{ k: 'decode_speed', color: '#5eead4', axis: 'R' }] });
+    // v2.22: total (the server's own counters) against the LiteLLM share; a series the
+    // node has no source for simply never appears (drawMulti skips missing keys).
     const p = col.node;
     const um = {
       ...m,
-      [`${p}_reqs`]: { label: t('node_series_chat') }, [`${p}_emb_reqs`]: { label: t('node_series_embed') },
-      [`${p}_tokens`]: { label: t('node_series_chat') }, [`${p}_emb_tokens`]: { label: t('node_series_embed') },
+      [`${p}_reqs`]: { label: t('node_series_total') }, [`${p}_ll_reqs`]: { label: t('node_series_ll') },
+      [`${p}_emb_ll_reqs`]: { label: t('node_series_emb_ll') },
+      [`${p}_tokens`]: { label: t('node_series_total') }, [`${p}_ll_tokens`]: { label: t('node_series_ll') },
+      [`${p}_emb_ll_tokens`]: { label: t('node_series_emb_ll') },
     };
     const uOpts = { metrics: um, height: 170, emptyText: t('chart_no_data_range', range) };
     extra[0].title.textContent = t('node_panel_reqs');
-    drawMulti(extra[0].canvas, us, extra[0].legend, { ...uOpts,
-      subs: [{ k: `${p}_reqs`, color: '#f7c948', axis: 'R' }, { k: `${p}_emb_reqs`, color: '#b18cff', axis: 'R' }] });
+    drawMulti(extra[0].canvas, us, extra[0].legend, { ...uOpts, subs: [
+      { k: `${p}_reqs`, color: '#f7c948', axis: 'R' }, { k: `${p}_ll_reqs`, color: '#5eead4', axis: 'R' },
+      { k: `${p}_emb_ll_reqs`, color: '#b18cff', axis: 'R' }] });
     extra[1].title.textContent = t('node_panel_tokens');
-    drawMulti(extra[1].canvas, us, extra[1].legend, { ...uOpts,
-      subs: [{ k: `${p}_tokens`, color: '#ff9d5c', axis: 'R' }, { k: `${p}_emb_tokens`, color: '#b18cff', axis: 'R' }] });
+    drawMulti(extra[1].canvas, us, extra[1].legend, { ...uOpts, subs: [
+      { k: `${p}_tokens`, color: '#ff9d5c', axis: 'R' }, { k: `${p}_ll_tokens`, color: '#5eead4', axis: 'R' },
+      { k: `${p}_emb_ll_tokens`, color: '#b18cff', axis: 'R' }] });
     clearError();
   } catch (e) {
     if (inflight !== ctrl) return;

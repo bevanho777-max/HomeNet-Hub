@@ -106,6 +106,9 @@ metrics:
   # then silently dropped.
   reqs_by_model:
     label: "By Model"
+    # parts_layout: table (v2.22) -- the parts as a two-column mini table, label left and
+    # number right, instead of one wrapping line. Good for cells with 4+ labelled parts.
+    parts_layout: table
     part_thresholds: {}
     format: "{m1} {m2} {m3} {m4}"
 

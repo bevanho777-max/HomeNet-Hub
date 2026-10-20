@@ -66,7 +66,7 @@ export function renderToken(gridCard, target, snap) {
   const hintText = cv(gridCard, 'hint');
   const note = (gridCard.clickable === 'detail' && hintText)
     ? `<div class="note">${esc(hintText)}</div>` : '';
-  const body = `<div class="tk-grid" style="grid-template-columns:repeat(${cols.length},1fr)">${colHtml}</div>`
+  const body = `<div class="tk-grid" style="--tk-n:${cols.length}">${colHtml}</div>`
     + (sparkHtml ? `<div class="spark">${sparkHtml}</div>` : '')
     + note;
 

@@ -78,6 +78,9 @@ function mountCards(containerId, cards) {
     el.classList.toggle('clickable', !!c.clickable);
     el.classList.toggle('stale', !!c.stale);
     el.classList.toggle('card-wide', !!c.wide);   // v2.20: full-row card (nodes)
+    // v2.22 layout `span`: 2 = two columns (whole row when there is only one), full = row
+    el.classList.toggle('span-2', String(c.span) === '2');
+    el.classList.toggle('span-full', c.span === 'full');
     // B23: dispatch by card type. Every clickable card used to open the token modal,
     // which was fine while the token card was the only one; a machine card needs its
     // own. `onclick` (not addEventListener) so a re-render replaces the handler
@@ -219,6 +222,7 @@ function render() {
   // cards
   const cards = [];
   for (const gc of CONFIG.layout?.grid || []) {
+    const before = cards.length;
     const raw = targetById(gc.target);
     const snap = lastSnap[gc.target];
     const target = { ...raw, color: autoColor(raw, snap, gc.type) }; // B14: resolve auto/omitted color
@@ -232,6 +236,7 @@ function render() {
     else if (gc.type === 'info') cards.push(renderInfo(gc, target, snap));
     else if (gc.type === 'table') cards.push(renderTable(gc, target, snap));
     else if (gc.type === 'nodes') cards.push(renderNodes(gc, (id) => ({ target: targetById(id), snap: lastSnap[id] })));
+    if (gc.span != null && cards.length > before) cards[cards.length - 1].span = gc.span;
   }
   // P2: an empty grid is a normal state now — it is what a cleared demo board looks
   // like, and what a fresh install looks like before the first target is added. Say so

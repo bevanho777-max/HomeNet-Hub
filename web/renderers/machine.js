@@ -20,7 +20,7 @@ export function renderMachine(gridCard, target, snap, metrics) {
   // both languages rather than falling back to the bare key.
   const label = (k) => cv(metrics?.[k], 'label') || k;
   const rings = (gridCard.rings || []).map((k) => ring(label(k), mget(snap, k))).join('');
-  const items = (gridCard.items || []).map((k) => kvItem(label(k), mget(snap, k))).join('');
+  const items = (gridCard.items || []).map((k) => kvItem(label(k), mget(snap, k), metrics?.[k])).join('');
 
   // header_right: 'badge' → target.badge, else a metric key → its display.
   // B13: an array combines parts with a vertical hairline, e.g. [badge, uptime]

@@ -73,7 +73,8 @@ export function renderTable(gridCard, target, snap) {
   // First column is the row's identity (left-aligned); the rest are figures.
   const head = cols.map((c, i) => `<th${i ? ' class="num"' : ''}>${esc(c.label)}</th>`).join('');
   const body = shown.map((r) => `<tr>${
-    cols.map((c, i) => `<td${i ? ' class="num"' : ''}>${esc(cell(r[c.key], c.format))}</td>`).join('')
+    // v2.22: the identity cell may ellipsise on a narrow card; its title carries the full text
+    cols.map((c, i) => { const v = esc(cell(r[c.key], c.format)); return i ? `<td class="num">${v}</td>` : `<td title="${v}">${v}</td>`; }).join('')
   }</tr>`).join('');
 
   // Two different notes, and only one of them is a call to action. `hint` is the card's

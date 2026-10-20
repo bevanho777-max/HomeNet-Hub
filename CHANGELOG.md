@@ -49,6 +49,48 @@ on screen is the one from `package.json`, and this file is what needs fixing.
 
 ---
 
+## v2.22.0 — 2026-10-20
+
+**推理节点的用量改从推理服务自己的计数器统计(直连的请求也算);宽屏版面重做:按屏宽分 1–4 栏、
+卡片可占栏、卡片内部按自身宽度调整。**
+
+*Rebuild required — `server/` + `web/` changed. `config/queries/node_usage.sql` 改写(config.example 同步)。*
+
+- **推理节点卡的今日用量 = 机器的真实总量**:`inference_nodes` 新增 `counters`(Prometheus 计数器选择器)与
+  source 的 `prometheus`。按北京时间自然日逐样本累加原始样本(不是 `increase()` 的外推):计数器回落 =
+  服务重启、新值从 0 计起,所以重启既不漏算也不变负;零点前一小时内的最后一个样本作基准,零点后才出现的
+  序列从 0 计。tokens = 实际计算的 prompt + 命中缓存的 prompt + 生成,与 LiteLLM 的 prompt+completion
+  同口径。没有请求计数器的服务(llama.cpp)不显示 0,而是写明「服务端没有请求计数器」。
+- **「其中经 litellm」灰色小字**:改从 `LiteLLM_SpendLogs` 按北京日、按 `api_base` 的 host:port 精确归属节点
+  (`endpoints` / 新的 `embed_endpoints`),不再用模型名正则;chat 与 embedding 分开。
+- **节点历史**:总量与经 litellm 的量都进时序库,节点弹窗的请求 / tokens 面板画「总计 vs 经 LiteLLM」两条线。
+- **实例标注**:栏标题写「litellm 4001」;实例新增 `serves`(目标架构),不在其中的实时路由灰色删除线并标
+  「待移除 / to be removed」,目标里有但还没接上的标「未接入」。`public` 改为域名简称,显示「对外 lm2 /
+  Public · lm2」。
+- **宽屏版面**:
+  - 网格按屏宽固定 1 / 2 / 3 / 4 栏(<700 / 700–1200 / 1200–1800 / ≥1800px),整页居中、最宽 2400px;
+    `grid-auto-flow: dense`,同一行等高。原来 `auto-fit` 在 2000px 屏上排出 6 栏、每卡约 310px。
+  - layout 新配置项 `span: 1 | 2 | full`(默认 1,与原行为一致);`span: 2` 在只有一栏时占满整行。
+  - 卡片 `container-type: inline-size`,内部按卡片自身宽度调整:Token Usage 的框用 `--tk-n` 列、窄卡
+    两列换行(原来 4 个框挤在 3 列里,Total 溢出卡片);Per-Project 表改为自动布局 —— 数字列永不截断,
+    只有项目名过长时省略并带 title;推理节点卡按卡宽(≤900px)上下排列。
+  - metrics 新选项 `parts_layout: table`:网关卡 By Model 的五项排成两栏小表(标签左、数字右对齐),
+    窄卡时这一格占满整行。
+  - 圆环流光不再用 `transform: rotate` 转整个伪元素(旋转方块的外接框会超出圆环,形成真实的横向溢出),
+    改用 `@property --comet` 转渐变起始角,画面不变。
+- 验证:无头浏览器在 390 / 1280 / 1440 / 1920 / 2560 宽 × 中英文下自动检查「scrollWidth > clientWidth、
+  元素超出卡片、卡片互相重叠、整页横向滚动、同行不等高」,生产面板(用真实 agent 数据)与 config.example
+  演示面板全部为 0。
+- 运维(不在仓库里,部署前 `.backup` 为 `data/homenet.db.pre-v2.22.0`):删除 `nodes` 目标在 v2.22 之前写入的
+  1,212 个样本(22:08–23:48)。`<node>_reqs / _tokens` 的含义变了(原为经 litellm、UTC 日,现为服务端总量、
+  北京日),而且 23:13 改写查询文件后旧代码热读新查询、写进了一段假的 0 —— 留着会让节点弹窗的「总计」线前后
+  口径不一。其他目标的样本未动(同时段 69,607 个,删除前后一致)。
+- 实配(私有):Token Usage 卡改名「Token Usage · 经 LiteLLM / via LiteLLM」并在说明里写明;推理节点卡
+  m110 接上(Strata 8082、Speed·110);token / Per-Project `span: 2`,推理节点 `span: full`;By Model
+  `parts_layout: table`。
+
+---
+
 ## v2.21.0 — 2026-10-20
 
 **多卡卡面只显示合计;网关卡按模型拆成五槽、三个 litellm 实例的请求量都算进来。**

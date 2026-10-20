@@ -84,11 +84,21 @@ export function renderNodes(gc, resolve) {
     const state = nodeState(probeT, probeS);
     const name = cv(col, 'name') || col.node;
 
-    // which instance(s) route here, as discovered from litellm itself (not configured)
+    // which instance(s) route here, as discovered from litellm itself (not configured).
+    // "litellm 4002" = the route the architecture intends; a live route to an instance
+    // that is not meant to serve this node is struck through and marked "to be removed";
+    // an intended route that is not live yet is greyed "not connected".
     const route = meta?.extra?.nodes?.[col.node];
     let port = '—';
-    if (route && Array.isArray(route.ports)) port = route.ports.length ? route.ports.join(' / ') : t('node_unrouted');
-    const pub = route?.public ? `<span class="node-pub">${esc(t('node_public'))}</span>` : '';
+    if (route && Array.isArray(route.routes)) {
+      port = route.routes.length ? route.routes.map((r) => {
+        const lbl = esc(t('node_litellm_port', r.port));
+        if (r.live && r.intended) return `<span class="node-route">${lbl}</span>`;
+        if (r.live) return `<span class="node-route-stale"><s>${lbl}</s> ${esc(t('node_route_stale'))}</span>`;
+        return `<span class="node-route-pending">${lbl} ${esc(t('node_route_pending'))}</span>`;
+      }).join('<span class="node-route-sep">·</span>') : esc(t('node_unrouted'));
+    }
+    const pub = route?.public ? `<span class="node-pub">${esc(t('node_public_via', route.public))}</span>` : '';
 
     // model: live from the node's own endpoint; greyed last-seen name when it is down
     const mm = probeS?.metrics?.model;
@@ -98,13 +108,20 @@ export function renderNodes(gc, resolve) {
 
     const lat = state === 'online' ? esc(probeS?.metrics?.latency?.display || '—') : '—';
     const sp = speedCells(speedS, col, speedT);
+    // Today's usage. The big numbers are the machine's TOTAL from its own counters
+    // (requests that never touched LiteLLM included); the grey line is the LiteLLM share.
     const mv = (k) => meta?.metrics?.[`${col.node}_${k}`]?.value;
+    const cnt = meta?.extra?.nodes?.[col.node]?.counters || {};
     const usage = cell(t('node_reqs'), compact(mv('reqs'))) + cell(t('node_tokens'), compact(mv('tokens')));
-    const emb = mv('emb_reqs') != null
-      ? `<div class="note node-emb">${esc(t('node_embed', compact(mv('emb_reqs')), compact(mv('emb_tokens'))))}</div>` : '';
+    const notes = [];
+    if (meta && !cnt.requests) notes.push(t('node_no_req_counter'));
+    if (mv('ll_reqs') != null) notes.push(t('node_via_ll', compact(mv('ll_reqs')), compact(mv('ll_tokens'))));
+    const llNote = notes.length ? `<div class="note node-ll">${esc(notes.join(' · '))}</div>` : '';
+    const emb = mv('emb_ll_reqs') != null
+      ? `<div class="note node-emb">${esc(t('node_emb_ll', compact(mv('emb_ll_reqs')), compact(mv('emb_ll_tokens'))))}</div>` : '';
 
     return `<div class="node-col node-${state}" data-col="${idx}">`
-      + `<div class="node-head"><span class="node-name">${esc(name)}</span><span class="node-port">· ${esc(port)}</span>${pub}</div>`
+      + `<div class="node-head"><span class="node-name">${esc(name)}</span><span class="node-port">· ${port}</span>${pub}</div>`
       + `<div class="node-model${modelCls}"${modelTitle}>${esc(model)}</div>`
       + '<div class="kv">'
       + cell(t('node_status'), esc(statusText(state, probeT)), STATE_CLASS[state])
@@ -113,6 +130,7 @@ export function renderNodes(gc, resolve) {
       + usage
       + '</div>'
       + (sp.note ? `<div class="note node-note">${esc(sp.note)}</div>` : '')
+      + llNote
       + emb
       + '</div>';
   });

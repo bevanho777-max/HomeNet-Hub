@@ -192,9 +192,17 @@ const targetsSchema = {
               required: ['id'],
               properties: {
                 id: { type: 'string', pattern: '^[a-zA-Z0-9_]+$' },
-                endpoints: { type: 'array', items: { type: 'string' } },
-                chat: { type: 'string' },
-                embed: { type: 'string' },
+                endpoints: { type: 'array', items: { type: 'string' } },         // chat host:port
+                embed_endpoints: { type: 'array', items: { type: 'string' } },   // embedding host:port
+                // v2.22: Prometheus counter selectors summed into today's totals
+                counters: {
+                  type: 'object',
+                  properties: {
+                    requests: { type: 'array', items: { type: 'string' } },
+                    tokens: { type: 'array', items: { type: 'string' } },
+                  },
+                  additionalProperties: false,
+                },
               },
               additionalProperties: false,
             },
@@ -232,6 +240,9 @@ const gridCard = {
     target: { type: 'string' },
     type: { enum: ['machine', 'token', 'service', 'history', 'info', 'stack', 'table', 'nodes'] },
     children: { type: 'array', items: { type: 'string' } }, // B12: stack child target ids
+    // v2.22: columns the card takes in the grid (default 1). 2 falls back to the whole row
+    // when the screen only has one column; 'full' is always the whole row.
+    span: { enum: [1, 2, 'full'] },
     // v2.20 nodes card: one column per inference node, in instance-port order.
     nodes: {
       type: 'array',

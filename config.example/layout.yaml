@@ -65,6 +65,11 @@ status_bar:                         # top service pill row
   targets: [svc_api, svc_imagegen, svc_inference, svc_notify]
 
 grid:
+  # span (v2.22, optional): how many grid columns a card takes. The grid has 1 / 2 / 3 / 4
+  # columns by screen width (<700 / 700-1200 / 1200-1800 / >=1800px), centred, max 2400px.
+  #   1 (default) one column · 2 two columns (the whole row on a one-column phone) · full the whole row
+  # Cards pack densely (a later single card fills a gap) and every card in a row is as tall
+  # as the tallest. Leaving span out keeps today's behaviour: one column per card.
   # row 1 — four machine cards
   - target: gateway
     type: machine
@@ -99,6 +104,7 @@ grid:
   # row 2 — token / api / inference
   - target: token
     type: token
+    span: 2                         # the class boxes + spark need the room on wide screens
     clickable: detail               # click → /api/token_detail modal
     front_max: 3                    # §12-step6: max class boxes on card front (modal shows all)
     header_right: "LiteLLM · {token_speed} t/s"
@@ -158,6 +164,7 @@ grid:
   #
   # - type: nodes
   #   target: nodes_example
+  #   span: full
   #   title: "推理节点"
   #   title_en: "Inference Nodes"
   #   clickable: detail                 # click a column -> that node's speed + usage history

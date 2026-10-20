@@ -52,9 +52,16 @@ export function ring(label, m) {
 // B20: a metric normalized with `part_thresholds` arrives with `parts` — each
 // subfield already carries its own level, so render them as separately colored
 // spans instead of tinting the whole value one color.
-export function kvItem(label, m) {
+export function kvItem(label, m, tpl = null) {
   const cls = lvClass(m.level);
-  const body = m.parts
+  // v2.22 `parts_layout: table` (metrics.yaml): parts as a 2-column mini table -- label
+  // left, number right -- so a many-part cell (the gateway's By Model) stays aligned
+  // instead of wrapping into ragged lines.
+  const table = m.parts && tpl?.parts_layout === 'table';
+  const body = table
+    ? `<span class="value parts-table">${m.parts.map((p) => `<span class="pt"><span class="pt-l" title="${esc(p.label || '')}">${esc(p.label || '')}</span>`
+        + `<span class="pt-v ${lvClass(p.level)}">${esc(p.display)}</span></span>`).join('')}</span>`
+    : m.parts
     ? `<span class="value parts">${m.parts.map((p) => `<i class="${lvClass(p.level)}">${esc(p.display)}`
         + `${p.label ? `<sup>${esc(p.label)}</sup>` : ''}</i>`).join('')}</span>`
     : `<span class="value ${cls}">${esc(m.display)}</span>`;
