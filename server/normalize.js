@@ -219,7 +219,9 @@ function applyFreshness(raw, target, metrics, nowSec) {
     if (!metrics[k]) continue;
     const at = num(jp(raw, path));
     const age = at == null ? Infinity : nowSec - at;
-    if (age > maxAge) metrics[k] = { value: null, level: 'cool', display: '—', at, expired: true };
+    // `last` keeps the expired number for the card's grey "最后 HH:MM · …" line only: value is
+    // null, so it is neither shown as current nor written to the timeseries.
+    if (age > maxAge) metrics[k] = { value: null, level: 'cool', display: '—', at, expired: true, last: metrics[k].value };
     else metrics[k] = { ...metrics[k], at, ...(age > FRESH_LIVE_SEC ? { held: true } : {}) };
   }
 }

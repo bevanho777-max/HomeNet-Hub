@@ -8,8 +8,9 @@ import { renderService } from './renderers/service.js';
 import { renderStack } from './renderers/stack.js';
 import { renderInfo } from './renderers/info.js';
 import { renderTable } from './renderers/table.js';
+import { renderNodes } from './renderers/nodes.js';
 import { initHistory, historyRefresh, relocalizeHistory } from './renderers/history.js';
-import { initMachineDetail, openMachineModal, closeMachineModal, bindMachineModal, relocalizeMachineModal } from './renderers/machine_detail.js';
+import { initMachineDetail, openMachineModal, openNodeModal, closeMachineModal, bindMachineModal, relocalizeMachineModal } from './renderers/machine_detail.js';
 import { openTableModal, closeTableModal, bindTableModal, relocalizeTableModal } from './renderers/table_detail.js';
 import { bindAddTarget, closeAddPanel, openAddPanel, relocalizeAddPanel } from './renderers/add_target.js';
 import { bindCredentials, closeCredPanel, relocalizeCredPanel } from './renderers/credentials.js';
@@ -76,6 +77,7 @@ function mountCards(containerId, cards) {
     }
     el.classList.toggle('clickable', !!c.clickable);
     el.classList.toggle('stale', !!c.stale);
+    el.classList.toggle('card-wide', !!c.wide);   // v2.20: full-row card (nodes)
     // B23: dispatch by card type. Every clickable card used to open the token modal,
     // which was fine while the token card was the only one; a machine card needs its
     // own. `onclick` (not addEventListener) so a re-render replaces the handler
@@ -93,6 +95,13 @@ function openCardModal(c, e) {
   if (c.kind === 'stack') {
     const id = e?.target?.closest?.('.stack-item')?.dataset.target;
     if (id) openMachineModal(id, c.detail?.ranges);
+    return;
+  }
+  // v2.20 nodes card: the clicked column is the node; a click between columns does nothing.
+  if (c.kind === 'nodes') {
+    const idx = Number(e?.target?.closest?.('.node-col')?.dataset.col);
+    const col = c.detail?.gc?.nodes?.[idx];
+    if (col) openNodeModal({ col, usageTarget: c.detail.gc.target, ranges: c.detail.ranges });
     return;
   }
   // The machine modal titles itself from config (target name + " Detail") so a language
@@ -222,6 +231,7 @@ function render() {
     }, metrics));
     else if (gc.type === 'info') cards.push(renderInfo(gc, target, snap));
     else if (gc.type === 'table') cards.push(renderTable(gc, target, snap));
+    else if (gc.type === 'nodes') cards.push(renderNodes(gc, (id) => ({ target: targetById(id), snap: lastSnap[id] })));
   }
   // P2: an empty grid is a normal state now — it is what a cleared demo board looks
   // like, and what a fresh install looks like before the first target is added. Say so

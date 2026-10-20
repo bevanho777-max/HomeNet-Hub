@@ -200,6 +200,9 @@ function extraGpuPanels(n) {
     wrap.appendChild(p);
   }
   wrap.hidden = !n;
+  // A modal that needs fewer panels than an earlier one built must not leave the surplus
+  // ones showing that earlier chart (the node modal uses 2, a multi-GPU host 3).
+  [...wrap.children].forEach((p, i) => { p.hidden = i >= n; });
   return [...wrap.children].slice(0, n).map((p) => ({
     title: p.querySelector('.gpu-panel-title'), canvas: p.querySelector('canvas'), legend: p.querySelector('.legend'),
   }));
@@ -253,6 +256,7 @@ async function load() {
   const canvas = $('#machineModalCanvas');
   const legend = $('#machineModalLegend');
   if (!canvas || !targetId) return;
+  if (nodeCtx) return loadNode(canvas, legend);
   if (inflight) inflight.abort();
   const ctrl = new AbortController();
   inflight = ctrl;
@@ -330,6 +334,7 @@ async function load() {
 // language change can re-derive it without app.js having to remember which card was
 // clicked. Same string as before: the target's display name plus " Detail".
 function modalTitle(id) {
+  if (nodeCtx) return t('node_modal_title', cv(nodeCtx.col, 'name') || nodeCtx.col.node);
   const target = (CONFIG?.targets || []).find((x) => x.id === id);
   return `${cv(target, 'name') || id} Detail`;
 }
@@ -339,6 +344,7 @@ function modalTitle(id) {
 let ranges = RANGES;
 
 export function openMachineModal(id, customRanges) {
+  nodeCtx = null;
   targetId = id;
   ranges = Array.isArray(customRanges) && customRanges.length ? customRanges : RANGES;
   if (!ranges.includes(range)) range = ranges[0];
@@ -359,7 +365,80 @@ export function relocalizeMachineModal() {
   load();   // the note and any error line are built from the dictionary too
 }
 
+// ── v2.20 推理节点 modal ────────────────────────────────────────────────
+// Same shell, same drawMulti. Two sources: the node's speed target (prefill / decode,
+// live samples only — held and expired values never reach the timeseries) and the
+// inference_nodes target, whose <node>_reqs / _tokens (+ _emb_*) are today's running
+// totals, so each day reads as a rising line that resets at the UTC day boundary.
+let nodeCtx = null;   // { col, usageTarget }
+
+export function openNodeModal({ col, usageTarget, ranges: customRanges }) {
+  nodeCtx = { col, usageTarget };
+  targetId = col.speed || col.probe;
+  ranges = Array.isArray(customRanges) && customRanges.length ? customRanges : ['1d', '3d', '7d'];
+  if (!ranges.includes(range)) range = ranges[0];
+  $('#machineModalTitle').textContent = modalTitle(targetId);
+  $('#machineModal').classList.add('open');
+  clearError();
+  const note = $('#machineModalNote'); if (note) { note.hidden = true; note.textContent = ''; }
+  const ag = $('#machineModalAgent'); if (ag) ag.hidden = true;
+  $('#machineModalRanges').innerHTML = ranges.map((r) =>
+    `<button data-r="${esc(r)}" class="${r === range ? 'active' : ''}">${esc(r)}</button>`).join('');
+  load();
+}
+
+const SPAN_SEC = { '1d': 86400, '24h': 86400, '3d': 259200, '7d': 604800, '30d': 2592000 };
+
+async function loadNode(canvas, legend) {
+  const { col, usageTarget } = nodeCtx;
+  if (inflight) inflight.abort();
+  const ctrl = new AbortController();
+  inflight = ctrl;
+  let timedOut = false;
+  const timer = setTimeout(() => { timedOut = true; ctrl.abort(); }, 15000);
+  const get = async (id) => {
+    if (!id) return {};
+    const r = await fetch(`/api/history?target=${encodeURIComponent(id)}&range=${range}`, { cache: 'no-store', signal: ctrl.signal });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    return (await r.json()).series || {};
+  };
+  try {
+    const [sp, us] = await Promise.all([get(col.speed), get(usageTarget)]);
+    if (inflight !== ctrl) return;
+    const second = secondPanel(true);
+    const extra = extraGpuPanels(2);
+    mainTitle(t('node_panel_speed'));
+    const m = metrics();
+    const maxGapSec = Math.max(900, 3 * Math.ceil((SPAN_SEC[range] || 86400) / 250));   // B25b
+    const noSpeed = col.speed ? t('chart_no_data_range', range) : (cv(col, 'speed_note') || t('node_no_speed_src'));
+    const sOpts = { metrics: m, height: 190, emptyText: noSpeed, maxGapSec };
+    drawMulti(canvas, sp, legend, { ...sOpts, subs: [{ k: 'prefill_speed', color: '#6aa9ff', axis: 'R' }] });
+    drawMulti(second.canvas, sp, second.legend, { ...sOpts, subs: [{ k: 'decode_speed', color: '#5eead4', axis: 'R' }] });
+    const p = col.node;
+    const um = {
+      ...m,
+      [`${p}_reqs`]: { label: t('node_series_chat') }, [`${p}_emb_reqs`]: { label: t('node_series_embed') },
+      [`${p}_tokens`]: { label: t('node_series_chat') }, [`${p}_emb_tokens`]: { label: t('node_series_embed') },
+    };
+    const uOpts = { metrics: um, height: 170, emptyText: t('chart_no_data_range', range) };
+    extra[0].title.textContent = t('node_panel_reqs');
+    drawMulti(extra[0].canvas, us, extra[0].legend, { ...uOpts,
+      subs: [{ k: `${p}_reqs`, color: '#f7c948', axis: 'R' }, { k: `${p}_emb_reqs`, color: '#b18cff', axis: 'R' }] });
+    extra[1].title.textContent = t('node_panel_tokens');
+    drawMulti(extra[1].canvas, us, extra[1].legend, { ...uOpts,
+      subs: [{ k: `${p}_tokens`, color: '#ff9d5c', axis: 'R' }, { k: `${p}_emb_tokens`, color: '#b18cff', axis: 'R' }] });
+    clearError();
+  } catch (e) {
+    if (inflight !== ctrl) return;
+    showError(timedOut ? t('chart_timeout', range) : t('chart_load_failed', e?.message || e), true);
+  } finally {
+    clearTimeout(timer);
+    if (inflight === ctrl) inflight = null;
+  }
+}
+
 export function closeMachineModal() {
+  nodeCtx = null;
   $('#machineModal').classList.remove('open');
   if (inflight) { inflight.abort(); inflight = null; }
   targetId = null;

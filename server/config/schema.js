@@ -64,7 +64,7 @@ const sourceSchema = {
   type: 'object',
   required: ['type'],
   properties: {
-    type: { enum: ['http', 'http_push', 'sql', 'exec', 'demo', 'tcp', 'tls', 'prometheus', 'ssh'] },
+    type: { enum: ['http', 'http_push', 'sql', 'exec', 'demo', 'tcp', 'tls', 'prometheus', 'ssh', 'inference_nodes'] },
     // http
     url: { type: 'string' },
     interval: { type: 'string' },     // duration string e.g. "1.5s", "8s", "30s"
@@ -117,6 +117,8 @@ const sourceSchema = {
     // net_guard at collection time, same as tcp/tls.
     { if: { properties: { type: { const: 'prometheus' } } }, then: { required: ['url'] } },
     { if: { properties: { type: { const: 'ssh' } } }, then: { required: ['host', 'credential_id'] } },
+    // v2.20: per-node usage (a queries/ file, same door as sql) + litellm route discovery.
+    { if: { properties: { type: { const: 'inference_nodes' } } }, then: { required: ['query_file', 'dsn_env'] } },
   ],
 };
 
@@ -178,6 +180,25 @@ const targetsSchema = {
           map: { type: 'object', additionalProperties: mapEntry },
           classify: classifySchema,
           gpu_count: { type: 'number' },
+          // v2.20: false = this service is often off on purpose (m110). Unreachable then
+          // reads as grey "no service", never red. true/omitted = unreachable is a fault.
+          always_on: { type: 'boolean' },
+          // v2.20 inference_nodes: which rows of today's usage belong to which node, and
+          // the host:port endpoints used to find the litellm instances routing to it.
+          nodes: {
+            type: 'array',
+            items: {
+              type: 'object',
+              required: ['id'],
+              properties: {
+                id: { type: 'string', pattern: '^[a-zA-Z0-9_]+$' },
+                endpoints: { type: 'array', items: { type: 'string' } },
+                chat: { type: 'string' },
+                embed: { type: 'string' },
+              },
+              additionalProperties: false,
+            },
+          },
           // v2.19: no service here is expected, not a fault -> neutral grey card.
           when_down: {
             type: 'object',
@@ -209,8 +230,24 @@ const gridCard = {
   required: ['type'],
   properties: {
     target: { type: 'string' },
-    type: { enum: ['machine', 'token', 'service', 'history', 'info', 'stack', 'table'] },
+    type: { enum: ['machine', 'token', 'service', 'history', 'info', 'stack', 'table', 'nodes'] },
     children: { type: 'array', items: { type: 'string' } }, // B12: stack child target ids
+    // v2.20 nodes card: one column per inference node, in instance-port order.
+    nodes: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['node', 'probe'],
+        properties: {
+          node: { type: 'string' },           // id inside the inference_nodes target
+          name: { type: 'string' }, name_en: enString,
+          probe: { type: 'string' },          // http target: status / latency / model
+          speed: { type: 'string' },          // prometheus-backed speed target (optional)
+          speed_note: { type: 'string' }, speed_note_en: enString, // why there is no speed
+        },
+        additionalProperties: false,
+      },
+    },
     direction: { enum: ['row', 'column'] }, // B12: stack layout direction (default column)
     min_row_width: { type: 'number' }, // B12-row: min px width to lay row out (else children×180)
     title: { type: 'string' },               // §12-step4: info card title (no target needed)
@@ -454,6 +491,10 @@ export function crossValidate({ metrics, targets, layout }) {
     // {label,value} objects and are not metric references.
     (c.items || []).forEach((m) => { if (typeof m === 'string') refMetric(m, `layout.grid[${c.target}].items`, c.target); });
     (c.children || []).forEach((id) => refTarget(id, `layout.grid[type=stack].children`)); // B12
+    (c.nodes || []).forEach((n, i) => {
+      refTarget(n.probe, `layout.grid[type=nodes].nodes[${i}].probe`);
+      if (n.speed) refTarget(n.speed, `layout.grid[type=nodes].nodes[${i}].speed`);
+    });
   }
   for (const id of layout?.status_bar?.targets || []) refTarget(id, 'layout.status_bar');
   for (const id of layout?.history?.selectable_targets || []) refTarget(id, 'layout.history.selectable_targets');

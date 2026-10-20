@@ -216,6 +216,7 @@ export function publicConfig(cfg) {
     // Named field by field: the rest of `freshness` (JSONPaths) stays server-side.
     ...(t.when_down ? { when_down: { note: t.when_down.note || null, ...(t.when_down.note_en ? { note_en: t.when_down.note_en } : {}) } } : {}),
     ...(t.freshness?.lookback ? { freshness: { lookback: t.freshness.lookback } } : {}),
+    ...(typeof t.always_on === 'boolean' ? { always_on: t.always_on } : {}),
   }));
   return {
     // no hardcoded brand: the frontend supplies a generic bottom-line title

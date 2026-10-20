@@ -146,6 +146,8 @@ targets:
     name: "Inference Backend · A"
     color: "#b18cff"
     badge: "LLM"
+    # always_on (v2.20, optional, default true): false = this service is often off on
+    # purpose, so "unreachable" is a grey "no service", not a red fault.
     source: { type: demo, interval: "8s" }
     map:
       status:  "$.status"
@@ -224,6 +226,31 @@ targets:
   # Rows are labelled (master key) / key:<8 hex>; turning those into readable
   # aliases needs a second grant on LiteLLM_VerificationToken and is only worth
   # it once you actually have several keys (see the query file).
+  # v2.20 inference-node usage + routing, for a `type: nodes` card (see layout.yaml).
+  # Today's usage per node from the same rows as the token card's "Today" (so the node
+  # columns + `unassigned` add up to it), split by each node's model regex; and which
+  # litellm instance(s) route to the node, read live from <instance>/model/info and
+  # matched on the deployments' api_base host:port. Needs PG_DSN + LITELLM_MASTER_KEY.
+  # Each column's status/latency/model comes from an ordinary http probe target — give
+  # a machine that is often switched off `always_on: false` so "unreachable" reads as a
+  # grey "no service" instead of a red fault.
+  - id: nodes_example
+    name: "Inference node usage (real sql)"
+    enabled: false
+    source:
+      type: inference_nodes
+      driver: postgres
+      dsn_env: "PG_DSN"
+      query_file: "queries/node_usage.sql"
+      key_env: "LITELLM_MASTER_KEY"
+      interval: "60s"
+      instances:
+        - { port: 4000, url: "http://litellm:4000" }
+        - { port: 4001, url: "http://litellm-b:4001", public: true }   # the public entry
+    nodes:
+      - { id: gpu_a, endpoints: ["192.0.2.10:8080"], chat: "my-chat-model" }
+      - { id: gpu_b, endpoints: ["192.0.2.11:12346", "192.0.2.11:12347"], chat: "27b", embed: "embed|bge" }
+
   - id: project_tokens_example
     name: "Per-Project Tokens (real sql)"
     enabled: false

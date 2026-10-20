@@ -10,6 +10,7 @@ import { collectExec } from './exec.js';
 import { collectSql, collectSqlScalar, collectSqlRows } from './sql.js';
 import { collectDemo, demoTokenRows, demoTokenSpeed } from './demo.js';
 import { markPush, isPushStale, checkPushToken } from './push.js';
+import { collectNodes } from './nodes.js';
 import { normalize, samplableRows } from '../normalize.js';
 import { pivotTokens } from '../token_detail.js';
 
@@ -61,7 +62,8 @@ export class Scheduler {
       const interval = parseDuration(target.source?.interval,
         type === 'http' ? 1500 : type === 'demo' ? 2000
           : type === 'tls' ? 3600000 : type === 'tcp' ? 10000
-            : type === 'prometheus' ? 10000 : type === 'ssh' ? 10000 : 8000);
+            : type === 'prometheus' ? 10000 : type === 'ssh' ? 10000
+              : type === 'inference_nodes' ? 60000 : 8000);
       const tick = () => {
         if (this._inflight.has(target.id)) return;
         this._inflight.add(target.id);
@@ -113,6 +115,14 @@ export class Scheduler {
       // hand the rows to the frontend as-is. No pivot, no per-purpose logic here —
       // which columns are shown, and under what labels, is a layout decision.
       // (pg returns bigint as a string; the renderer coerces.)
+      // v2.20 推理节点: today's usage split by node + which litellm instance routes to it.
+      if (type === 'inference_nodes') {
+        const { metrics: m, extra } = await collectNodes(target, env);
+        snapshot.update(target.id, { online: true, metrics: m, extra });
+        const rows = samplableRows(target.id, { metrics: m }, metrics);
+        if (rows.length) tsdb.record(rows);
+        return;
+      }
       if (type === 'sql' && target.source.shape === 'table') {
         const rows = await collectSqlRows(target.source, env, target.source.query_file);
         // `resolve_names` is the one decoration this generic path performs, and it is
@@ -188,11 +198,31 @@ export class Scheduler {
       if (raw == null) throw new Error(`unsupported source type: ${type}`);
       const norm = normalize(raw, target, metrics);
       snapshot.update(target.id, { online: true, metrics: norm.metrics });
+      this._rememberModel(target, norm.metrics.model);
       const rows = samplableRows(target.id, norm, metrics);
       if (rows.length) tsdb.record(rows);
     } catch (e) {
       snapshot.update(target.id, { online: false, error: String(e?.message || e) });
+      this._recallModel(target);
     }
+  }
+
+  // v2.20: a node that is often switched off (always_on: false — m110) shows the last model
+  // it was seen serving, greyed, instead of a blank. The snapshot already keeps the last
+  // good metrics while the hub runs; this carries the name across a hub restart too, via
+  // the timeseries' small key/value table. Written only when the name changes.
+  _rememberModel(target, m) {
+    if (target.always_on !== false || typeof m?.value !== 'string' || !m.value) return;
+    const k = `last_model:${target.id}`;
+    if (this.ctx.tsdb.metaGet?.(k) !== m.value) this.ctx.tsdb.metaSet?.(k, m.value);
+  }
+
+  _recallModel(target) {
+    if (target.always_on !== false) return;
+    const e = this.ctx.snapshot.get(target.id);
+    if (!e || e.metrics?.model) return;
+    const v = this.ctx.tsdb.metaGet?.(`last_model:${target.id}`);
+    if (v) e.metrics = { ...(e.metrics || {}), model: { value: v, level: null, display: v, last_seen: true } };
   }
 
   // Called by POST /api/push/:id after token check.

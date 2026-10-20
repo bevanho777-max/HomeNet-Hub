@@ -49,6 +49,34 @@ on screen is the one from `package.json`, and this file is what needs fixing.
 
 ---
 
+## v2.20.0 — 2026-10-20
+
+**推理节点卡:每台推理机器一栏,状态 / 速度 / 今日用量 / 实际路由的 litellm 实例合在一张全宽卡上。**
+
+*Rebuild required — `server/` + `web/` changed. 新增 `config/queries/node_usage.sql`(config.example 同步)。*
+
+- **新卡片 `type: nodes`(全宽,按实例端口顺序分栏,窄屏改为上下排列)**。每栏:机器名 · 实例端口
+  (公开入口带「对外 / Public」标记)、节点端点实时读到的模型 ID、状态 / 延迟、Prefill / Decode、
+  今日请求 / 今日 tokens(embedding 另以小字显示)。点一栏打开该节点的历史弹窗(沿用速度弹窗与
+  `drawMulti`):速度两栏 + 今日请求 / tokens 的当日累计,chat 与 embedding 分线。
+- **状态统一为三种**:在线(绿)/ 无服务(灰)/ 故障(红),不再出现 ok / online 混用。新的 target
+  选项 `always_on`:`false` 的机器连不上时整栏变灰、写「未开机 / 无服务」,模型名以灰色显示最后一次
+  看到的名称(存在 tsdb 的 meta 表,hub 重启后仍在);其余机器连不上即为故障。栏位固定,不因离线跳动。
+- **新采集类型 `inference_nodes`**:
+  - 今日用量:与 Token Usage 卡的 Today 完全同一口径(`LiteLLM_DailyUserSpend` 最新一天、所有 key、
+    prompt + completion),按各节点的模型正则(`chat` / `embed`)认领,剩下的记 `unassigned`,
+    因此「各栏 + unassigned = Token Usage 今日总量」。写入时序,供节点弹窗画图。
+  - 实例路由:每分钟向各 litellm 实例 `GET /model/info`(master key),按部署的 api_base host:port
+    对上节点。卡上的端口是查到的实际路由,不是配置里写的 —— 模型搬家后不用改卡片配置。
+- 速度过期时保留最后一次的数值作为 `last`(value 仍为 null:不当现值显示、不写历史),卡上以灰色小字
+  显示「最后 HH:MM · prefill / decode」。
+- 中英文:新卡所有文字都有 EN 版本;配置里的标题 / 说明支持 `_en`。
+- 实配(私有,不在本仓库):用推理节点卡取代原 `Inference · 25/26`、`Speed · 25/26` 两张 stack 卡;
+  m25 / m26 设 `always_on: true`(移除 inference25 旧的 `when_down`),新增 m110 探测目标
+  (`always_on: false`;它的推理端口目前从 hub 连不上,卡上显示「未开机 / 无服务」与「未接入 litellm」)。
+
+---
+
 ## v2.19.1 — 2026-10-20
 
 **35b 下线后的面板收尾:网关卡按真实模型拆请求量;速度历史只画真实测量段。**

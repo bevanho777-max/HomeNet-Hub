@@ -507,6 +507,12 @@ export class Tsdb {
     return info.changes;
   }
 
+  // v2.20: tiny key/value access for state that must survive a restart (the last model a
+  // sometimes-off inference node was seen serving). Same table as the rollup watermarks;
+  // callers use their own key prefix.
+  metaGet(k) { return this._qMetaGet.get(k)?.v ?? null; }
+  metaSet(k, v) { this._qMetaSet.run(k, String(v)); }
+
   close() { try { this.db.close(); } catch { /* ignore */ } }
 }
 

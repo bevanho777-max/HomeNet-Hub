@@ -150,6 +150,22 @@ grid:
     header_right: badge
     items: [status, latency, model, role]
 
+  # v2.20 inference nodes — one full-width card, one column per inference machine:
+  # instance port(s) (discovered from litellm), live model ID, status / latency,
+  # prefill / decode, today's requests / tokens. Status is Online / No service / Down;
+  # a probe target with `always_on: false` goes grey instead of red. Pairs with
+  # nodes_example in targets.yaml (disabled there) — uncomment both together.
+  #
+  # - type: nodes
+  #   target: nodes_example
+  #   title: "推理节点"
+  #   title_en: "Inference Nodes"
+  #   clickable: detail                 # click a column -> that node's speed + usage history
+  #   detail_ranges: [1d, 3d, 7d]
+  #   nodes:
+  #     - { node: gpu_a, name: "gpu-a", probe: inference, speed_note: "no /metrics yet", speed_note_en: "no /metrics yet" }
+  #     - { node: gpu_b, name: "gpu-b", probe: inference2 }      # speed: <prometheus speed target>
+
   # B20/B22 card shapes for the two real-backend examples in targets.yaml (both
   # ship disabled there, so these stay commented — uncomment both sides together).
   #
