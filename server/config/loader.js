@@ -217,6 +217,9 @@ export function publicConfig(cfg) {
     ...(t.when_down ? { when_down: { note: t.when_down.note || null, ...(t.when_down.note_en ? { note_en: t.when_down.note_en } : {}) } } : {}),
     ...(t.freshness?.lookback ? { freshness: { lookback: t.freshness.lookback } } : {}),
     ...(typeof t.always_on === 'boolean' ? { always_on: t.always_on } : {}),
+    // v2.28: how often it is polled, as written ("15s") -- the inference node's latency cell
+    // says so on its second line. Only the interval: the rest of `source` stays server-side.
+    ...(typeof t.source?.interval === 'string' ? { interval: t.source.interval } : {}),
   }));
   return {
     // no hardcoded brand: the frontend supplies a generic bottom-line title

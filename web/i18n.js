@@ -199,6 +199,9 @@ const ZH = {
   abbr_node_tokens: '今日 tok',            // 今日 tokens
   abbr_prefill: 'Prefill',                // Prefill t/s
   abbr_decode: 'Decode',                  // Decode t/s
+  abbr_sub_max: (m) => `≤${m} 路`,         // 最多 N 路并发
+  abbr_sub_single: '单路',                 // 单路(中文本身已短;英文 single stream → single)
+  abbr_probe: (iv) => `每 ${iv}`,          // 每 15s 探测
   part_now: '当前',
   cli_title: '客户端',
   cli_off_head: '未配置 LITELLM_MASTER_KEY',
@@ -394,6 +397,17 @@ const ZH = {
   stream_prompt: (n) => `prompt ${n}`,
   stream_read: (n) => `读 ${n}`,
   stream_cached: (n) => `缓存 ${n}`,
+  // v2.28 second lines of the status / latency cells and an idle stream (every node cell has one)
+  stream_no_cache: '无缓存',
+  node_no_queue: '无排队',
+  node_sub_max: (m) => `最多 ${m} 路并发`,
+  node_sub_single: '单路',
+  node_sub_nolive: '无实时状态',
+  node_sub_ondemand: '按需开机',
+  node_sub_timeout: '探测超时',
+  node_sub_unreachable: '连不上',
+  node_sub_probe: (iv) => `每 ${iv} 探测`,
+  node_sub_probe_any: '健康探测',
   node_panel_streams: '并发（各路 decode t/s；并发数）',
   node_series_streams: '并发数',
 
@@ -542,6 +556,9 @@ const EN = {
   abbr_node_tokens: 'Tok/day',
   abbr_prefill: 'Prefill',
   abbr_decode: 'Decode',
+  abbr_sub_max: (m) => `≤${m} streams`,
+  abbr_sub_single: 'single',
+  abbr_probe: (iv) => `every ${iv}`,
   part_now: 'Now',
   cli_title: 'Clients',
   cli_off_head: 'LITELLM_MASTER_KEY not configured',
@@ -729,6 +746,16 @@ const EN = {
   stream_prompt: (n) => `prompt ${n}`,
   stream_read: (n) => `read ${n}`,
   stream_cached: (n) => `cached ${n}`,
+  stream_no_cache: 'no cache',
+  node_no_queue: 'no queue',
+  node_sub_max: (m) => `up to ${m} streams`,
+  node_sub_single: 'single stream',
+  node_sub_nolive: 'no live state',
+  node_sub_ondemand: 'on demand',
+  node_sub_timeout: 'probe timeout',
+  node_sub_unreachable: 'unreachable',
+  node_sub_probe: (iv) => `probe every ${iv}`,
+  node_sub_probe_any: 'health probe',
   node_panel_streams: 'Concurrency (t/s per stream; streams)',
   node_series_streams: 'Streams',
 

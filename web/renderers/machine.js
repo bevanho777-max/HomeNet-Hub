@@ -1,5 +1,5 @@
 // machine renderer (§6) — rings + KV grid + header_right (uptime/badge).
-import { ring, kvItem, mget, card, esc } from './common.js';
+import { ring, kvItem, mget, card, esc, shownParts } from './common.js';
 import { cv, t } from '../i18n.js';
 
 export function renderMachine(gridCard, target, snap, metrics) {
@@ -26,10 +26,22 @@ export function renderMachine(gridCard, target, snap, metrics) {
   const keys = gridCard.items || [];
   const subs = gridCard.subs && typeof gridCard.subs === 'object' ? gridCard.subs : {};
   const isTable = (k) => metrics?.[k]?.parts_layout === 'table';
+  // v2.28: a table cell with one entry or none (just after midnight) is one cell wide -- two
+  // would be mostly empty. The column it gives back gets real content: a `subs` metric has a
+  // cell of its own again, right after its cell (the gateway's "Last 5m" beside Chat Today);
+  // only a card without one widens its last plain cell. The grid keeps its shape, no hole.
+  const narrow = keys.filter((k) => isTable(k) && shownParts(mget(snap, k)).length < 2);
+  let spare = narrow.length;
+  const promoted = new Set();
+  for (const k of keys) if (spare && subs[k] && !isTable(k)) { promoted.add(k); spare -= 1; }
+  const plain = keys.filter((k) => !isTable(k));
+  const takers = new Set(spare ? plain.slice(-spare) : []);
   const items = keys.map((k) => {
     const sk = subs[k];
-    const sub = sk ? `${label(sk)} ${mget(snap, sk).display ?? '—'}` : '';
-    return kvItem(label(k), mget(snap, k), metrics?.[k], { sub, itemCls: isTable(k) ? 'span2' : '' });
+    const sub = sk && !promoted.has(k) ? `${label(sk)} ${mget(snap, sk).display ?? '—'}` : '';
+    const wide = (isTable(k) && !narrow.includes(k)) || takers.has(k);
+    return kvItem(label(k), mget(snap, k), metrics?.[k], { sub, itemCls: wide ? 'span2' : '' })
+      + (promoted.has(k) ? kvItem(label(sk), mget(snap, sk), metrics?.[sk]) : '');
   }).join('');
 
   // header_right: 'badge' → target.badge, else a metric key → its display.

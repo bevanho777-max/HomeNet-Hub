@@ -43,13 +43,26 @@ function statusText(state, probeTarget) {
 // v2.27 the status's short form, for a column too narrow for it (abbreviation table)
 const statusShort = (state, probeTarget) => (state === 'idle' && probeTarget?.always_on === false ? t('abbr_off') : null);
 
-// v2.23: every cell is three lines -- label, value, and a small second line under the value
-// (when it was measured, how much of it came through LiteLLM, the embedding share). The
-// second line is always rendered, empty when there is nothing to say, so a cell without one
-// is exactly as tall as its neighbours; the card's subgrid then lines the cells of all three
-// node columns up row by row.
-// v2.27: the standard cell (fixed 70px, nothing wraps); every line is .fit (fit.js shrinks
-// it, then swaps in `short` / `subShort`, then cuts it). `value` is HTML (callers escape).
+// v2.28 the status's second line while no request runs: how many streams the server runs
+// (read from it), why a grey node is grey, why a red one is red
+function statusSub(state, probeSnap, lv) {
+  if (state === 'online') {
+    if (!lv?.reachable) return { sub: t('node_sub_nolive') };
+    const M = Number(lv.max_streams) || 1;
+    return M > 1 ? { sub: t('node_sub_max', M), subShort: t('abbr_sub_max', M) } : { sub: t('node_sub_single'), subShort: t('abbr_sub_single') };
+  }
+  if (state === 'idle') return { sub: t('node_sub_ondemand') };
+  return { sub: probeSnap?.error === 'timeout' ? t('node_sub_timeout') : t('node_sub_unreachable') };
+}
+
+// Every cell is three lines -- label, value, and a small second line under the value (when
+// it was measured, how much of it came through LiteLLM, the embedding share, how many
+// streams the server runs, how often it is probed); the card's subgrid lines the cells of
+// all three node columns up row by row. v2.28: a cell is only as tall as its lines, so every
+// cell has a second line in every state (a dash where there is nothing to say) -- a row of
+// node cells is always three lines, with no blank under any value.
+// The standard cell (nothing wraps); every line is .fit (fit.js shrinks it, then swaps in
+// `short` / `subShort`, then cuts it). `value` is HTML (callers escape).
 // labels whose short form is fixed (abbreviation table): Prefill t/s -> Prefill, Decode t/s -> Decode
 const LABEL_SHORT = { node_prefill: 'abbr_prefill', node_decode: 'abbr_decode' };
 const labelShortOf = (label) => { for (const [k, a] of Object.entries(LABEL_SHORT)) if (label === t(k)) return t(a); return null; };
@@ -123,7 +136,9 @@ function streamCell(s) {
     sub = t('stream_cached', nfmt(s.held));
     short = t('stream_cached', compact(s.held));
     short2 = t('abbr_stream_cached', compact(s.held));
-  }
+  } else sub = t('stream_no_cache');
+  // v2.28: never without a second line (the bar's cells are three lines in every state)
+  if (!sub) sub = t('stream_prompt', '—');
   const bar = `<span class="sbar${pct == null ? ' none' : ''}"><i style="width:${pct == null ? 0 : pct.toFixed(1)}%"></i></span>`;
   const ds = (short && short !== sub ? ` data-short="${esc(short)}"` : '') + (short2 && short2 !== short ? ` data-short2="${esc(short2)}"` : '');
   const phaseShort = s.state === 'decode' ? t('abbr_stream_decode') : s.state === 'prefill' ? t('abbr_stream_prefill') : null;
@@ -177,7 +192,7 @@ function speedCells(speedSnap, col, speedTarget, lv = null) {
       + cell(t('node_decode'), '—', { sub: t('node_sub_last', hm(at), lastOf(tg)), subShort: t('abbr_last', hm(at), lastOf(tg)) });
   }
   const v = (m) => (m && !m.expired ? esc(m.display) : '—');
-  const sub = at ? t('measured_at', hm(at)) : '';
+  const sub = at ? t('measured_at', hm(at)) : '—';
   return cell(t('node_prefill'), v(pp), { sub }) + cell(t('node_decode'), v(tg), { sub });
 }
 
@@ -235,6 +250,8 @@ export function renderNodes(gc, resolve) {
       if (mv(ll) != null) { parts.push(t('node_sub_ll', compact(mv(ll)))); short.push(t('abbr_ll', compact(mv(ll)))); }
       const e = mv(emb) != null ? mv(emb) : mv(embLl);
       if (e != null) { parts.push(t('node_sub_emb', compact(e))); short.push(t('abbr_emb', compact(e))); }
+      // (v2.28: no counter read yet -- still a second line, so the row stays three lines)
+      if (!parts.length) return { sub: t('node_sub_ll', '—'), subShort: t('abbr_ll', '—') };
       return { sub: parts.join(' · '), subShort: short.join(' · ') };
     };
     const reqSub = meta && !cnt.requests ? { sub: t('node_no_req_counter'), subShort: t('abbr_no_counter') } : subOf('ll_reqs', 'emb_reqs', 'emb_ll_reqs');
@@ -244,11 +261,14 @@ export function renderNodes(gc, resolve) {
       ? (multi
         // "推理中 N/M": streams running / streams the server can run (read from it); in a
         // column too narrow for it, "推理 N/M" / "Gen N/M" (abbreviation table)
-        ? cell(t('node_status'), esc(`${t('node_busy')} ${lv.running}/${lv.max_streams}`), { cls: 'lv-cool', short: `${t('abbr_busy')} ${lv.running}/${lv.max_streams}`, sub: lv.queued ? t('node_queued', lv.queued) : '' })
+        ? cell(t('node_status'), esc(`${t('node_busy')} ${lv.running}/${lv.max_streams}`), { cls: 'lv-cool', short: `${t('abbr_busy')} ${lv.running}/${lv.max_streams}`, sub: lv.queued ? t('node_queued', lv.queued) : t('node_no_queue') })
         : cell(t('node_status'), esc(t('node_busy')), { cls: 'lv-cool', short: t('abbr_busy'), sub: t('node_busy_n', lv.busy) + (lv.queued ? ` · ${t('node_queued', lv.queued)}` : '') }))
-      : cell(t('node_status'), esc(statusText(state, probeT)), { cls: STATE_CLASS[state], short: statusShort(state, probeT) });
+      : cell(t('node_status'), esc(statusText(state, probeT)), { cls: STATE_CLASS[state], short: statusShort(state, probeT), ...statusSub(state, probeS, lv) });
+    // v2.28 latency's second line: how often the hub probes the node (the target's interval)
+    const iv = probeT?.interval;
+    const latSub = iv ? { sub: t('node_sub_probe', iv), subShort: t('abbr_probe', iv) } : { sub: t('node_sub_probe_any') };
     const cells = statusCell
-      + cell(t('node_latency'), lat)
+      + cell(t('node_latency'), lat, latSub)
       + speedCells(speedS, col, speedT, state === 'online' ? lv : null)
       + cell(t('node_reqs'), compact(mv('reqs')), { ...reqSub, labelShort: t('abbr_node_reqs') })
       + cell(t('node_tokens'), compact(mv('tokens')), { ...subOf('ll_tokens', 'emb_tokens', 'emb_ll_tokens'), labelShort: t('abbr_node_tokens') });

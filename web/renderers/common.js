@@ -53,9 +53,11 @@ export function ring(label, m) {
 // in the machine modal. Alerting is unchanged: the hub gives an aggregate the WORST level
 // of its cards (vram / temp / power), and that level is what colours the ring and cell.
 
-// v2.27 the standard cell (tokens.css: label / value / second line, fixed 70px, nothing
-// wraps). Every line is .fit: fit.js shrinks a line that does not fit, then swaps in its
-// short form (`short` / `subShort`, from the abbreviation table in i18n.js), then cuts it.
+// The standard cell (tokens.css: label, value and, when there is one, a second line under the
+// value; nothing wraps). Every line is .fit: fit.js shrinks a line that does not fit, then
+// swaps in its short form (`short` / `subShort`, from the abbreviation table in i18n.js), then
+// cuts it. v2.28: no line is reserved -- without a `sub` the cell is two lines -- and in a row
+// where not every cell has a second line, fit.js puts it on the value line instead.
 // `value` is HTML when `html` is set (callers escape), text otherwise.
 export function cellHtml({ label, value, cls = '', sub = '', itemCls = '', short = null, subShort = null, html = false }) {
   const attr = (s) => (s != null && s !== '' ? ` data-short="${esc(s)}"` : '');
@@ -66,6 +68,8 @@ export function cellHtml({ label, value, cls = '', sub = '', itemCls = '', short
 }
 
 const partNum = (p) => (typeof p.v === 'number' ? p.v : Number(p.display));
+// the parts a `parts_layout: table` cell shows (those above zero)
+export const shownParts = (m) => (m?.parts || []).filter((p) => partNum(p) !== 0);
 
 // Key/value item; ratio metrics (have numeric value) get a status class.
 // B20: a metric normalized with `part_thresholds` arrives with `parts` — each
@@ -82,20 +86,22 @@ export function kvItem(label, m, tpl = null, { sub = '', itemCls = '' } = {}) {
   const open = `<div class="item${itemClass ? ` ${itemClass}` : ''}"><span class="label fit">${esc(label)}</span>`;
   const subHtml = sub ? `<span class="sub fit">${esc(sub)}</span>` : '';
 
-  // v2.27 `parts_layout: table` (gateway By Model): the entries above zero, in at most two
-  // rows (--pc columns), label left and number right; a long model name shrinks, then reads
-  // as its short form (abbr_model), then is cut.
+  // `parts_layout: table` (gateway By Model): the entries above zero, label left and number
+  // right; a long model name shrinks, then reads as its short form (abbr_model), then is cut.
+  // v2.28: one line, largest first -- fit.js shows as many as fit and counts the rest in
+  // "+N"; every entry is in the title.
   if (m.parts && tpl?.parts_layout === 'table') {
-    const parts = m.parts.filter((p) => partNum(p) !== 0);
+    const parts = shownParts(m)
+      .sort((a, b) => (Number.isFinite(partNum(b)) ? partNum(b) : -1) - (Number.isFinite(partNum(a)) ? partNum(a) : -1));
     if (!parts.length) return `${open}<span class="value fit">${m.parts.length ? '0' : '—'}</span>${subHtml}</div>`;
     const abbr = t('abbr_model') || {};
-    const pc = Math.max(1, Math.ceil(parts.length / 2));
     const cells = parts.map((p) => {
       const l = p.label || '';
       const short = typeof abbr === 'object' && abbr[l] && abbr[l] !== l ? ` data-short="${esc(abbr[l])}"` : '';
       return `<span class="pt"><span class="pt-l fit"${short} title="${esc(l)}">${esc(l)}</span><span class="pt-v ${lvClass(p.level)}">${esc(p.display)}</span></span>`;
     }).join('');
-    return `${open}<span class="ptab" style="--pc:${pc}">${cells}</span></div>`;
+    const all = parts.map((p) => `${p.label || ''} ${p.display}`).join(' · ');
+    return `${open}<span class="ptab" style="--pc:${parts.length}" title="${esc(all)}">${cells}<span class="pt-more"></span></span></div>`;
   }
 
   // parts in one line (a temperature per disk, the bay as a tag); the short form is the

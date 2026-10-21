@@ -7,10 +7,16 @@
 //       form is a different arrangement (HDD temperatures -> "max · min"), the .alt-form
 //       sibling the renderer put next to it (the item gets .is-alt), again from full size;
 //   (c) an ellipsis, with the full text in the element's title.
-// Containers (.fit-box: the By Model mini table) are checked for overflow the same way and
-// shrink their children together.
+// v2.28: before any of that, lineRows() gives each row of cells one line count (a row keeps
+// its third lines only when every cell in it has one; elsewhere a third line joins its value
+// line, .sub-inline). Such an inline third line is fitted last, into the room the value left:
+// smaller, then its short form, and when it still does not fit it leaves the line
+// (.sub-away) and its text becomes the cell's title. The By Model mini table is one line
+// (fitPtab): as many entries as fit, the rest counted in a "+N".
 const FLOOR_VALUE = 13;
 const FLOOR_TEXT = 10;
+// a By Model name cut narrower than this says nothing: show one entry fewer instead
+const MIN_PT_LABEL = 18;
 
 function floorOf(el) {
   if (el.dataset.min) return Number(el.dataset.min);
@@ -63,6 +69,7 @@ function fitOne(el, base) {
     el.style.fontSize = '';
     item.classList.add('is-alt');
     for (const a of alt.matches('.fit') ? [alt] : alt.querySelectorAll('.fit')) {
+      if (isInlineSub(a)) continue;   // fitted with the other inline third lines, last
       const b = parseFloat(getComputedStyle(a).fontSize);
       fitOne(a, b);
     }
@@ -89,17 +96,104 @@ function setTitle(el) {
   el._fitTitle = true;
 }
 
+// v2.28 one line count per row of cells. Rows are read off the layout (cells sharing a top,
+// within one card -- the node columns of the nodes card share their rows), so they follow
+// whatever column count the width gave the grid.
+function lineRows(root) {
+  const items = [...root.querySelectorAll('.kv .item')];
+  items.forEach((it) => it.classList.remove('sub-inline'));
+  const rows = [];
+  for (const it of items) {
+    if (it.offsetParent === null) continue;
+    const top = it.getBoundingClientRect().top;
+    const card = it.closest('.card');
+    let row = rows.find((r) => r.card === card && Math.abs(r.top - top) < 1);
+    if (!row) rows.push(row = { card, top, items: [] });
+    row.items.push(it);
+  }
+  for (const { items: row } of rows) {
+    // (the HDD short form's "max · min" line only exists once fit.js has picked that form,
+    // so it never makes a row three lines: it is always an inline candidate)
+    if (row.every((it) => it.querySelector(':scope > .sub'))) continue;
+    for (const it of row) if (it.querySelector(':scope > .sub, :scope > .alt-form > .sub')) it.classList.add('sub-inline');
+  }
+}
+
+const isInlineSub = (el) => el.classList.contains('sub') && !!el.closest('.item.sub-inline')
+  && (el.parentElement.classList.contains('item') || el.parentElement.classList.contains('alt-form'));
+
+function resetInline(el) {
+  reset(el);
+  el.classList.remove('sub-away');
+  const item = el.closest('.item');
+  if (item?._fitTitle) { item.removeAttribute('title'); item._fitTitle = false; }
+}
+
+// an inline third line: smaller, then its short forms, else out of the line into the title
+function fitInline(el) {
+  if (el.offsetParent === null || !overflows(el)) return;   // (an unused HDD short form, or fits)
+  const base = parseFloat(getComputedStyle(el).fontSize);
+  const floor = Math.min(floorOf(el), base);
+  if (shrink(el, base, floor) != null) return;
+  for (const sh of [el.dataset.short, el.dataset.short2]) {
+    if (sh == null) continue;
+    if (el._fitFull == null) el._fitFull = el.innerHTML;
+    el.textContent = sh;
+    el.style.fontSize = '';
+    if (shrink(el, base, floor) != null) { setTitle(el); return; }
+  }
+  if (el._fitFull != null) el.innerHTML = el._fitFull;
+  el.style.fontSize = '';
+  el.classList.add('sub-away');
+  const item = el.closest('.item');
+  if (item && !item.hasAttribute('title')) { item.setAttribute('title', el.textContent.trim()); item._fitTitle = true; }
+}
+
+// the By Model mini table on one line: entries largest first (the renderer sorts them); the
+// most that fit -- every number whole, every name at least MIN_PT_LABEL wide after shrinking,
+// its short form or an ellipsis -- and "+N" for the rest (all of them are in the title)
+function fitPtab(tab) {
+  if (tab.offsetParent === null) return;
+  const pts = [...tab.querySelectorAll(':scope > .pt')];
+  const more = tab.querySelector(':scope > .pt-more');
+  const labels = pts.map((p) => p.querySelector('.pt-l'));
+  pts.forEach((p) => p.classList.remove('pt-off'));
+  labels.forEach(reset);
+  const bases = labels.map((l) => parseFloat(getComputedStyle(l).fontSize));
+  for (let n = pts.length; n >= 1; n--) {
+    pts.forEach((p, i) => p.classList.toggle('pt-off', i >= n));
+    if (more) more.textContent = n < pts.length ? `+${pts.length - n}` : '';
+    tab.style.setProperty('--pc', String(n));
+    let ok = true;
+    for (let i = 0; i < n; i++) {
+      const l = labels[i];
+      reset(l);
+      if (overflows(l)) fitOne(l, bases[i]);
+      const box = pts[i].getBoundingClientRect();
+      const v = pts[i].querySelector('.pt-v').getBoundingClientRect();
+      if (v.right > box.right + 0.5 || (l.classList.contains('is-cut') && boxWidth(l) < MIN_PT_LABEL)) ok = false;
+    }
+    if (ok) return;
+  }
+}
+
 /** Fit every .fit element under `root` (an element or the document). Writes first, then one
  *  read for all of them, then the few that overflow are fixed one by one -- so a card whose
- *  text all fits costs a single layout pass. */
+ *  text all fits costs a single layout pass. v2.28: after the rows got their line counts,
+ *  and with the inline third lines last. */
 export function fitAll(root = document) {
-  const els = [...root.querySelectorAll('.fit')].filter((el) => !el.closest('.alt-form'));
+  lineRows(root);
+  const inline = [...root.querySelectorAll('.item.sub-inline .sub.fit')].filter(isInlineSub);
+  const els = [...root.querySelectorAll('.fit')].filter((el) => !el.closest('.alt-form') && !el.closest('.ptab') && !isInlineSub(el));
   root.querySelectorAll('.is-alt').forEach((it) => it.classList.remove('is-alt'));
   root.querySelectorAll('.alt-form .fit').forEach(reset);
   els.forEach(reset);
+  inline.forEach(resetInline);
   const bases = els.map((el) => parseFloat(getComputedStyle(el).fontSize));
   const bad = els.map((el, i) => (el.offsetParent !== null && overflows(el) ? i : -1)).filter((i) => i >= 0);
   for (const i of bad) fitOne(els[i], bases[i]);
+  root.querySelectorAll('.ptab').forEach(fitPtab);
+  for (const el of inline) fitInline(el);
 }
 
 /** Fit the cards (and their header tags) whose body changed or whose width changed since they

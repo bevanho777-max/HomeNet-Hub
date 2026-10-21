@@ -121,7 +121,9 @@ grid:
     header_right: badge
     items: [model, status]
     # v2.27 `subs`: a second metric on a cell's second line instead of a cell of its own --
-    # here each backend is two full cells (model + role, status + latency), not four sparse ones
+    # here each backend is two full cells (model + role, status + latency), not four sparse ones.
+    # (v2.28: the second line sits under the value when every cell in that row has one, as
+    # here; in a row where only some do, it follows the value on the value line instead)
     subs: { model: role, status: latency }
 
   # v2.20 inference nodes — one full-width card, one column per inference machine:
