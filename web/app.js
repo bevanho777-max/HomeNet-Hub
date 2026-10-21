@@ -43,11 +43,14 @@ function mountCards(containerId, cards) {
       el.dataset.key = c.key;
       if (c.accent) el.style.setProperty('--accent', c.accent);
       el.innerHTML = `<h2>${esc(c.title)}${c.tag ? `<span class="tag">${c.tag}</span>` : ''}</h2><div class="card-body">${c.body}</div>`;
+      el._body = c.body;
       container.appendChild(el);
     } else {
       if (c.accent) el.style.setProperty('--accent', c.accent);
       const body = el.querySelector('.card-body');
-      if (body) updateBodyKeepRings(body, c.body);
+      // v2.25: an unchanged card is not touched at all (the live nodes card refreshes every
+      // 2 s; nothing else on the page should be rewritten for it)
+      if (body && el._body !== c.body) { updateBodyKeepRings(body, c.body); el._body = c.body; }
       // shell-persist: the header is written once at first mount, so anything in it has
       // to be re-synced here or the card keeps what it was born with until a hard reload.
       const h2 = el.querySelector('h2');
@@ -70,7 +73,7 @@ function mountCards(containerId, cards) {
       let tagEl = h2 && h2.querySelector('.tag');
       if (c.tag) {
         if (!tagEl && h2) { tagEl = document.createElement('span'); tagEl.className = 'tag'; h2.appendChild(tagEl); }
-        if (tagEl) tagEl.innerHTML = c.tag;
+        if (tagEl && tagEl.innerHTML !== c.tag) tagEl.innerHTML = c.tag;
       } else if (tagEl) {
         tagEl.remove();
       }
@@ -351,7 +354,7 @@ function render() {
     const snap = lastSnap[gc.target];
     const target = { ...raw, color: autoColor(raw, snap, gc.type) }; // B14: resolve auto/omitted color
     if (gc.type === 'machine') cards.push(renderMachine(gc, target, snap, metrics));
-    else if (gc.type === 'token') cards.push(renderToken(gc, target, snap));
+    else if (gc.type === 'token') cards.push(renderToken(gc, target, snap, currentLive()));
     else if (gc.type === 'service') cards.push(renderService(gc, target, snap, metrics));
     else if (gc.type === 'stack') cards.push(renderStack(gc, (id) => {
       const t = targetById(id); const s = lastSnap[id];
@@ -359,7 +362,7 @@ function render() {
     }, metrics));
     else if (gc.type === 'info') cards.push(renderInfo(gc, target, snap));
     else if (gc.type === 'table') cards.push(renderTable(gc, target, snap));
-    else if (gc.type === 'nodes') cards.push(renderNodes(gc, (id) => ({ target: targetById(id), snap: lastSnap[id] })));
+    else if (gc.type === 'nodes') cards.push(renderNodes(gc, resolveWithLive));
     if (cards.length > before) {
       if (gc.span != null) cards[cards.length - 1].span = gc.span;
       if (gc.stretch) cards[cards.length - 1].stretch = true;
@@ -384,6 +387,68 @@ function render() {
   applyDemoBar(CONFIG, isAuthed());
 
   $('#rawjson').textContent = JSON.stringify(lastSnap, null, 2);
+}
+
+// ── v2.25 live inference state ───────────────────────────────────────
+// Pushed by the hub every ~2 s (Server-Sent Events, /api/live/stream), with /api/live
+// polled as a fallback while no push has arrived for 6 s. Each update re-renders ONLY the
+// nodes card body and the Token Usage header -- not the page. The newest of the pushed
+// state and the one in the regular snapshot wins (a slow snapshot reply must not roll the
+// card back).
+let liveView = null;
+let liveLastMsg = 0;
+let liveTimer = null;
+let liveES = null;
+function liveTargetId() { return (CONFIG?.layout?.grid || []).find((c) => c.type === 'nodes' && c.live)?.live || null; }
+function currentLive() {
+  const id = liveTargetId();
+  if (!id) return null;
+  const a = lastSnap[id]?.extra?.live || null;
+  if (!a) return liveView;
+  if (!liveView) return a;
+  return (liveView.at || 0) >= (a.at || 0) ? liveView : a;
+}
+function resolveWithLive(id) {
+  if (id && id === liveTargetId()) return { target: targetById(id), snap: { online: true, extra: { live: currentLive() } } };
+  return { target: targetById(id), snap: lastSnap[id] };
+}
+function renderLive() {
+  if (!CONFIG) return;
+  for (const gc of CONFIG.layout?.grid || []) {
+    let c = null;
+    if (gc.type === 'nodes') c = renderNodes(gc, resolveWithLive);
+    else if (gc.type === 'token') {
+      const raw = targetById(gc.target);
+      c = renderToken(gc, { ...raw, color: autoColor(raw, lastSnap[gc.target], 'token') }, lastSnap[gc.target], currentLive());
+    }
+    if (!c) continue;
+    const el = [...document.querySelectorAll('#grid > .card')].find((x) => x.dataset.key === c.key);
+    if (!el) continue;
+    if (gc.type === 'nodes') {
+      const body = el.querySelector('.card-body');
+      if (body && el._body !== c.body) { body.innerHTML = c.body; el._body = c.body; }
+    } else {
+      const tagEl = el.querySelector('h2 .tag');
+      if (tagEl && c.tag && tagEl.innerHTML !== c.tag) tagEl.innerHTML = c.tag;
+    }
+  }
+}
+function startLive() {
+  if (liveTimer) return;
+  const onView = (v) => { if (v && typeof v === 'object' && v.nodes) { liveView = v; renderLive(); } };
+  if (window.EventSource) {
+    try {
+      liveES = new EventSource('/api/live/stream');
+      liveES.onmessage = (e) => { liveLastMsg = Date.now(); try { onView(JSON.parse(e.data)); } catch { /* ignore */ } };
+    } catch { liveES = null; }
+  }
+  liveTimer = setInterval(async () => {
+    if (!liveTargetId() || Date.now() - liveLastMsg < 6000) return;
+    try {
+      const r = await fetchT('/api/live', { cache: 'no-store' }, 3000);
+      if (r.ok) onView(await r.json());
+    } catch { /* next tick */ }
+  }, 2000);
 }
 
 // externalized UI label with a generic (non-project) bottom-line fallback (§12-step2).
@@ -805,6 +870,7 @@ let snapTimer = null, configTimer = null, clockTimer = null;
 function startTimers() {
   stopTimers();
   snapTimer = setInterval(snapTick, fastMs());
+  startLive();
   configTimer = setInterval(() => configTick(false), CONFIG_MS);
   clockTimer = setInterval(tickClock, 1000);
 }

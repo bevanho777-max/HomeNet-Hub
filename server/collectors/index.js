@@ -54,6 +54,13 @@ export class Scheduler {
     if (usageT && this.ctx.usage) this.ctx.usage.configure(usageT, enabled.find((t) => t.id === usageT.source.nodes_target) || null);
     this.usageProjects = enabled.filter((t) => t.source?.type === 'usage_projects');
     this.usageTarget = usageT || null;
+    // v2.25 live inference state (2 s, straight from the servers)
+    const liveT = enabled.find((t) => t.source?.type === 'inference_live');
+    if (liveT && this.ctx.live) {
+      this.ctx.live.configure(liveT, enabled.find((t) => t.id === liveT.source.nodes_target) || null, {
+        timeoutMs: parseDuration(liveT.source.timeout, 1000), maxAgeMs: parseDuration(liveT.source.last_max_age, 600000),
+      });
+    }
     this.ctx.snapshot.prune(enabled.map((t) => t.id));
 
     for (const target of enabled) {
@@ -66,7 +73,8 @@ export class Scheduler {
       // generic 8s fallback would mean a handshake every 8 seconds forever if a
       // hand-written target omitted `interval`.
       const interval = parseDuration(target.source?.interval,
-        type === 'usage' || type === 'usage_projects' ? 30000
+        type === 'inference_live' ? 2000
+          : type === 'usage' || type === 'usage_projects' ? 30000
           : type === 'http' ? 1500 : type === 'demo' ? 2000
           : type === 'tls' ? 3600000 : type === 'tcp' ? 10000
             : type === 'prometheus' ? 10000 : type === 'ssh' ? 10000
@@ -135,6 +143,14 @@ export class Scheduler {
           this._inflight.add(ut.id);
           Promise.resolve(this._poll(ut, metrics)).catch(() => {}).finally(() => this._inflight.delete(ut.id));
         }
+        return;
+      }
+      // v2.25: live state, pushed to the browsers (SSE) the moment it is read. Not written to
+      // the timeseries: history keeps coming from Prometheus.
+      if (type === 'inference_live') {
+        const view = await this.ctx.live.poll();
+        snapshot.update(target.id, { online: true, metrics: {}, extra: { live: view } });
+        this.ctx.liveBus?.emit(view);
         return;
       }
       // v2.24: all usage (counters + LiteLLM) by Beijing day -- see server/usage.js

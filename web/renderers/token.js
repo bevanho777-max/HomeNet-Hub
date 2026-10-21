@@ -17,7 +17,7 @@ export function coverageList(coverage, kinds = ['tokens', 'embed_tokens']) {
   return [...byNode].sort((a, b) => a[1] - b[1]).map(([n, s]) => `${n} ${bjDay(s)}`).join(' · ');
 }
 
-export function renderToken(gridCard, target, snap) {
+export function renderToken(gridCard, target, snap, liveView = null) {
   const title = target.name || target.id;
   const accent = target.color || '';
   const tk = snap?.extra?.token;
@@ -27,10 +27,17 @@ export function renderToken(gridCard, target, snap) {
   let tag = '';
   const tpl = cv(gridCard, 'header_right');
   if (typeof tpl === 'string' && tpl) {
-    const sp = mget(snap, 'token_speed');
+    // v2.25: with a live reader the speed is live (2 s, pushed) -- the sum of the nodes'
+    // current decode rates; without one, the usage engine's Prometheus rate as before.
+    let sp = mget(snap, 'token_speed');
+    let nodes = tk?.speed_nodes;
+    if (liveView && liveView.nodes) {
+      const tot = liveView.decode_total;
+      sp = { value: tot, display: tot == null ? '—' : (Math.round(tot * 10) / 10).toFixed(1) };
+      nodes = Object.entries(liveView.nodes).map(([node, n]) => ({ node, tps: n.busy > 0 && n.decode_tps != null ? n.decode_tps : (n.reachable ? 0 : null) }));
+    }
     const text = (sp.value == null ? tpl.replace(/\{token_speed\}\s*t\/s/, '—') : tpl)
-      .replace(/\{(\w+)\}/g, (_, k) => mget(snap, k).display || '—');
-    const nodes = tk?.speed_nodes;
+      .replace(/\{(\w+)\}/g, (_, k) => (k === 'token_speed' ? sp.display : mget(snap, k).display) || '—');
     const title = Array.isArray(nodes) && nodes.length
       ? nodes.map((n) => `${n.node} ${n.tps == null ? '—' : `${n.tps} t/s`}`).join(' · ') : '';
     tag = title ? `<span title="${esc(title)}">${esc(text)}</span>` : esc(text);

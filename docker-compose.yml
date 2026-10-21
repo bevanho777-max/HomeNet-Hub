@@ -28,6 +28,9 @@ services:
       # mints/revokes client keys from the admin panel. Unset -> the client manager says
       # so and everything else, the Per-Project card included, keeps working on digests.
       - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY:-}
+      # v2.25 live inference state: Strata's /status needs its API key (llama.cpp's /slots
+      # does not). Unset -> Strata nodes show no live state; everything else is unchanged.
+      - STRATA_API_KEY=${STRATA_API_KEY:-}
       # Default http://litellm:4000 — the compose service name on the external
       # litellm_default network below, NOT 127.0.0.1: inside this container localhost is
       # the hub itself. Only set this if the proxy lives somewhere else.

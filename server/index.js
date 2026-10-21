@@ -25,6 +25,7 @@ import { collectSql, collectSqlRows, clearQueryCache } from './collectors/sql.js
 import { demoTokenRows } from './collectors/demo.js';
 import { pivotTokens, TOKEN_RANGE_DAYS } from './token_detail.js';
 import { UsageEngine } from './usage.js';
+import { LiveCollector } from './collectors/live.js';
 import { discoverTarget } from './collectors/discovery.js';
 import { UserStore } from './store/user_store.js';
 import { EffectiveStore } from './config/effective.js';
@@ -101,7 +102,18 @@ const litellmKeys = createLitellmKeys();
 // v2.24: all-usage engine (Token Usage, Per-Project, Clients); its day tables live in the
 // same database file.
 const usage = new UsageEngine(join(DATA_DIR, 'homenet.db'), { snapshot, env: process.env });
-const scheduler = new Scheduler({ snapshot, tsdb, env: process.env, vault, credStore, litellmKeys, usage });
+// v2.25: live inference state (2 s) and the browsers listening for it (SSE)
+const live = new LiveCollector({ env: process.env });
+const liveClients = new Set();
+let liveLast = null;
+const liveBus = {
+  emit(view) {
+    liveLast = view;
+    const msg = `data: ${JSON.stringify(view)}\n\n`;
+    for (const res of liveClients) { try { res.write(msg); } catch { liveClients.delete(res); } }
+  },
+};
+const scheduler = new Scheduler({ snapshot, tsdb, env: process.env, vault, credStore, litellmKeys, usage, live, liveBus });
 console.log(`[litellm] key API ${litellmKeys.configured ? `enabled (${litellmKeys.status().base_url})` : `off — ${litellmKeys.reason}`}`);
 console.log(`[vault] ${vault.locked ? `locked — ${vault.reason}` : 'unlocked'}`
   + ` (${credStore.count()} credential(s) stored)`);
@@ -539,6 +551,28 @@ app.get('/api/snapshot', VIEW, async () => {
   const cfg = effective.get();
   const ids = (cfg.targets.targets || []).filter((t) => t.enabled !== false).map((t) => t.id);
   return snapshot.toJSON(ids);
+});
+
+// v2.25: the live inference state on its own, for the nodes card and the Token Usage
+// header. /api/live/stream pushes every update (Server-Sent Events); /api/live is the
+// polling fallback for a browser or proxy that will not keep a stream open.
+const LIVE_MAX_CLIENTS = 64;
+app.get('/api/live', VIEW, async () => liveLast || { at: null, nodes: {}, decode_total: null });
+app.get('/api/live/stream', VIEW, async (req, reply) => {
+  if (liveClients.size >= LIVE_MAX_CLIENTS) return reply.code(503).send({ error: 'too many live streams' });
+  reply.hijack();
+  const res = reply.raw;
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Cache-Control': 'no-cache, no-transform',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  });
+  res.write('retry: 3000\n\n');
+  if (liveLast) res.write(`data: ${JSON.stringify(liveLast)}\n\n`);
+  liveClients.add(res);
+  const ping = setInterval(() => { try { res.write(': ping\n\n'); } catch { /* closed */ } }, 15000);
+  req.raw.on('close', () => { clearInterval(ping); liveClients.delete(res); });
 });
 
 app.get('/api/history', VIEW, async (req) => {

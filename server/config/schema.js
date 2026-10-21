@@ -64,7 +64,7 @@ const sourceSchema = {
   type: 'object',
   required: ['type'],
   properties: {
-    type: { enum: ['http', 'http_push', 'sql', 'exec', 'demo', 'tcp', 'tls', 'prometheus', 'ssh', 'inference_nodes', 'usage', 'usage_projects'] },
+    type: { enum: ['http', 'http_push', 'sql', 'exec', 'demo', 'tcp', 'tls', 'prometheus', 'ssh', 'inference_nodes', 'usage', 'usage_projects', 'inference_live'] },
     // http
     url: { type: 'string' },
     interval: { type: 'string' },     // duration string e.g. "1.5s", "8s", "30s"
@@ -123,6 +123,8 @@ const sourceSchema = {
     // node list, endpoints and counters come from the inference_nodes target it names.
     { if: { properties: { type: { const: 'usage' } } }, then: { required: ['nodes_target', 'dsn_env', 'rows_query_file', 'legacy_query_file', 'logs_since'] } },
     { if: { properties: { type: { const: 'usage_projects' } } }, then: { required: ['usage_target'] } },
+    // v2.25: live state read from each node's own server (the nodes' `live` blocks)
+    { if: { properties: { type: { const: 'inference_live' } } }, then: { required: ['nodes_target'] } },
   ],
 };
 
@@ -200,6 +202,14 @@ const targetsSchema = {
               properties: {
                 id: { type: 'string', pattern: '^[a-zA-Z0-9_]+$' },
                 endpoints: { type: 'array', items: { type: 'string' } },         // chat host:port
+                // v2.25: where the live state is read (inference_live target): llama.cpp
+                // /slots or Strata /status; key_env names the .env variable with Strata's key
+                live: {
+                  type: 'object',
+                  required: ['kind', 'url'],
+                  properties: { kind: { enum: ['llamacpp', 'strata'] }, url: { type: 'string' }, key_env: { type: 'string' } },
+                  additionalProperties: false,
+                },
                 embed_endpoints: { type: 'array', items: { type: 'string' } },   // embedding host:port
                 // v2.22: Prometheus counter selectors summed into today's totals
                 counters: {

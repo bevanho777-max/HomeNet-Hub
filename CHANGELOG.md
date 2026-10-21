@@ -49,6 +49,36 @@ on screen is the one from `package.json`, and this file is what needs fixing.
 
 ---
 
+## v2.25.0 — 2026-10-21
+
+**推理节点卡实时显示「推理中」与实时 prefill / decode 速度:hub 每 2 秒直接读各推理服务,经 SSE 推给浏览器。**
+
+*Rebuild required — `server/` + `web/` changed. 新增 `server/collectors/live.js`;`.env` / `docker-compose.yml`
+新增 `STRATA_API_KEY`(Strata 的 /status、/metrics 要它)。*
+
+- **为什么原来慢**:推理服务的 token 计数器在请求**结束时**才累加,Prometheus 定时抓、rate 至少要两个样本,hub 再
+  轮询 Prometheus、前端再刷新 —— 模型跑了快 2 分钟才出数字,推理期间看不出在推理。
+- **新的实时采集**(`type: inference_live`,节点的 `live` 块):每 2 秒、每节点一个小请求、1 秒超时、连不上指数退避
+  (2→4→8…最长 30 秒)。
+  - llama.cpp(m26):`GET /slots`(本版本推理中也 ~2 ms 就答):在处理的 slot 数、`n_decoded`、prompt 已处理数;
+    请求开始和开始生成时各读一次 `/metrics`:本版本在第一次出结果的那个 batch 把 prompt 计数器刷进去,两次读数之差
+    就是这次请求精确的 prefill 速度。
+  - Strata(m25、m110):空闲时 `GET /status`(~0.2 KB,只看忙不忙;它带的 `tail` 生成文本一到就丢弃,不存不传),
+    忙时 `GET /metrics` 的 `live`(m25 有并行 slot,`/status` 会一直停在「reading the prompt」、generated=0,只有
+    `live` 是对的)。请求结束时用同一响应里 `requests[]` 的 prompt_read / prompt_ms / decode_tok_s。
+- **卡片**:有请求在跑时状态格立刻变青色「推理中 / N 个请求」(英文 Generating),不等速度算出来;Decode = 进行中各请求
+  已生成 token 数在近 ~10 秒读数间的增量 ÷ 时间差(并行时合计,小字写明并行数);Prefill:llama.cpp 处理中按批次估算,
+  一开始生成就换成本次请求的精确值;Strata 在请求结束时给出。请求结束后保留「测量于 HH:MM」,超过 10 分钟变「最后
+  HH:MM · 值」,规则与原来一致(取实时与 Prometheus 两条路里较新的一条)。
+- **推送**:`/api/live/stream`(Server-Sent Events),hub 一读到就推;推不过来时前端每 2 秒轮询 `/api/live`。只重绘推理
+  节点卡的内容和 Token Usage 右上角那一格;顺带所有卡片内容没变时不再重写 DOM。
+- **Token Usage 右上角**「当前生成 X t/s」改用实时数据(各节点当前 decode 之和),悬停列各节点。
+- Prometheus 那条路保留,只用于历史与对账;实时数据不写历史。
+- **实测(生产,直连请求)**:m26(prompt 1305、max_tokens 1500)请求发出 → 卡片「推理中」1.12 s,开始生成 → 出现 decode
+  速度 3.12 s;卡片 prefill 218.3 vs llama-server timings 213.4(2.3%),生成中 decode 31.4–34.5 vs 33.30(最大 5.7%),
+  结束后 33.2(0.3%)。m110(300 token)1.20 s / 2.17 s,结束后与 Strata 自己的记录一致。Strata 的 generated 是成批跳的,
+  短请求 2 秒窗口的读数会偏 ±15–20%;长请求(10 秒窗口)实测中位 2.8%、最大 8.4%。
+
 ## v2.24.0 — 2026-10-21
 
 **Token Usage 改为所有用量(以推理服务自己的计数器为准);全站「今日」与日期统一为北京时间自然日;

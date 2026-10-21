@@ -325,7 +325,9 @@ h2:empty { display: none; } /* 堆叠卡外框无标题时不留空行 */
 /* a node cell is three stacked lines: label, value, second line (always present) */
 .kv.node-kv .item { flex-direction: column; flex-wrap: nowrap; align-items: stretch; row-gap: 2px; }
 .kv.node-kv .item::before { content: none; }
-.kv.node-kv .item .value { margin-left: 0; text-align: left; }
+.kv.node-kv .item .value { margin-left: 0; text-align: left; white-space: nowrap; overflow-wrap: normal; }
+/* (nowrap: a status word such as "Generating" is never split mid-word -- its column takes
+   the room it needs, the grid's minmax(min-content, …) tracks give it) */
 .kv.node-kv .item .label { white-space: nowrap; }
 /* always_on:false 且连不上:整栏变灰(不是故障,不着红)*/
 .node-idle { filter: grayscale(0.85) opacity(0.62); }

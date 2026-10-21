@@ -264,6 +264,9 @@ targets:
     nodes:
       - id: gpu_a
         endpoints: ["192.0.2.10:8080"]
+        # v2.25 live state (inference_live target below): Strata's /status + /metrics
+        # (needs its API key, named by key_env) or llama.cpp's /slots (needs nothing)
+        live: { kind: strata, url: "http://192.0.2.10:8080", key_env: STRATA_API_KEY }
         counters:
           requests: ['strata:requests_total{instance="192.0.2.10:8080"}']
           tokens: ['llamacpp:prompt_tokens_total{instance="192.0.2.10:8080"}', 'llamacpp:prompt_tokens_cached_total{instance="192.0.2.10:8080"}', 'llamacpp:tokens_predicted_total{instance="192.0.2.10:8080"}']
@@ -275,6 +278,7 @@ targets:
       - id: gpu_b
         endpoints: ["192.0.2.11:12346"]
         embed_endpoints: ["192.0.2.11:12347"]
+        live: { kind: llamacpp, url: "http://192.0.2.11:12346" }
         counters:            # llama.cpp: token counters only; requests via llama-log-exporter.py
           tokens: ['llamacpp:prompt_tokens_total{instance="192.0.2.11:12346"}', 'llamacpp:prompt_tokens_cached_total{instance="192.0.2.11:12346"}', 'llamacpp:tokens_predicted_total{instance="192.0.2.11:12346"}']
           requests: ['homenet_llama_requests_total{instance="192.0.2.11:9877",unit="llama-chat.service"}']
@@ -282,6 +286,19 @@ targets:
           embed_tokens: ['homenet_llama_tokens_total{instance="192.0.2.11:9877",unit="llama-embed.service"}']
           net: ['llamacpp:prompt_tokens_total{instance="192.0.2.11:12346"}', 'llamacpp:tokens_predicted_total{instance="192.0.2.11:12346"}']
           generated: ['llamacpp:tokens_predicted_total{instance="192.0.2.11:12346"}']
+
+  # v2.25: what the nodes are doing RIGHT NOW, read from each server every 2 s (not through
+  # Prometheus, whose counters only move when a request ends): "Generating · N" on the nodes
+  # card the moment a request is in flight, live prefill / decode speed, and the Token
+  # Usage header's "Generating X t/s". One small GET per node per poll, `timeout` each,
+  # exponential backoff (to 30 s) while a node does not answer. Pushed to the browsers over
+  # Server-Sent Events (/api/live/stream; /api/live is the polling fallback); not written to
+  # the history -- that stays on the Prometheus targets. Point the nodes card at it with
+  # `live: <this id>` in layout.yaml.
+  - id: live_example
+    name: "Inference nodes (live)"
+    enabled: false
+    source: { type: inference_live, nodes_target: nodes_example, interval: "2s", timeout: "1s", last_max_age: "10m" }
 
   # v2.24: ALL usage for the Token Usage card (point the layout's token card at this
   # target instead of a `type: sql` one). The inference servers' own counters (from the
