@@ -74,19 +74,74 @@ function liveSpeedCells(lv) {
     + cell(t('node_decode'), decVal, { cls: lv.decode_tps != null ? 'lv-cool' : '', sub: decSub });
 }
 
+// v2.26: a node with several concurrent streams (Strata "parallel", llama.cpp -np): Decode
+// is the sum of the streams' live rates, labelled as a total, with the per-stream average
+// under it; Prefill is the most recent prefill, with the streams prefilling now named.
+function multiSpeedCells(lv) {
+  const lp = lv.last_prefill;
+  const preVal = lp ? fmt1(lp.tps) : '—';
+  const preSub = lv.prefilling?.length
+    ? t('node_prefilling_n', lv.prefilling.map((n) => `#${n}`).join(' '))
+    : (lp ? t('measured_at', hm(lp.at / 1000)) : t('node_prefill_after'));
+  const decVal = lv.decode_tps != null ? fmt1(lv.decode_tps) : '—';
+  const decSub = lv.decode_tps != null ? t('node_total_avg', fmt1(lv.decode_avg))
+    : (lv.decoding ? t('node_live') : t('node_wait_decode'));
+  return cell(t('node_prefill'), preVal, { sub: preSub })
+    + cell(t('node_decode'), decVal, { cls: lv.decode_tps != null ? 'lv-cool' : '', sub: decSub });
+}
+
+const nfmt = (x) => Number(x).toLocaleString('en-US');
+
+// v2.26: the concurrency bar -- one cell per stream the server can run (fixed count, so the
+// card does not jump as streams come and go): #n, phase, its own live speed, tokens decoded
+// (with a thin bar when the request's max_tokens is known), the prompt while prefilling.
+function streamCell(s) {
+  const phase = t(s.state === 'decode' ? 'stream_decode' : s.state === 'prefill' ? 'stream_prefill' : 'stream_idle');
+  let value = '—', sub = '', pct = null;
+  if (s.state === 'decode') {
+    value = fmt1(s.tps);
+    sub = s.max ? t('stream_gen_of', nfmt(s.gen ?? 0), nfmt(s.max)) : t('stream_gen', nfmt(s.gen ?? 0));
+    if (s.max) pct = Math.min(100, ((s.gen ?? 0) / s.max) * 100);
+  } else if (s.state === 'prefill') {
+    value = fmt1(s.tps);
+    sub = s.prompt != null ? t('stream_prompt', nfmt(s.prompt)) + (s.read != null ? ` · ${t('stream_read', nfmt(s.read))}` : '') : '';
+    if (s.prompt && s.read != null) pct = Math.min(100, (s.read / s.prompt) * 100);
+  } else if (s.held != null) {
+    sub = t('stream_cached', nfmt(s.held));
+  }
+  const bar = `<span class="sbar${pct == null ? ' none' : ''}"><i style="width:${pct == null ? 0 : pct.toFixed(1)}%"></i></span>`;
+  return `<div class="item stream stream-${s.state}"><span class="label">#${s.n} · ${esc(phase)}</span>`
+    + `<span class="value${s.state === 'idle' ? '' : ' lv-cool'}">${value}</span>`
+    + `<span class="sub">${sub ? esc(sub) : '&nbsp;'}</span>${bar}</div>`;
+}
+
+function streamsBar(lv, online) {
+  const M = Number(lv?.max_streams) || 1;
+  if (M < 2) return '';
+  const streams = online && Array.isArray(lv.streams) && lv.streams.length === M ? lv.streams
+    : Array.from({ length: M }, (_, i) => ({ n: i + 1, state: 'idle', held: null }));
+  // columns per row when the bar cannot share the cell grid's columns: a divisor of M, so
+  // every row is full
+  const mc = M <= 4 ? M : [4, 3, 5, 2].find((c) => M % c === 0) || M;
+  return `<div class="node-streams" data-m="${M}" style="--m:${M};--mc:${mc}">${streams.map(streamCell).join('')}</div>`;
+}
+
 function speedCells(speedSnap, col, speedTarget, lv = null) {
-  if (lv?.reachable && lv.busy > 0) return liveSpeedCells(lv);
+  if (lv?.reachable && lv.busy > 0) return (lv.max_streams > 1 ? multiSpeedCells : liveSpeedCells)(lv);
   // a request the live reader saw end, newer than the last Prometheus measurement
   const L = lv?.last;
   const promAt = Math.max(Number(speedSnap?.metrics?.prefill_speed?.at) || 0, Number(speedSnap?.metrics?.decode_speed?.at) || 0);
   if (L && L.at / 1000 >= promAt) {
+    // a multi-stream node's Prefill is the most recent prefill of ANY stream (the last
+    // request to end may have read a fully cached prompt, with no prefill of its own)
+    const P = lv.max_streams > 1 && lv.last_prefill ? { v: lv.last_prefill.tps, at: lv.last_prefill.at / 1000, expired: lv.last_prefill.expired }
+      : { v: L.prefill, at: L.at / 1000, expired: L.expired };
     const at = L.at / 1000;
-    if (!L.expired) {
-      const sub = t('measured_at', hm(at));
-      return cell(t('node_prefill'), fmt1(L.prefill), { sub }) + cell(t('node_decode'), fmt1(L.decode), { sub });
-    }
-    return cell(t('node_prefill'), '—', { sub: t('node_sub_last', hm(at), fmt1(L.prefill)) })
-      + cell(t('node_decode'), '—', { sub: t('node_sub_last', hm(at), fmt1(L.decode)) });
+    const pre = !P.expired ? cell(t('node_prefill'), fmt1(P.v), { sub: t('measured_at', hm(P.at)) })
+      : cell(t('node_prefill'), '—', { sub: t('node_sub_last', hm(P.at), fmt1(P.v)) });
+    const dec = !L.expired ? cell(t('node_decode'), fmt1(L.decode), { sub: t('measured_at', hm(at)) })
+      : cell(t('node_decode'), '—', { sub: t('node_sub_last', hm(at), fmt1(L.decode)) });
+    return pre + dec;
   }
   const pp = speedSnap?.metrics?.prefill_speed, tg = speedSnap?.metrics?.decode_speed;
   const both = (sub) => cell(t('node_prefill'), '—', { sub }) + cell(t('node_decode'), '—', { sub });
@@ -113,6 +168,11 @@ function speedCells(speedSnap, col, speedTarget, lv = null) {
  */
 export function renderNodes(gc, resolve) {
   const meta = resolve(gc.target).snap;
+  // v2.26: does any node here run several streams? Then every column's cell grid gets the
+  // stream row (empty where there is no bar), so the row gaps -- and with them the cells'
+  // tops and bottoms -- match across the columns. With none, the grid is as before.
+  const liveOf = (node) => (gc.live ? resolve(gc.live).snap?.extra?.live?.nodes?.[node] || null : null);
+  const anyMulti = (gc.nodes || []).some((c) => Number(liveOf(c.node)?.max_streams) > 1);
   const cols = (gc.nodes || []).map((col, idx) => {
     const { target: probeT, snap: probeS } = resolve(col.probe);
     const { target: speedT, snap: speedS } = col.speed ? resolve(col.speed) : { target: null, snap: null };
@@ -159,8 +219,13 @@ export function renderNodes(gc, resolve) {
     };
     const reqSub = meta && !cnt.requests ? t('node_no_req_counter') : subOf('ll_reqs', 'emb_reqs', 'emb_ll_reqs');
     // busy: "推理中" in cyan the moment the server has a request in flight, before any speed
+    const multi = Number(lv?.max_streams) > 1;
     const statusCell = busy
-      ? cell(t('node_status'), esc(t('node_busy')), { cls: 'lv-cool', sub: t('node_busy_n', lv.busy) + (lv.queued ? ` · ${t('node_queued', lv.queued)}` : '') })
+      ? (multi
+        // "推理中 N/M": streams running / streams the server can run (read from it)
+        // (may wrap between the word and N/M: "Generating 2/3" does not fit a phone's status column)
+        ? cell(t('node_status'), esc(`${t('node_busy')} ${lv.running}/${lv.max_streams}`), { cls: 'lv-cool wrap', sub: lv.queued ? t('node_queued', lv.queued) : '' })
+        : cell(t('node_status'), esc(t('node_busy')), { cls: 'lv-cool', sub: t('node_busy_n', lv.busy) + (lv.queued ? ` · ${t('node_queued', lv.queued)}` : '') }))
       : cell(t('node_status'), esc(statusText(state, probeT)), { cls: STATE_CLASS[state] });
     const cells = statusCell
       + cell(t('node_latency'), lat)
@@ -171,7 +236,7 @@ export function renderNodes(gc, resolve) {
     return `<div class="node-col node-${state}${busy ? ' node-busy' : ''}" data-col="${idx}">`
       + `<div class="node-head"><span class="node-name">${esc(name)}</span><span class="node-port">· ${port}</span>${pub}</div>`
       + `<div class="node-model${modelCls}"${modelTitle}>${esc(model)}</div>`
-      + `<div class="kv node-kv">${cells}</div>`
+      + `<div class="kv node-kv${anyMulti ? ' has-streams' : ''}">${cells}${multi ? streamsBar(lv, state === 'online' && lv.reachable) : (anyMulti ? '<div class="node-streams" data-m="0"></div>' : '')}</div>`
       + '</div>';
   });
   return {

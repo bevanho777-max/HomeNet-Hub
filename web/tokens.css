@@ -297,9 +297,11 @@ h2:empty { display: none; } /* 堆叠卡外框无标题时不留空行 */
    a row) when it is wider; --kcols is the matching column template. Columns are separated by a hairline drawn in the gap, so
    all three columns have exactly the same content width. */
 .card.card-wide { grid-column: 1 / -1; }
-.nodes-grid { --r: 2; --kcols: minmax(min-content, 0.6fr) minmax(min-content, 1fr) minmax(min-content, 1.4fr);
+.nodes-grid { --r: 2; --r1: 3; --kcols: minmax(min-content, 0.6fr) minmax(min-content, 1fr) minmax(min-content, 1.4fr);
   display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
-  grid-template-rows: auto auto repeat(var(--r), auto); column-gap: 33px; row-gap: 0; }
+  /* head, model, the cell rows, and (v2.26) the concurrency bar's row -- empty (0 high) in
+     a column whose node runs one request at a time */
+  grid-template-rows: auto auto repeat(var(--r), auto) auto; column-gap: 33px; row-gap: 0; }
 .node-col { position: relative; min-width: 0; grid-row: 1 / -1; display: grid; grid-template-rows: subgrid; }
 .node-col + .node-col::before { content: ""; position: absolute; left: -17px; top: 0; bottom: 0; width: 1px; background: var(--hair); }
 .node-head { grid-row: 1; display: flex; align-items: center; flex-wrap: wrap; gap: var(--s2); row-gap: 2px;
@@ -326,6 +328,7 @@ h2:empty { display: none; } /* 堆叠卡外框无标题时不留空行 */
 .kv.node-kv .item { flex-direction: column; flex-wrap: nowrap; align-items: stretch; row-gap: 2px; }
 .kv.node-kv .item::before { content: none; }
 .kv.node-kv .item .value { margin-left: 0; text-align: left; white-space: nowrap; overflow-wrap: normal; }
+.kv.node-kv .item .value.wrap { white-space: normal; }
 /* (nowrap: a status word such as "Generating" is never split mid-word -- its column takes
    the room it needs, the grid's minmax(min-content, …) tracks give it) */
 .kv.node-kv .item .label { white-space: nowrap; }
@@ -334,17 +337,44 @@ h2:empty { display: none; } /* 堆叠卡外框无标题时不留空行 */
 .node-idle-text { color: var(--muted); }
 /* a ~550-700px column: the usage column would be the emptiest, so it gives some back */
 @container card (min-width: 1700px) { .nodes-grid { --kcols: minmax(min-content, 0.7fr) minmax(min-content, 1fr) minmax(min-content, 1.3fr); } }
-@container card (min-width: 2166px) { .nodes-grid { --r: 1; --kcols: repeat(6, minmax(0, 1fr)); } }
+@container card (min-width: 2166px) { .nodes-grid { --r: 1; --r1: 2; --kcols: repeat(6, minmax(0, 1fr)); } }
 /* narrow card: the three nodes stack, each with its own rows */
 @container card (max-width: 900px) {
   .nodes-grid { grid-template-columns: minmax(0, 1fr); grid-template-rows: none; }
-  .node-col { grid-row: auto; grid-template-rows: auto auto repeat(var(--r), auto); padding: var(--s3) 0; }
+  .node-col { grid-row: auto; grid-template-rows: auto auto repeat(var(--r), auto) auto; padding: var(--s3) 0; }
   .node-col + .node-col { border-top: 1px solid var(--hair); }
   .node-col + .node-col::before { content: none; }
   .node-col:first-child { padding-top: 0; }
   .node-col:last-child { padding-bottom: 0; }
 }
-@container card (min-width: 560px) and (max-width: 900px) { .nodes-grid { --r: 1; --kcols: repeat(6, minmax(0, 1fr)); } }
+@container card (min-width: 560px) and (max-width: 900px) { .nodes-grid { --r: 1; --r1: 2; --kcols: repeat(6, minmax(0, 1fr)); } }
+
+/* v2.26 concurrency bar (a node that runs several requests at once): one cell per stream,
+   in the last row of the node's cell grid. When the stream count fits the cell columns
+   (3 streams on 3 or 6 columns, 2 on 6, 6 on 3 or 6) it takes the grid's own columns
+   (subgrid), so its cells line up with the six above; otherwise it has --mc equal columns,
+   a divisor of the stream count, so every row is full. Idle streams are greyed. */
+.kv.node-kv.has-streams { grid-row: 3 / span var(--r1); }
+.node-streams { grid-row: -2 / -1; grid-column: 1 / -1; display: grid; gap: var(--s2);
+  grid-template-columns: repeat(var(--mc, 3), minmax(0, 1fr)); }
+.node-streams[data-m="3"], .node-streams[data-m="6"] { grid-template-columns: subgrid; }
+.kv.node-kv .node-streams .item .label { white-space: normal; }
+.node-streams .item.stream-idle { opacity: 0.55; }
+.node-streams .item.stream-idle .value { color: var(--muted2); }
+.node-streams .sbar { display: block; height: 3px; margin-top: 3px; border-radius: 2px; background: var(--track); overflow: hidden; }
+.node-streams .sbar > i { display: block; height: 100%; background: var(--cyan); border-radius: 2px; }
+.node-streams .sbar.none { visibility: hidden; }
+/* six columns: 3 streams span 2 each, 2 streams span 3 each, both on the grid's columns */
+@container card (min-width: 2166px) {
+  .node-streams[data-m="2"] { grid-template-columns: subgrid; }
+  .node-streams[data-m="3"] > .item { grid-column: span 2; }
+  .node-streams[data-m="2"] > .item { grid-column: span 3; }
+}
+@container card (min-width: 560px) and (max-width: 900px) {
+  .node-streams[data-m="2"] { grid-template-columns: subgrid; }
+  .node-streams[data-m="3"] > .item { grid-column: span 2; }
+  .node-streams[data-m="2"] > .item { grid-column: span 3; }
+}
 
 /* ---------- 环形仪表 ---------- */
 .rings { display: flex; gap: var(--s4); flex-wrap: wrap; }

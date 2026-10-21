@@ -13,7 +13,9 @@ const nameOf = (metrics, k) => cv(metrics?.[k], 'label') || k;
 // regardless of what unit its template carries for the card face. mem_bytes is labelled
 // "G" so the card can read "5.0/15.6G", but the value that reaches the timeseries is
 // the used/total ratio -- the legend was reporting "Memory G 33G" for 33%.
-const unitOf = (metrics, sub) => (sub.axis === 'L' ? '%' : subUnit(metrics, sub.k));
+// v2.26: a series may name its own unit (the concurrency chart's stream count on a 0..4
+// left axis is a count, not a percentage)
+const unitOf = (metrics, sub) => (sub.unit !== undefined ? sub.unit : sub.axis === 'L' ? '%' : subUnit(metrics, sub.k));
 export const subLabel = (metrics, k) =>
   `${nameOf(metrics, k)}${subUnit(metrics, k) ? ' ' + subUnit(metrics, k) : ''}`;
 const labelOf = (metrics, sub) => {
@@ -90,7 +92,9 @@ function gapThreshold(pts) {
  *   maxGapSec: upper bound on the gap a line may bridge, for event-like series (see B25b).
  */
 export function drawMulti(canvas, series, legendEl, opts) {
-  const { subs, metrics, height = 240, emptyText = 'No data yet (collecting samples…)', maxGapSec = null } = opts;
+  // leftMax (v2.26): the left axis is 0..100 (percent) unless a chart plots a small count on
+  // it (the node modal's running-stream count: 0..4)
+  const { subs, metrics, height = 240, emptyText = 'No data yet (collecting samples…)', maxGapSec = null, leftMax = 100 } = opts;
   const dpr = window.devicePixelRatio || 1;
   const cssW = canvas.clientWidth || 360, cssH = height;
   canvas.width = cssW * dpr; canvas.height = cssH * dpr;
@@ -136,7 +140,7 @@ export function drawMulti(canvas, series, legendEl, opts) {
   const rpad = (rMax - rMin) * 0.1 || 1; rMin = Math.max(0, rMin - rpad); rMax = rMax + rpad;
 
   const xPos = (t) => padL + ((t - xMin) / (xMax - xMin || 1)) * W;
-  const yL = (v) => padT + (1 - v / 100) * H;
+  const yL = (v) => padT + (1 - v / leftMax) * H;
   const yR = (v) => padT + (1 - (v - rMin) / (rMax - rMin || 1)) * H;
 
   ctx.strokeStyle = 'rgba(255,255,255,0.07)'; ctx.lineWidth = 1; ctx.font = '10px sans-serif';
@@ -145,7 +149,7 @@ export function drawMulti(canvas, series, legendEl, opts) {
     ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(cssW - padR, y); ctx.stroke();
     if (hasLeft) {
       ctx.fillStyle = 'rgba(106,169,255,0.6)'; ctx.textAlign = 'right';
-      ctx.fillText(String(100 - i * 25), padL - 5, y + 3);
+      ctx.fillText(String(Math.round((leftMax - i * leftMax / 4) * 100) / 100), padL - 5, y + 3);
     }
     if (hasRight) {
       ctx.fillStyle = 'rgba(248,250,252,0.35)'; ctx.textAlign = 'left';

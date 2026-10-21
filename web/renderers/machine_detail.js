@@ -372,8 +372,8 @@ export function relocalizeMachineModal() {
 // totals, so each day reads as a rising line that resets at the UTC day boundary.
 let nodeCtx = null;   // { col, usageTarget }
 
-export function openNodeModal({ col, usageTarget, ranges: customRanges }) {
-  nodeCtx = { col, usageTarget };
+export function openNodeModal({ col, usageTarget, liveTarget = null, ranges: customRanges }) {
+  nodeCtx = { col, usageTarget, liveTarget };
   targetId = col.speed || col.probe;
   ranges = Array.isArray(customRanges) && customRanges.length ? customRanges : ['1d', '3d', '7d'];
   if (!ranges.includes(range)) range = ranges[0];
@@ -390,7 +390,7 @@ export function openNodeModal({ col, usageTarget, ranges: customRanges }) {
 const SPAN_SEC = { '1d': 86400, '24h': 86400, '3d': 259200, '7d': 604800, '30d': 2592000 };
 
 async function loadNode(canvas, legend) {
-  const { col, usageTarget } = nodeCtx;
+  const { col, usageTarget, liveTarget } = nodeCtx;
   if (inflight) inflight.abort();
   const ctrl = new AbortController();
   inflight = ctrl;
@@ -403,10 +403,10 @@ async function loadNode(canvas, legend) {
     return (await r.json()).series || {};
   };
   try {
-    const [sp, us] = await Promise.all([get(col.speed), get(usageTarget)]);
+    const [sp, us, lvh] = await Promise.all([get(col.speed), get(usageTarget), get(liveTarget)]);
     if (inflight !== ctrl) return;
     const second = secondPanel(true);
-    const extra = extraGpuPanels(2);
+    const extra = extraGpuPanels(liveTarget ? 3 : 2);
     mainTitle(t('node_panel_speed'));
     const m = metrics();
     const maxGapSec = Math.max(900, 3 * Math.ceil((SPAN_SEC[range] || 86400) / 250));   // B25b
@@ -434,6 +434,18 @@ async function loadNode(canvas, legend) {
     drawMulti(extra[1].canvas, us, extra[1].legend, { ...uOpts, subs: [
       { k: `${p}_tokens`, color: '#ff9d5c', axis: 'R' }, { k: `${p}_ll_tokens`, color: '#5eead4', axis: 'R' },
       { k: `${p}_emb_tokens`, color: '#e879f9', axis: 'R' }, { k: `${p}_emb_ll_tokens`, color: '#b18cff', axis: 'R' }] });
+    // v2.26: concurrency -- one line per stream (its decode t/s, right axis) and the number of
+    // streams running (left axis, 0..4), from the live reader's history
+    if (liveTarget) {
+      const nStreams = Math.max(0, ...Object.keys(lvh).map((k) => (k.match(new RegExp(`^${p}_s(\\d+)_tps$`)) || [])[1]).filter(Boolean).map(Number));
+      const COLORS = ['#5eead4', '#f7c948', '#ff9d5c', '#6aa9ff', '#e879f9', '#a3e635'];
+      const lm = { ...m, [`${p}_streams`]: { label: t('node_series_streams') } };
+      const subs = [];
+      for (let i = 1; i <= nStreams; i++) { lm[`${p}_s${i}_tps`] = { label: `#${i}` }; subs.push({ k: `${p}_s${i}_tps`, color: COLORS[(i - 1) % COLORS.length], axis: 'R', unit: 't/s' }); }
+      subs.push({ k: `${p}_streams`, color: '#cbd5e1', axis: 'L', unit: '' });
+      extra[2].title.textContent = t('node_panel_streams');
+      drawMulti(extra[2].canvas, lvh, extra[2].legend, { metrics: lm, subs, height: 170, emptyText: t('chart_no_data_range', range), maxGapSec, leftMax: Math.max(4, 4 * Math.ceil(nStreams / 4)) });
+    }
     clearError();
   } catch (e) {
     if (inflight !== ctrl) return;

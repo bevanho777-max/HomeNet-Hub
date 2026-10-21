@@ -49,6 +49,38 @@ on screen is the one from `package.json`, and this file is what needs fixing.
 
 ---
 
+## v2.26.0 — 2026-10-21
+
+**推理节点卡显示并发:几路在跑、每一路各自的阶段与速度(m25 的 Strata 是 3 路并发)。**
+
+*Rebuild required — `server/` + `web/` changed. 无配置变更。*
+
+- **数据来源(都从服务端读,不写死)**:
+  - Strata:最大并发 = `/metrics` 的 `live.parallel`(空闲时 `/v1/status` 的 `concurrency.serving`);在跑的路数 =
+    在 slot 里的请求 + 单路通道上的那一个;每一路 = `live.slots[]`(state reading/generating/idle、generated、
+    prompt_tokens、读 prompt 时的 prompt_read、elapsed_s;空闲 slot 的 held_tokens);只有一个请求时它走 Strata 的单路
+    通道、不进 slot,数据在 `live.*` 顶层(含 max_tokens),显示在第一个空格子;排队 = `live.queued` + 在飞但没拿到
+    slot 的请求。slot 里的请求**读不到 max_tokens**,所以那一路只显示数字、没有进度条。
+  - llama.cpp:最大并发 = `/slots` 的个数;每一路 = 该 slot 的 is_processing、n_decoded、n_prompt_tokens(_processed)
+    与请求的 `params.n_predict`。
+  - 每一路的即时速度 = 它自己已生成 token 数在近 ~10 秒读数间的增量 ÷ 时间差;读不到的项显示「—」,不拿总数平均冒充。
+- **卡片**:状态格「推理中 N/M」(N 在跑、M 最大并发),有排队时小字「排队 K」;Decode 格大字为各路合计、小字「合计 ·
+  平均每路 X」;Prefill 格为最近一次 prefill,有某路在预填时小字「#n 预填中」。M>1 的节点在六格下方加一条常驻并发条,
+  格数 = M(不随忙闲变化):#n、阶段、该路速度、已生成数(知道 max_tokens 时带细进度条)、预填中显示 prompt 长度与已读,
+  空闲那一路变灰并写它缓存的 token 数。并发条与上方格子共用列(CSS subgrid);一张卡里只要有一个节点有并发条,
+  每一栏都留出同一行,三栏格子的顶边、底边仍然对齐。单路节点(m26、m110)不加并发条,显示与原来一样。
+- **历史**:每个节点「在跑的路数」、总 decode 和每一路的 decode 写进时序库(`live` 目标的 `<node>_streams`、`<node>_tps`、
+  `<node>_s<n>_tps`);节点弹窗新增「并发」曲线(drawMulti 新增 `leftMax`:左轴画路数 0–4,右轴画每一路的 t/s)。
+- Strata 空闲时每 30 秒读一次 `/metrics`(其余时候读 `/v1/status`),让并发条里空闲那几路的缓存 token 数保持最新。
+- **核对**:m25 真实流量(Bevan 这段时间一直是单路 1/3,45 分钟录制中 running 最大为 1):预览 75 个样本 N/M 75/75、
+  阶段 73/75(两次差在预填→生成的那一瞬间,hub 的读数早 0.2 / 2.2 s)、合计 = 各路之和 75/75、每路速度 vs 原始
+  generated 增量 中位 1.1% / 最大 2.9%;生产 75 个样本 N/M、阶段、合计全部一致。3/3、排队、部分空闲用独立预览实例回放
+  录下的真实 m25 请求(按 Strata `slots_view()` 的字段):按 hub 读数时刻对齐后 N/M 99/100、排队 99/100、阶段 97/100、
+  合计 100/100、每路速度中位 0.7%。5 种状态 × 5 种宽度 × 中英文 50 张截图,版面四项检查全部为 0。
+- **实时通道**:被隐藏的标签页关闭 SSE、显示时重连 —— 直连 `http://<IP>:3100`(HTTP/1.1)时浏览器对同一主机最多 6 个
+  连接,开着很多标签页会把第 7 个卡住。Strata 空闲时改读 `/v1/status`(本身就不含生成文本)。
+- 修正:Strata `/metrics` 的 `requests[]` 是新的在前,v2.25 匹配刚结束的请求时按旧→新找,可能对到更早的一条。
+
 ## v2.25.0 — 2026-10-21
 
 **推理节点卡实时显示「推理中」与实时 prefill / decode 速度:hub 每 2 秒直接读各推理服务,经 SSE 推给浏览器。**

@@ -145,12 +145,17 @@ export class Scheduler {
         }
         return;
       }
-      // v2.25: live state, pushed to the browsers (SSE) the moment it is read. Not written to
-      // the timeseries: history keeps coming from Prometheus.
+      // v2.25: live state, pushed to the browsers (SSE) the moment it is read. Speeds and
+      // tokens history keeps coming from Prometheus.
       if (type === 'inference_live') {
         const view = await this.ctx.live.poll();
         snapshot.update(target.id, { online: true, metrics: {}, extra: { live: view } });
         this.ctx.liveBus?.emit(view);
+        // v2.26: per node the running streams, the total and each stream's decode go into
+        // the timeseries (the node modal's concurrency chart); the store keeps one sample
+        // per 5 s per series, so a 2 s poll does not triple the writes.
+        const rows = this.ctx.live.historyRows(target.id, view);
+        if (rows.length) tsdb.record(rows);
         return;
       }
       // v2.24: all usage (counters + LiteLLM) by Beijing day -- see server/usage.js

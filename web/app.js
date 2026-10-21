@@ -111,7 +111,7 @@ function openCardModal(c, e) {
   if (c.kind === 'nodes') {
     const idx = Number(e?.target?.closest?.('.node-col')?.dataset.col);
     const col = c.detail?.gc?.nodes?.[idx];
-    if (col) openNodeModal({ col, usageTarget: c.detail.gc.target, ranges: c.detail.ranges });
+    if (col) openNodeModal({ col, usageTarget: c.detail.gc.target, liveTarget: c.detail.gc.live || null, ranges: c.detail.ranges });
     return;
   }
   // The machine modal titles itself from config (target name + " Detail") so a language
@@ -433,20 +433,29 @@ function renderLive() {
     }
   }
 }
+// A stream is one long-lived HTTP connection, and over plain HTTP/1.1 (the board opened at
+// http://<lan-ip>:3100) a browser allows only 6 per host across ALL its tabs -- a 7th tab
+// would hang. So only a visible tab keeps the stream open: a hidden one closes it (and does
+// not poll either) and reopens it the moment it is shown. (Through the HTTPS proxy the
+// browser speaks HTTP/2 and the limit does not apply.)
+const onLiveView = (v) => { if (v && typeof v === 'object' && v.nodes) { liveView = v; renderLive(); } };
+function openLiveStream() {
+  if (liveES || !window.EventSource || document.hidden) return;
+  try {
+    liveES = new EventSource('/api/live/stream');
+    liveES.onmessage = (e) => { liveLastMsg = Date.now(); try { onLiveView(JSON.parse(e.data)); } catch { /* ignore */ } };
+  } catch { liveES = null; }
+}
+function closeLiveStream() { if (liveES) { liveES.close(); liveES = null; } }
 function startLive() {
   if (liveTimer) return;
-  const onView = (v) => { if (v && typeof v === 'object' && v.nodes) { liveView = v; renderLive(); } };
-  if (window.EventSource) {
-    try {
-      liveES = new EventSource('/api/live/stream');
-      liveES.onmessage = (e) => { liveLastMsg = Date.now(); try { onView(JSON.parse(e.data)); } catch { /* ignore */ } };
-    } catch { liveES = null; }
-  }
+  openLiveStream();
+  document.addEventListener('visibilitychange', () => { if (document.hidden) closeLiveStream(); else { liveLastMsg = 0; openLiveStream(); } });
   liveTimer = setInterval(async () => {
-    if (!liveTargetId() || Date.now() - liveLastMsg < 6000) return;
+    if (document.hidden || !liveTargetId() || Date.now() - liveLastMsg < 6000) return;
     try {
       const r = await fetchT('/api/live', { cache: 'no-store' }, 3000);
-      if (r.ok) onView(await r.json());
+      if (r.ok) onLiveView(await r.json());
     } catch { /* next tick */ }
   }, 2000);
 }
