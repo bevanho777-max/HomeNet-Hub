@@ -5,18 +5,12 @@
 // new table card is a new query file + a type:table card, zero code changes.
 import { card, esc } from './common.js';
 import { colmap, cv, getLang, t } from '../i18n.js';
+import { si3 } from '../fmt.js';
 
 // Same compact scale the token pivot uses server-side, so a token count reads
-// identically on both cards.
-function compact(n) {
-  // v2.24: the Per-Project "direct" row is a difference and may dip below zero
-  const sg = n < 0 ? '-' : '';
-  n = Math.abs(n);
-  if (n >= 1e9) return sg + (n / 1e9).toFixed(2) + 'B';
-  if (n >= 1e6) return sg + (n / 1e6).toFixed(2) + 'M';
-  if (n >= 1e3) return sg + (n / 1e3).toFixed(1) + 'K';
-  return sg + String(Math.round(n));
-}
+// identically on both cards (v2.27: K / M / G, three significant digits; the Per-Project
+// "direct" row is a difference and may dip below zero).
+const compact = si3;
 
 // pg hands back bigint as a string, so "601847029" must still count as numeric.
 function asNumber(v) {
@@ -30,8 +24,9 @@ function cell(value, format) {
   if (format === 'text') return String(value);
   const n = asNumber(value);
   if (n == null) return String(value);
-  if (format === 'compact') return compact(n);
-  return n.toLocaleString('en-US'); // 'number', and the default for numeric cells
+  // v2.27: 'number' (and the default for numeric cells) is compact too -- a column's width is
+  // fixed by the longest figure it can hold, and K / M / G keep that to five characters
+  return compact(n);
 }
 
 // Rows to keep on the card front. A card is a fixed-height tile in a grid; a query that
@@ -58,6 +53,9 @@ export const val = (r, key) => (getLang() === 'en' && r[`${key}_en`] != null ? r
 // digits -- unless it is the row's identity (the first column) or declared `format: text`
 // (dates, names), which read left-aligned like any text.
 export const isNumCol = (c, i) => i > 0 && c.format !== 'text';
+// v2.27 column kind for the fixed table layout: 'num' (figure), 'txt' (a later text column,
+// e.g. a date), '' (the identity column)
+export const colKind = (c, i) => (i === 0 ? '' : c.format === 'text' ? 'txt' : 'num');
 
 export function renderTable(gridCard, target, snap) {
   const title = cv(gridCard, 'title') || target?.name || target?.id || 'Table';
@@ -89,8 +87,11 @@ export function renderTable(gridCard, target, snap) {
   const shown = overflow ? rows.slice(0, frontMax) : rows;
 
   // First column is the row's identity (left-aligned); the rest are figures.
-  const cls = (c, i) => { const k = [isNumCol(c, i) ? 'num' : '', c.x ? 'col-x' : ''].filter(Boolean).join(' '); return k ? ` class="${k}"` : ''; };
-  const head = allCols.map((c, i) => `<th${cls(c, i)}>${esc(c.label)}</th>`).join('');
+  const cls = (c, i) => { const k = [colKind(c, i), c.x ? 'col-x' : ''].filter(Boolean).join(' '); return k ? ` class="${k}"` : ''; };
+  // v2.27: fixed layout -- the header row sets every column's width (tokens.css: a figure
+  // column by the longest figure it can hold, a text column by its longest value); the
+  // identity column takes the rest and cuts a long name (full text in title)
+  const head = allCols.map((c, i) => `<th${cls(c, i)} title="${esc(c.label)}">${esc(c.label)}</th>`).join('');
   const body = shown.map((r) => `<tr>${
     // v2.22: the identity cell may ellipsise on a narrow card; its title carries the full text
     allCols.map((c, i) => { const v = esc(cell(val(r, c.key), c.format)); return i ? `<td${cls(c, i)}>${v}</td>` : `<td title="${v}">${v}</td>`; }).join('')

@@ -28,9 +28,9 @@
 //
 // Value checking applies ONLY to derived columns. Blanking a declared column would mean
 // silently disagreeing with the card the operator is looking at.
-import { esc } from './common.js';
+import { esc, setLine } from './common.js';
 import { cv, t } from '../i18n.js';
-import { parseColumns, cell, isNumCol, val } from './table.js';
+import { parseColumns, cell, colKind, val } from './table.js';
 
 const $ = (s) => document.querySelector(s);
 
@@ -73,9 +73,14 @@ function render() {
     box.innerHTML = `<div class="note">${esc(cv(gridCard, 'empty_note') || 'No rows')}</div>`;
     return;
   }
-  const head = cols.map((c, i) => `<th${isNumCol(c, i) ? ' class="num"' : ''}>${esc(c.label)}</th>`).join('');
+  // v2.27: fixed layout (tokens.css), widths from the header row: figures by the longest
+  // figure, dates by a date, the identity column the rest -- a long name is cut, never widens
+  // the table (full text in title). On a phone-width modal the eight columns keep their
+  // widths and the table scrolls sideways inside its box, identity column pinned.
+  const k = (c, i) => colKind(c, i);
+  const head = cols.map((c, i) => `<th class="${k(c, i)}" title="${esc(c.label)}">${esc(c.label)}</th>`).join('');
   const body = rows.map((r) => `<tr>${
-    cols.map((c, i) => `<td${isNumCol(c, i) ? ' class="num"' : ''}>${esc(cell(val(r, c.key), c.format))}</td>`).join('')
+    cols.map((c, i) => { const v = esc(cell(val(r, c.key), c.format)); return `<td class="${k(c, i)}"${i ? '' : ` title="${v}"`}>${v}</td>`; }).join('')
   }</tr>`).join('');
   const hintText = cv(gridCard, 'hint');
   const hint = hintText ? `<div class="note">${esc(hintText)}</div>` : '';
@@ -88,8 +93,8 @@ export function openTableModal(c) {
   if (!c?.detail) return;
   current = c.detail;
   const n = current.rows.length;
-  $('#tableModalTitle').textContent = cv(current.gridCard, 'detail_title')
-    || t('table_title_count', current.title, n);
+  setLine($('#tableModalTitle'), cv(current.gridCard, 'detail_title')
+    || t('table_title_count', current.title, n));
   $('#tableModal').classList.add('open');
   render();
 }
@@ -101,8 +106,8 @@ export function relocalizeTableModal() {
   // fallback identity (its target name) when the card declares no title. Re-resolve the
   // declared title here; a name-derived one is re-read from the card on the next open.
   const title = cv(current.gridCard, 'title') || current.title;
-  $('#tableModalTitle').textContent = cv(current.gridCard, 'detail_title')
-    || t('table_title_count', title, current.rows.length);
+  setLine($('#tableModalTitle'), cv(current.gridCard, 'detail_title')
+    || t('table_title_count', title, current.rows.length));
   render();
 }
 

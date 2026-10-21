@@ -178,7 +178,7 @@ html, body {
 /* ---------- 服务健康条 ---------- */
 .chips { display: flex; flex-wrap: wrap; gap: var(--s2); padding: 0 max(var(--gutter-min), calc((100% - var(--page-max)) / 2)) var(--s2); }
 .chip {
-  display: inline-flex; align-items: center; gap: var(--s2);
+  display: inline-flex; align-items: center; gap: var(--s2); white-space: nowrap;
   padding: 8px 14px; border-radius: 999px;
   background: var(--glass); border: 1px solid var(--hair);
   font-size: 12.5px; font-weight: 500;
@@ -243,10 +243,15 @@ html, body {
   font-size: 12.5px; font-weight: 600; margin: 0 0 var(--s4);
   color: var(--muted); letter-spacing: 1px;
   display: flex; align-items: center; gap: var(--s2);
+  /* v2.27: one line -- the title keeps its words, the tag on the right gives way (fit.js
+     shrinks it to 10px, then cuts it with the full text in title) */
+  white-space: nowrap; min-width: 0; line-height: 18px;
 }
-.card h2 .tag { margin-left: auto; font-size: 11px; color: var(--muted2); font-weight: 500; letter-spacing: 0.5px; display: inline-flex; align-items: center; gap: var(--s2); }
+.card h2 .tag { margin-left: auto; font-size: 11px; color: var(--muted2); font-weight: 500; letter-spacing: 0.5px;
+  display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.card h2 .tag .tag-sep { margin: 0 var(--s2); vertical-align: middle; }
 /* B13: vertical hairline between combined header_right parts (e.g. badge │ uptime) */
-.tag-sep { width: 1px; height: 12px; display: inline-block; background: linear-gradient(180deg, transparent, var(--hair2), transparent); }
+.tag-sep { width: 1px; height: 12px; display: inline-block; vertical-align: middle; background: linear-gradient(180deg, transparent, var(--hair2), transparent); }
 /* ===== 身份识别色:染 h2 + 实体 border(辉光由 .card 基规则第三层 var(--accent) 承载,v1 同构)===== */
 .card[style*="--accent"] h2 { color: var(--accent); }
 .card[style*="--accent"] {
@@ -266,7 +271,9 @@ html, body {
   display: flex; align-items: center; gap: var(--s2);
 }
 .stack-item[style*="--accent"] h2 { color: var(--accent); } /* 各子卡身份色头部 */
-.stack-item h2 .tag { margin-left: auto; font-size: 11px; color: var(--muted2); font-weight: 500; letter-spacing: 0.5px; }
+.stack-item h2 .tag { margin-left: auto; font-size: 11px; color: var(--muted2); font-weight: 500; letter-spacing: 0.5px;
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.stack-item h2 { white-space: nowrap; min-width: 0; }
 .stack-div { flex: 0 0 auto; height: 1px; width: auto; margin: var(--s3) 0; background: linear-gradient(90deg, transparent, var(--hair), transparent); }
 .stack.is-row .stack-div { width: 1px; height: auto; align-self: stretch; margin: 0 var(--s3); background: linear-gradient(180deg, transparent, var(--hair), transparent); }
 /* B12-row: offline child keeps a full equal slot (row); greyed to signal offline.
@@ -297,15 +304,19 @@ h2:empty { display: none; } /* 堆叠卡外框无标题时不留空行 */
    a row) when it is wider; --kcols is the matching column template. Columns are separated by a hairline drawn in the gap, so
    all three columns have exactly the same content width. */
 .card.card-wide { grid-column: 1 / -1; }
-.nodes-grid { --r: 2; --r1: 3; --kcols: minmax(min-content, 0.6fr) minmax(min-content, 1fr) minmax(min-content, 1.4fr);
+.nodes-grid { --r: 2; --r1: 3; --kcols: minmax(0, 0.8fr) minmax(0, 1fr) minmax(0, 1.2fr);
   display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
   /* head, model, the cell rows, and (v2.26) the concurrency bar's row -- empty (0 high) in
      a column whose node runs one request at a time */
   grid-template-rows: auto auto repeat(var(--r), auto) auto; column-gap: 33px; row-gap: 0; }
 .node-col { position: relative; min-width: 0; grid-row: 1 / -1; display: grid; grid-template-rows: subgrid; }
 .node-col + .node-col::before { content: ""; position: absolute; left: -17px; top: 0; bottom: 0; width: 1px; background: var(--hair); }
-.node-head { grid-row: 1; display: flex; align-items: center; flex-wrap: wrap; gap: var(--s2); row-gap: 2px;
+/* v2.27: head and model are one line each (nowrap); the route part / the model name give
+   way first -- shrink, then ellipsis with the full text in title (fit.js) */
+.node-head { grid-row: 1; display: flex; align-items: center; flex-wrap: nowrap; gap: var(--s2); min-width: 0; white-space: nowrap;
   font-size: 13px; font-weight: 600; letter-spacing: 1px; color: var(--accent, var(--muted)); }
+.node-head > .node-name, .node-head > .node-pub { flex: none; }
+.node-head > .node-port { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .node-port { color: var(--muted); font-weight: 500; letter-spacing: 0.5px; }
 .node-pub {
   font-size: 10.5px; font-weight: 600; letter-spacing: 0.5px; padding: 1px 7px; border-radius: 9px;
@@ -316,7 +327,8 @@ h2:empty { display: none; } /* 堆叠卡外框无标题时不留空行 */
 .node-route-stale s { text-decoration-thickness: 1px; }
 .node-route-pending { color: var(--muted2); font-style: italic; }
 .node-route-sep { margin: 0 4px; color: var(--muted2); }
-.node-model { grid-row: 2; margin-top: var(--s2); font-size: 12px; color: var(--text); word-break: break-all; min-height: 1.3em; }
+.node-model { grid-row: 2; margin-top: var(--s2); font-size: 12px; line-height: 16px; height: 16px; color: var(--text);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .node-model.is-last { color: var(--muted2); font-style: italic; }
 /* (.kv.node-kv: must outrank the generic .kv grid further down) Cells flow down the
    columns: with three per row the columns are health (status / latency), speed (prefill /
@@ -324,20 +336,22 @@ h2:empty { display: none; } /* 堆叠卡外框无标题时不留空行 */
    column; with six per row they sit side by side in the same order, equal width. */
 .kv.node-kv { grid-row: 3 / span var(--r); grid-template-rows: subgrid; row-gap: var(--s2); grid-auto-flow: column;
   grid-template-columns: var(--kcols); margin-top: var(--s3); }
-/* a node cell is three stacked lines: label, value, second line (always present) */
-.kv.node-kv .item { flex-direction: column; flex-wrap: nowrap; align-items: stretch; row-gap: 2px; }
-.kv.node-kv .item::before { content: none; }
-.kv.node-kv .item .value { margin-left: 0; text-align: left; white-space: nowrap; overflow-wrap: normal; }
-.kv.node-kv .item .value.wrap { white-space: normal; }
-/* (nowrap: a status word such as "Generating" is never split mid-word -- its column takes
-   the room it needs, the grid's minmax(min-content, …) tracks give it) */
-.kv.node-kv .item .label { white-space: nowrap; }
+/* (v2.27: a node cell is the standard cell -- label, value, second line, 70px; a status such
+   as "Generating 2/3" that does not fit its column shrinks, then reads "Gen 2/3") */
 /* always_on:false 且连不上:整栏变灰(不是故障,不着红)*/
 .node-idle { filter: grayscale(0.85) opacity(0.62); }
 .node-idle-text { color: var(--muted); }
 /* a ~550-700px column: the usage column would be the emptiest, so it gives some back */
-@container card (min-width: 1700px) { .nodes-grid { --kcols: minmax(min-content, 0.7fr) minmax(min-content, 1fr) minmax(min-content, 1.3fr); } }
-@container card (min-width: 2166px) { .nodes-grid { --r: 1; --r1: 2; --kcols: repeat(6, minmax(0, 1fr)); } }
+/* v2.27: from a ~550px column on, the six cells sit in one row (status and latency a little
+   narrower, usage a little wider) -- three to a row there would leave wide cells around a
+   two-character status */
+@container card (min-width: 1700px) {
+  .nodes-grid { --r: 1; --r1: 2;
+    --kcols: minmax(0, 0.8fr) minmax(0, 0.8fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.2fr) minmax(0, 1.2fr); }
+  /* six to a row: a little less gap and side padding, so each cell keeps ~56px of text room */
+  .kv.node-kv { column-gap: 6px; --cell-pad: 8px 8px; }
+  .kv.node-kv .node-streams { column-gap: 6px; }
+}
 /* narrow card: the three nodes stack, each with its own rows */
 @container card (max-width: 900px) {
   .nodes-grid { grid-template-columns: minmax(0, 1fr); grid-template-rows: none; }
@@ -358,14 +372,14 @@ h2:empty { display: none; } /* 堆叠卡外框无标题时不留空行 */
 .node-streams { grid-row: -2 / -1; grid-column: 1 / -1; display: grid; gap: var(--s2);
   grid-template-columns: repeat(var(--mc, 3), minmax(0, 1fr)); }
 .node-streams[data-m="3"], .node-streams[data-m="6"] { grid-template-columns: subgrid; }
-.kv.node-kv .node-streams .item .label { white-space: normal; }
 .node-streams .item.stream-idle { opacity: 0.55; }
 .node-streams .item.stream-idle .value { color: var(--muted2); }
-.node-streams .sbar { display: block; height: 3px; margin-top: 3px; border-radius: 2px; background: var(--track); overflow: hidden; }
+/* the progress bar sits on the cell's bottom edge (absolute), so it adds no height */
+.node-streams .sbar { position: absolute; left: 11px; right: 11px; bottom: 4px; height: 3px; border-radius: 2px; background: var(--track); overflow: hidden; }
 .node-streams .sbar > i { display: block; height: 100%; background: var(--cyan); border-radius: 2px; }
 .node-streams .sbar.none { visibility: hidden; }
 /* six columns: 3 streams span 2 each, 2 streams span 3 each, both on the grid's columns */
-@container card (min-width: 2166px) {
+@container card (min-width: 1700px) {
   .node-streams[data-m="2"] { grid-template-columns: subgrid; }
   .node-streams[data-m="3"] > .item { grid-column: span 2; }
   .node-streams[data-m="2"] > .item { grid-column: span 3; }
@@ -418,17 +432,19 @@ h2:empty { display: none; } /* 堆叠卡外框无标题时不留空行 */
 @keyframes comet { to { --comet: 360deg; } }
 
 /* ---------- 键值区（玻璃底块）---------- */
-/* v2.23 cell: label left, value right on one line (the label's baseline is the value's);
-   a value that does not fit beside its label drops to its own line, right-aligned, and a
-   table-like value (By Model) always takes its own line. Same type scale in every cell on
-   the board: label 10.5px, value 15.5px, padding 9px 11px, line 20px. The zero-width
-   ::before strut carries the value's font, so the first line of every cell has the same
-   baseline whether or not its value is on it -- labels line up across a row of cells. */
-:root { --cell-lh: 20px; --cell-label: 10.5px; --cell-value: 15.5px; --cell-pad: 9px 11px; }
-.kv { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s2); margin-top: var(--s4); }
+/* v2.27 standard cell: three fixed lines -- label (14px), value (20px), second line (14px)
+   -- in a box of exactly --cell-h (70px), in every cell on the board (machine, service,
+   info, stack, inference nodes). Nothing in a cell wraps: every line is nowrap and clipped,
+   and fit.js shrinks a line that does not fit (value down to 13px, label / second line down
+   to 10px), then swaps in its short form, and only then cuts it with an ellipsis (full text
+   in title). A cell never grows, so a long value can make neither its own row nor the next
+   card's taller; grid rows are fixed at --cell-h too, so no cell is ever stretched. */
+:root { --cell-h: 70px; --cell-l: 14px; --cell-v: 20px; --cell-label: 10.5px; --cell-value: 15.5px; --cell-pad: 8px 11px; }
+.kv { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-auto-rows: var(--cell-h); grid-auto-flow: row dense;
+  gap: var(--s2); margin-top: var(--s4); align-items: start; }
 .kv .item {
-  display: flex; flex-wrap: wrap; align-items: baseline; align-content: flex-start;
-  column-gap: var(--s2); row-gap: 3px; min-width: 0;
+  display: grid; grid-template-rows: var(--cell-l) var(--cell-v) var(--cell-l); grid-template-columns: minmax(0, 1fr);
+  row-gap: 2px; align-content: start; height: var(--cell-h); min-width: 0; overflow: hidden; position: relative;
   background: linear-gradient(180deg, rgba(255,255,255,0.045), rgba(255,255,255,0.012));
   border: 1px solid var(--hair);
   border-radius: 11px;
@@ -436,37 +452,55 @@ h2:empty { display: none; } /* 堆叠卡外框无标题时不留空行 */
   box-shadow: 0 0 10px -2px var(--accent, rgba(80,120,180,0.15));
   transition: border-color .3s, background .3s;
 }
-.kv .item::before { content: "\200b"; width: 0; font-size: var(--cell-value); line-height: var(--cell-lh); margin-right: calc(-1 * var(--s2)); }
 .kv .item:hover { border-color: var(--hair2); }
-.kv .item .label { min-width: 0; font-size: var(--cell-label); line-height: var(--cell-lh); color: var(--muted2); letter-spacing: 0.6px; text-transform: uppercase; opacity: 0.7; }
-.kv .item .value { margin-left: auto; text-align: right; min-width: 0; overflow-wrap: anywhere; font-size: var(--cell-value); line-height: var(--cell-lh); font-weight: 500; letter-spacing: 0.2px; }
-.kv .item .sub { font-size: var(--cell-label); line-height: 1.35; color: var(--muted); }
-/* B20: parts metric — one span per subfield, each colored by its own level. */
-.kv .item .value.parts { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 0 9px; white-space: normal; }
-/* v2.22 parts_layout: table (gateway By Model): a 2-column mini table, label left and
-   number right in every cell, so numbers line up down each column. */
-.kv .item .value.parts-table { flex-basis: 100%; margin-left: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
-  column-gap: 12px; row-gap: 0; font-size: 13px; line-height: 19px; }
-.kv .item .value.parts-table .pt { display: flex; justify-content: space-between; align-items: baseline; gap: 5px; min-width: 0; }
-.kv .item .value.parts-table .pt-l { font-size: 10.5px; color: var(--muted2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-.kv .item .value.parts-table .pt-v { font-variant-numeric: tabular-nums; }
-/* On a narrow card the mini table gets a whole KV row (moved to the end, three entries per
-   line), so labels like "orcarouter" fit; the renderer marks one plain cell .item-fill to
-   take a whole row too when the rest would leave the last row half empty. */
-@container card (max-width: 341px) {
-  .kv .item.has-table { order: 1; grid-column: 1 / -1; }
-  .kv .item.item-fill { grid-column: 1 / -1; }
-  .kv .item .value.parts-table { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-}
+.kv .item > .label, .kv .item > .value, .kv .item > .sub, .kv .item > .alt-form > .value, .kv .item > .alt-form > .sub {
+  display: block; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* a value is clipped only once fit.js has had to cut it (.is-cut): until then its status glow
+   is not cut flat at the line's edges (the cell's own edge still clips anything stray) */
+.kv .item > .value, .kv .item > .alt-form > .value { overflow: visible; }
+.kv .item > .value.is-cut, .kv .item > .alt-form > .value.is-cut { overflow: hidden; }
+.kv .item .label { grid-row: 1; font-size: var(--cell-label); line-height: var(--cell-l); color: var(--muted2); letter-spacing: 0.6px; text-transform: uppercase; opacity: 0.7; text-shadow: none; }
+.kv .item .value { grid-row: 2; font-size: var(--cell-value); line-height: var(--cell-v); font-weight: 500; letter-spacing: 0.2px; }
+.kv .item .sub { grid-row: 3; font-size: var(--cell-label); line-height: var(--cell-l); color: var(--muted); text-shadow: none; }
+/* B20 parts metric (one number per disk, each colored by its own level): one line, the bay
+   number a tag after each figure. When the line does not fit even at 13px, fit.js shows the
+   .alt-form instead: the hottest disk (with its bay) and the coolest, "max · min" under them.
+   The cell's border still takes the worst disk's color either way. */
+.kv .item .value i { font-style: normal; }
+.kv .item .value.parts i + sup + i, .kv .item .value.parts i + i { margin-left: 7px; }
+.kv .item > .alt-form { display: none; }
+.kv .item.is-alt > .full-form { display: none; }
+.kv .item.is-alt > .alt-form { display: contents; }
+.kv .item .mm-sep { margin: 0 5px; color: var(--muted2); text-shadow: none; }
+/* Part label (e.g. the DSM bay number): a tag, not data -- small and always the muted
+   grey, never the value's status color, so it cannot be mistaken for a reading. 10px is
+   the smallest text on the board. */
+.kv .item .value sup { font-size: 10px; font-weight: 400; color: var(--muted2); opacity: 0.85; margin-left: 1px; vertical-align: super; line-height: 0; text-shadow: none; }
+/* v2.27 parts_layout: table (gateway By Model): the entries above zero in at most two rows,
+   label left and number right in every slot, so numbers line up down each column. It fills
+   the value and second-line rows (36px = 2 x 18px) and takes two cells' width. */
+.kv .item.span2 { grid-column: span 2; }
+.kv:is([data-n="1"], [data-n="3"], [data-n="5"]) > .item.span2 { grid-column: 1 / -1; }
+.kv .item > .ptab { grid-row: 2 / span 2; display: grid; grid-template-columns: repeat(var(--pc, 2), minmax(0, 1fr));
+  grid-auto-rows: 18px; column-gap: 14px; align-items: center; min-width: 0; overflow: hidden; }
+.kv .item .ptab .pt { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; min-width: 0; line-height: 18px; }
+.kv .item .ptab .pt-l { font-size: 10.5px; color: var(--muted2); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-shadow: none; }
+.kv .item .ptab .pt-v { flex: none; font-size: 13px; font-weight: 500; white-space: nowrap; }
 /* Cell grids outside machine cards (info, service, stack children): the column count
    follows the cell count so the last row is never half empty, and grows with the room --
    the nearest container is the card, or the stack child for a card inside a stack. */
 .kv[data-n="1"], .kv[data-n="3"], .kv[data-n="5"] { grid-template-columns: minmax(0, 1fr); }
 @container (min-width: 480px) { .kv[data-n="3"]:not(.node-kv) { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
-@container (min-width: 520px) { .card-body > .kv[data-n="4"] { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+/* (v2.27: a service card's four cells -- counts, a status, a latency -- go four across from
+   400px, ~95px each, so a short reading is not alone in a 200px cell; an info card's values
+   are sentences and wait for 520px) */
+@container (min-width: 400px) { .card-body > .kv[data-n="4"]:not(.kv-info) { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+@container (min-width: 520px) { .card-body > .kv.kv-info[data-n="4"] { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
 @container (min-width: 820px) { .kv[data-n="5"]:not(.node-kv) { grid-template-columns: repeat(5, minmax(0, 1fr)); } }
-/* machine card: rings above cells; 6 plain cells go 3 x 2 once the card has room */
-@container card (min-width: 520px) { .kv[data-n="6"]:not(:has(.has-table)) { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+/* machine card: rings above cells; six cells (a two-wide By Model counts as two) go 3 x 2
+   once each cell can be ~110px, so a 6-cell card and a 4-cell card (2 x 2) next to it have
+   the same two rows of cells */
+@container card (min-width: 340px) { .kv[data-n="6"] { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 /* a machine card the grid has widened: rings on the left, cells beside them */
 @container card (min-width: 900px) {
   .mach { display: grid; grid-template-columns: minmax(260px, 1fr) minmax(0, 2.6fr); column-gap: var(--s5); align-items: center; }
@@ -478,18 +512,19 @@ h2:empty { display: none; } /* 堆叠卡外框无标题时不留空行 */
   .mach { grid-template-columns: minmax(300px, 0.8fr) minmax(0, 3.6fr); }
   .mach > .kv[data-n="6"] { grid-template-columns: repeat(6, minmax(0, 1fr)); }
 }
-.kv .item .value.parts i { font-style: normal; }
-/* Part label (e.g. the DSM bay number): a tag, not data -- small and always the muted
-   grey, never the value's status color, so it cannot be mistaken for a reading. */
-.kv .item .value.parts sup { font-size: 0.58em; font-weight: 400; color: var(--muted2); opacity: 0.75; margin-left: 1px; vertical-align: super; line-height: 0; }
 /* v2.18 多卡:环下/格子下逐卡小字,每张卡按自己的状态着色;单卡机器不输出这行 */
 .gpu-missing {
   margin-bottom: var(--s3); padding: 5px 10px; border-radius: 8px; font-size: 12px; font-weight: 600;
   color: var(--red); background: color-mix(in srgb, var(--red) 12%, transparent);
   border: 1px solid color-mix(in srgb, var(--red) 45%, transparent);
 }
-.gpu-panel-title { margin-top: 16px; font-size: 12px; color: var(--muted); letter-spacing: 0.5px; }
+.gpu-panel-title { margin-top: 16px; font-size: 12px; color: var(--muted); letter-spacing: 0.5px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #machineModalAgent.lv-ok, #machineModalAgent.lv-danger { text-shadow: none; }
+/* v2.27 per-disk temperatures in the machine modal: one fixed-layout row, a column per bay */
+#machineModalParts .tbl.partsTbl { margin-top: var(--s3); }
+#machineModalParts .tbl.partsTbl th:first-child { width: 30%; }
+#machineModalParts .tbl.partsTbl th.num { width: auto; }
 /* ===== 键值区小块描边跟数据状态变色(v1:240-243 逐字，只设 border-color)===== */
 .kv .item.lv-danger { border-color: color-mix(in srgb, var(--red) 45%, transparent); }
 .kv .item.lv-warn   { border-color: color-mix(in srgb, var(--yellow) 42%, transparent); }
@@ -500,31 +535,35 @@ h2:empty { display: none; } /* 堆叠卡外框无标题时不留空行 */
 .big { font-size: 38px; font-weight: 500; letter-spacing: 0.5px; line-height: 1.05; }
 .big.sub { font-size: 13px; color: var(--muted); font-weight: 500; margin-top: var(--s1); letter-spacing: 0.5px; }
 
-/* ---------- Token 三栏 ---------- */
-/* v2.23: the card body is a column and .tk-main takes all of its height, the chart taking
-   whatever the boxes leave -- so a token card stretched to a taller row grows its bars
-   instead of ending in a blank strip. Box type matches every other cell (label 10.5px,
-   value 15.5px, padding 9px 11px). Three arrangements by card width:
-     narrow  (< 560): --tk-c boxes per row (4 -> 2x2, fewer -> one row), chart below
-     medium         : all boxes in one row, chart below
-     wide   (>= 860): boxes 2x2 on the left, chart beside them filling the rest */
+/* ---------- Token 表 ---------- */
+/* v2.27: the front is a fixed table (one row per class, Total last; columns all-time / today /
+   net / requests / via LiteLLM), so no figure can grow or widen anything. The card body is a
+   column and .tk-main takes all of its height, the chart taking whatever the table leaves --
+   a token card in a taller row grows its bars instead of ending in a blank strip.
+     narrow (< 860): table, chart below
+     wide  (>= 860): table on the left, chart beside it filling the rest */
 .card[data-kind="token"] > .card-body { display: flex; flex-direction: column; }
 .tk-main { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; }
-.tk-grid { display: grid; grid-template-columns: repeat(var(--tk-n, 3), minmax(0, 1fr)); gap: var(--s2); }
-@container card (max-width: 559px) { .tk-grid { grid-template-columns: repeat(var(--tk-c, 2), minmax(0, 1fr)); } }
-.tk-col { display: flex; flex-direction: column; justify-content: center; text-align: center;
-  padding: var(--cell-pad); background: var(--glass2); border: 1px solid var(--hair); border-radius: 12px;
-  min-width: 0; overflow-wrap: anywhere; }
-.tk-h { font-size: var(--cell-label); font-weight: 600; margin-bottom: 5px; letter-spacing: 0.4px; }
-/* B6追加: Token stat-box 类目名↔数值 灰色渐变分隔(复用 --hair,不引新色) */
-.tk-div { height: 1px; margin: 0 0 5px; background: linear-gradient(90deg, transparent, var(--hair), transparent); }
-.tk-all { font-size: var(--cell-value); font-weight: 500; line-height: var(--cell-lh); }
-.tk-sub { font-size: var(--cell-label); color: var(--muted); margin-top: 3px; }
-/* v2.24: the LiteLLM share of today's figure -- a footnote, one step greyer */
-.tk-sub.tk-ll { color: var(--muted2); }
+.tk-tblwrap { flex: none; min-width: 0; }
+.card .tbl.tk-tbl { margin: 0; }
+.card .tbl.tk-tbl col.c-num { width: 54px; }
+.card .tbl.tk-tbl th { letter-spacing: 0; }
+.card .tbl.tk-tbl td.tk-name { color: var(--text); font-weight: 600; }
+.card .tbl.tk-tbl td.tk-ll { color: var(--muted2); }
+.card .tbl.tk-tbl .sw { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 7px; vertical-align: 1px; }
+.card .tbl.tk-tbl tr.tot td { border-top: 1px solid var(--hair2); }
+/* a phone-width card: narrower figure columns (a figure is at most five characters), so the
+   class names keep ~95px */
+@container card (max-width: 479px) {
+  .card .tbl.tk-tbl col.c-num { width: 46px; }
+  .card .tbl.tk-tbl th, .card .tbl.tk-tbl td { padding-left: 3px; padding-right: 3px; }
+  .card .tbl.tk-tbl td.tk-name { font-size: 12px; padding-left: 0; }
+  .card .tbl.tk-tbl .sw { margin-right: 5px; }
+}
 @container card (min-width: 860px) {
-  .tk-main { flex-direction: row; align-items: stretch; gap: var(--s4); }
-  .tk-main > .tk-grid { flex: 0 0 auto; width: min(45%, calc(var(--tk-c, 2) * 185px)); grid-template-columns: repeat(var(--tk-c, 2), minmax(0, 1fr)); }
+  .tk-main { flex-direction: row; align-items: stretch; gap: var(--s5); }
+  .tk-main > .tk-tblwrap { width: min(54%, 600px); align-self: center; }
+  .card .tbl.tk-tbl col.c-num { width: 68px; }
   .tk-main > .spark { margin-top: 0; }
   .tk-main > .spark .col .b { max-width: 30px; }
 }
@@ -546,9 +585,9 @@ h2:empty { display: none; } /* 堆叠卡外框无标题时不留空行 */
 }
 .spark .col { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 4px; }
 .spark .col .bw { flex: 1 1 auto; min-height: 0; width: 100%; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: 4px; }
-.spark .col .n { font-size: 9.5px; color: var(--muted); line-height: 1; }
+.spark .col .n { font-size: 10px; color: var(--muted); line-height: 1; white-space: nowrap; }
 .spark .col .b { width: 56%; max-width: 18px; height: calc((100% - 14px) * var(--f, 0) + 4px); border-radius: 5px 5px 0 0; background: linear-gradient(180deg, var(--cyan), rgba(79,227,208,0.18)); box-shadow: 0 0 10px -2px rgba(79,227,208,0.5); min-height: 3px; }
-.spark .col .d { font-size: 9.5px; color: var(--muted2); line-height: 1; }
+.spark .col .d { font-size: 10px; color: var(--muted2); line-height: 1; white-space: nowrap; }
 
 /* ---------- 状态色文本 ---------- */
 .lv-ok { color: var(--green); text-shadow: 0 0 14px color-mix(in srgb, var(--green) 50%, transparent); }
@@ -558,37 +597,34 @@ h2:empty { display: none; } /* 堆叠卡外框无标题时不留空行 */
 .note { margin-top: var(--s3); font-size: 11px; color: var(--muted2); line-height: 1.5; }
 
 /* ---------- 表格卡(type:table) ---------- */
-/* The modal already has a .tbl; this is the in-card variant — same visual
-   language, tighter, and it scrolls sideways instead of widening the card. */
+/* v2.27: every table on the board is table-layout: fixed. The header row sets the widths: a
+   figure column (.num) holds the longest figure it can (K / M / G keep that to five or six
+   characters), a later text column (.txt, a date) a date, and the identity column takes the
+   rest -- a long project / key / model name is cut with an ellipsis (full text in title)
+   and can never widen the table. Figures stay tabular and right-aligned. */
 .card .tbl-wrap { margin-top: var(--s3); }
-/* table-layout:fixed is what keeps the card honest: the figure columns get a
-   guaranteed share of the width instead of being pushed off the right edge by a
-   long identity value, which then truncates in place with an ellipsis. */
-/* v2.22: auto layout. Figure columns shrink to their content and are never cut; the
-   identity column takes what is left and is the only one that may ellipsise (its full
-   text is in the cell's title). The max-width:0 + width:100% pair is what lets an auto
-   table ellipsise a cell instead of growing past the card. */
-.card .tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; table-layout: auto; }
+.card .tbl { width: 100%; border-collapse: collapse; font-size: 13px; table-layout: fixed; }
 .card .tbl th, .card .tbl td { text-align: left; padding: 6px 5px; border-bottom: 1px solid var(--hair);
-  white-space: nowrap; }
-.card .tbl th.num, .card .tbl td.num { width: 1%; }
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .card .tbl th { color: var(--muted2); font-weight: 500; font-size: 10px; text-transform: uppercase; letter-spacing: 0.3px; }
 .card .tbl th.num, .card .tbl td.num { text-align: right; font-variant-numeric: tabular-nums; }
-.card .tbl th:first-child, .card .tbl td:first-child { width: 100%; max-width: 0; overflow: hidden; text-overflow: ellipsis; padding-left: 0; }
+.card .tbl th.num { width: 62px; }
+.card .tbl th.txt { width: 86px; }
+.card .tbl th:first-child, .card .tbl td:first-child { padding-left: 0; }
 .card .tbl th:last-child, .card .tbl td:last-child { padding-right: 0; }
 .card .tbl tbody tr:last-child td { border-bottom: none; }
 .card .tbl td:first-child { color: var(--muted); }
-/* v2.23: a table card the grid widened also shows its modal-only columns (.col-x), and
-   every column then sizes to its content instead of the identity column taking all the
-   slack -- the figures spread across the card rather than huddling at its right edge. */
+/* v2.23: a table card the grid widened also shows its modal-only columns (.col-x). v2.27: the
+   identity column then gets a fixed share and the figure columns split the rest evenly, so
+   the figures spread across the card rather than huddling at its right edge. */
 .card .tbl .col-x { display: none; }
 @container card (min-width: 760px) {
   .card .tbl .col-x { display: table-cell; }
-  .card .tbl th:first-child, .card .tbl td:first-child { width: auto; max-width: none; }
-  .card .tbl th.num, .card .tbl td.num { width: auto; }
-  .card .tbl th, .card .tbl td { padding-left: 14px; }
+  .card .tbl.has-x th:first-child { width: 24%; }
+  .card .tbl.has-x th.num, .card .tbl.has-x th.txt { width: auto; }
+  .card .tbl.has-x th, .card .tbl.has-x td { padding-left: 14px; }
   /* a left-aligned text column right after a right-aligned figure: keep them apart */
-  .card .tbl th.num + th:not(.num), .card .tbl td.num + td:not(.num) { padding-left: 36px; }
+  .card .tbl.has-x th.num + th:not(.num), .card .tbl.has-x td.num + td:not(.num) { padding-left: 36px; }
 }
 
 /* 客户端面板:一次性 key 展示框。红框是刻意的 —— 这段文本关掉就再也拿不回来,
@@ -601,6 +637,7 @@ h2:empty { display: none; } /* 堆叠卡外框无标题时不留空行 */
 /* v2.23 client list: a table like every other one -- name left, figures right-aligned */
 .modal .cliTbl { margin-top: var(--s2); font-size: 12.5px; }
 .modal .cliTbl td, .modal .cliTbl th { padding: 7px 8px; white-space: nowrap; }
+.modal .cliTbl th.num { width: 96px; }
 .modal .cliTbl td:first-child .addDot { display: inline-block; margin-right: var(--s2); vertical-align: middle; }
 .modal .cliTbl td b { color: var(--text); font-weight: 600; }
 .modal .cliTbl .cliAct { width: 1%; text-align: right; }
@@ -646,10 +683,20 @@ h2:empty { display: none; } /* 堆叠卡外框无标题时不留空行 */
   border: 1px solid var(--hair2); box-shadow: var(--shadow);
 }
 .modal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--s4); }
-.modal-head h2 { font-size: 14px; font-weight: 600; margin: 0; letter-spacing: 1px; }
-.modal-close { background: var(--glass2); border: 1px solid var(--hair); color: var(--muted); border-radius: 9px; padding: 6px 12px; cursor: pointer; font-size: 13px; }
-.modal .tbl { width: 100%; border-collapse: collapse; margin-top: var(--s4); font-size: 13px; }
-.modal .tbl th, .modal .tbl td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--hair); }
+.modal-head { gap: var(--s3); }
+/* v2.27: a modal title is one line (cut with an ellipsis, full text in title); the close
+   button never folds */
+.modal-head h2 { font-size: 14px; font-weight: 600; margin: 0; letter-spacing: 1px; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.modal-close { background: var(--glass2); border: 1px solid var(--hair); color: var(--muted); border-radius: 9px; padding: 6px 12px; cursor: pointer; font-size: 13px; flex: none; white-space: nowrap; }
+.modal .tbl { width: 100%; border-collapse: collapse; margin-top: var(--s4); font-size: 13px; table-layout: fixed; }
+.modal .tbl th, .modal .tbl td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--hair);
+  overflow: hidden; text-overflow: ellipsis; }
+/* v2.27 fixed layout (see the card table above): figure columns by their longest figure, the
+   name column the rest */
+.modal .tbl th.num { width: 104px; }
+.modal .tbl th.num.w-pct { width: 124px; }
+.modal .tbl th.txt { width: 108px; }
+.modal .tbl th.cliAct { width: 96px; }
 .modal .tbl th { color: var(--muted2); font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
 .modal .tbl .sw { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 8px; vertical-align: middle; }
 /* 弹窗表格的数字列右对齐 + 等宽数字,和卡面那张表读起来一致(.card .tbl 早有同款规则,
@@ -667,11 +714,18 @@ h2:empty { display: none; } /* 堆叠卡外框无标题时不留空行 */
 #tableModal .modal { width: min(880px, 96vw); }
 @media (max-width: 560px) {
   .modal { padding: var(--s4); }
-  .modal .tbl { font-size: 12px; }
   .modal .tbl th, .modal .tbl td { padding: 7px 6px; }
+  .modal .tbl th { font-size: 10px; letter-spacing: 0; }
   .modal .tbl .opt { display: none; }
+  .modal .tbl th.num, .modal .cliTbl th.num { width: 68px; }
+  .modal .tbl th.num.w-pct { width: 100px; }
+  .modal .tbl th.txt { width: 92px; }
+  .modal .tbl th.cliAct { width: 80px; }
+  /* the eight-column Per-Project detail keeps its widths and scrolls inside its box, the
+     project column pinned (and given a width, since the figures alone fill the phone) */
+  #tableModalBody .tbl { width: max(100%, 640px); }
+  #tableModalBody .tbl th:first-child { width: 132px; }
   #tableModalBody .tbl th:first-child, #tableModalBody .tbl td:first-child { position: sticky; left: 0; z-index: 1; background: #10161f; }
-  .modal .cliTbl .cliName { width: 100%; max-width: 0; overflow: hidden; text-overflow: ellipsis; }
 }
 /* "查看全部(共 N)" —— 这条是行动号召,和 hint 那种常驻说明区分开,所以给它正文色。 */
 .card .tblMore { color: var(--text); font-weight: 500; }

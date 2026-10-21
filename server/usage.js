@@ -47,16 +47,21 @@ const addDays = (day, n) => new Date(Date.parse(`${day}T00:00:00Z`) + n * DAY * 
 const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
 const netOf = (prompt, cached, completion) => Math.max(prompt - cached, 0) + completion;
 
+// v2.27: K / M / G with at most three significant digits (copy of web/fmt.js si3)
 export function compact(n) {
-  if (n == null) return '—';
-  n = Number(n);
-  if (!Number.isFinite(n)) return '—';
-  const s = n < 0 ? '-' : '';
-  n = Math.abs(n);
-  if (n >= 1e9) return s + (n / 1e9).toFixed(2) + 'B';
-  if (n >= 1e6) return s + (n / 1e6).toFixed(2) + 'M';
-  if (n >= 1e3) return s + (n / 1e3).toFixed(1) + 'K';
-  return s + String(Math.round(n));
+  if (n == null || !Number.isFinite(Number(n))) return '—';
+  const x = Number(n), a = Math.abs(x), sg = x < 0 ? '-' : '';
+  if (a < 999.5) return sg + String(Math.round(a));
+  const units = [['G', 1e9], ['M', 1e6], ['K', 1e3]];
+  for (let i = 0; i < units.length; i++) {
+    const [u, d] = units[i];
+    if (a >= d * 0.9995) {   // (999.6 is "1K", not "1000")
+      const v = Number((a / d).toPrecision(3));
+      if (v >= 1000 && i > 0) { const [u2, d2] = units[i - 1]; return sg + String(Number((a / d2).toPrecision(3))) + u2; }
+      return sg + String(v) + u;
+    }
+  }
+  return sg + String(Math.round(a));
 }
 
 function safeRegex(src) { try { return src ? new RegExp(src, 'i') : null; } catch { return null; } }
@@ -479,7 +484,7 @@ export class UsageEngine {
       if (r.tokens_total || r.requests_total) rows.push(r);
     }
     // direct = what the counters saw minus what LiteLLM delivered, per day
-    const dr = { project: '直连（未经 LiteLLM）', project_en: 'Direct (not via LiteLLM)', direct: true, tokens_total: 0, net_total: 0, requests_total: 0, tokens_7d: 0, tokens_30d: 0, tokens_today: 0, requests_today: 0, first_day: null, last_day: null };
+    const dr = { project: '直连（未经 LiteLLM）', project_en: 'Direct (not via LLM)', direct: true, tokens_total: 0, net_total: 0, requests_total: 0, tokens_7d: 0, tokens_30d: 0, tokens_today: 0, requests_today: 0, first_day: null, last_day: null };
     for (const d of v.dayList) {
       const a = v.days.get(d)?.get(this.chatKey);
       if (!a) continue;

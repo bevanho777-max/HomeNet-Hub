@@ -2,7 +2,7 @@
 // Each child is rendered as a service card and keeps its own header (name / badge
 // / identity color); children share the outer .card frame, separated by a hairline.
 // The stack card's header_right/items/labels apply to every child.
-import { card, esc } from './common.js';
+import { card, esc, cellHtml } from './common.js';
 import { cv, t } from '../i18n.js';
 import { renderService } from './service.js';
 
@@ -13,6 +13,7 @@ export function renderStack(gc, resolve, metrics) {
     type: 'service',
     header_right: gc.header_right,
     items: gc.items,
+    subs: gc.subs,          // v2.27: second lines, as on a service card
     labels: gc.labels,
   };
   const label = (k) => cv(metrics?.[k], 'label') || k;
@@ -28,7 +29,7 @@ export function renderStack(gc, resolve, metrics) {
     // hides the skeleton via CSS to stay compact.
     if (!snap || snap.online === false) {
       const skel = (gc.items || []).map((k) =>
-        `<div class="item"><span class="label">${esc(label(k))}</span><span class="value">—</span></div>`).join('');
+        cellHtml({ label: label(k), value: '—' })).join('');
       // v2.19 `when_down`: this target having no service is expected (m25 only runs an
       // inference server while a model is being tried out), so it is a neutral grey
       // state, not a fault. No badge either -- the badge describes the service, and the

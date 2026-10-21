@@ -20,14 +20,17 @@ export function renderMachine(gridCard, target, snap, metrics) {
   // both languages rather than falling back to the bare key.
   const label = (k) => cv(metrics?.[k], 'label') || k;
   const rings = (gridCard.rings || []).map((k) => ring(label(k), mget(snap, k))).join('');
-  // A table-like cell (By Model) takes a whole row on a narrow card (tokens.css); when the
-  // remaining plain cells are an odd number, the last of them takes a whole row as well, so
-  // the cell grid never ends in a half-empty row.
+  // v2.27: a table-like cell (By Model) is two cells wide; the grid fills any hole it would
+  // leave (grid-auto-flow: dense). `subs` puts a second metric on a cell's second line (the
+  // gateway's 5-minute count under today's), so it needs no cell of its own.
   const keys = gridCard.items || [];
-  const isTable = (k) => !!(mget(snap, k).parts && metrics?.[k]?.parts_layout === 'table');
-  const plain = keys.filter((k) => !isTable(k));
-  const fill = plain.length < keys.length && plain.length % 2 === 1 ? plain[plain.length - 1] : null;
-  const items = keys.map((k) => kvItem(label(k), mget(snap, k), metrics?.[k], k === fill ? 'item-fill' : '')).join('');
+  const subs = gridCard.subs && typeof gridCard.subs === 'object' ? gridCard.subs : {};
+  const isTable = (k) => metrics?.[k]?.parts_layout === 'table';
+  const items = keys.map((k) => {
+    const sk = subs[k];
+    const sub = sk ? `${label(sk)} ${mget(snap, sk).display ?? '—'}` : '';
+    return kvItem(label(k), mget(snap, k), metrics?.[k], { sub, itemCls: isTable(k) ? 'span2' : '' });
+  }).join('');
 
   // header_right: 'badge' → target.badge, else a metric key → its display.
   // B13: an array combines parts with a vertical hairline, e.g. [badge, uptime]
@@ -47,9 +50,9 @@ export function renderMachine(gridCard, target, snap, metrics) {
     ? `<div class="gpu-missing">${esc(t('gpu_cards_missing', gc.value, gc.expected))}</div>` : '';
 
   // v2.23: rings and cells sit in one .mach block so a card the grid has widened can put
-  // them side by side (tokens.css); data-n lets the cell grid pick a column count that
-  // divides its cell count, so a wider card never leaves a half-empty last row.
-  const n = keys.length;
+  // them side by side (tokens.css); data-n (cell slots, a two-wide cell counting two) lets
+  // the cell grid pick a column count that divides it, so no row is left half empty.
+  const n = keys.length + keys.filter(isTable).length;
   const body = `${warn}<div class="mach"><div class="rings">${rings}</div>${items ? `<div class="kv" data-n="${n}">${items}</div>` : ''}</div>`;
   return card({
     key: target.id, title, tag, body, accent, stale: snap.stale,

@@ -289,6 +289,9 @@ const gridCard = {
     title: { type: 'string' },               // §12-step4: info card title (no target needed)
     title_en: enString,
     rings: { type: 'array', items: { type: 'string' } },
+    // v2.27 machine card: { <item metric>: <metric> } -- the second metric is shown on that
+    // cell's second line (label + value) instead of taking a cell of its own
+    subs: { type: 'object', additionalProperties: { type: 'string' } },
     // metric-key strings (machine/service) OR {label,value,level} objects (info, §12-step4)
     items: {
       type: 'array',
@@ -527,6 +530,10 @@ export function crossValidate({ metrics, targets, layout }) {
     // only string items are metric keys (machine/service); info items are
     // {label,value} objects and are not metric references.
     (c.items || []).forEach((m) => { if (typeof m === 'string') refMetric(m, `layout.grid[${c.target}].items`, c.target); });
+    for (const [k, m] of Object.entries(c.subs || {})) {
+      refMetric(k, `layout.grid[${c.target}].subs`, c.target);
+      refMetric(m, `layout.grid[${c.target}].subs.${k}`, c.target);
+    }
     (c.children || []).forEach((id) => refTarget(id, `layout.grid[type=stack].children`)); // B12
     (c.nodes || []).forEach((n, i) => {
       refTarget(n.probe, `layout.grid[type=nodes].nodes[${i}].probe`);

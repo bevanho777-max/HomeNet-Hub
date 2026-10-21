@@ -11,6 +11,7 @@
 // server refuses an unauthenticated request either way.
 import { esc } from './common.js';
 import { t } from '../i18n.js';
+import { si3 } from '../fmt.js';
 
 const $ = (s) => document.querySelector(s);
 let onChanged = () => {};
@@ -22,14 +23,8 @@ const setStatus = (html, cls = '') => {
 };
 
 // Same compact scale the token cards use, so a number means the same thing wherever it
-// appears on this board.
-function compact(n) {
-  n = Number(n) || 0;
-  if (n >= 1e9) return `${(n / 1e9).toFixed(2)}B`;
-  if (n >= 1e6) return `${(n / 1e6).toFixed(2)}M`;
-  if (n >= 1e3) return `${(n / 1e3).toFixed(1)}K`;
-  return String(Math.round(n));
-}
+// appears on this board (v2.27: K / M / G, three significant digits).
+const compact = (n) => si3(Number(n) || 0);
 
 function hideNewKey() {
   const box = $('#cliNew');
@@ -68,9 +63,9 @@ async function refresh() {
     // v2.23: a real table -- name left, the figures right-aligned in their own columns
     // under right-aligned headers, so a column of token counts reads down one edge.
     box.innerHTML = rows.length ? `<table class="tbl cliTbl"><thead><tr>`
-      + `<th>${esc(t('cli_col_name'))}</th><th class="num">${esc(t('cli_col_tokens'))}</th>`
+      + `<th class="cliName">${esc(t('cli_col_name'))}</th><th class="num">${esc(t('cli_col_tokens'))}</th>`
       + `<th class="num opt">${esc(t('cli_col_net'))}</th><th class="num">${esc(t('cli_col_reqs'))}</th>`
-      + `<th class="num opt">${esc(t('cli_col_today'))}</th><th></th></tr></thead><tbody>${rows.map((c) => {
+      + `<th class="num opt">${esc(t('cli_col_today'))}</th><th class="cliAct"></th></tr></thead><tbody>${rows.map((c) => {
         const u = c.usage || {};
         // A system row (the proxy master key) has no key row to delete, and a revoked one
         // is already gone — both keep their usage on screen but lose the button.
@@ -80,8 +75,8 @@ async function refresh() {
         return `<tr class="cliRow" data-id="${esc(c.id)}">`
           + `<td class="cliName" title="${esc(c.name)}"><span class="addDot ${c.revoked ? '' : 'ok'}"></span><b>${esc(c.name)}</b></td>`
           + `<td class="num">${esc(compact(u.tokens_total))}</td><td class="num opt">${esc(compact(u.net_total))}</td>`
-          + `<td class="num">${esc(Number(u.requests_total ?? 0).toLocaleString('en-US'))}</td>`
-          + `<td class="num opt">${esc(u.requests_today ? Number(u.requests_today).toLocaleString('en-US') : '—')}</td>`
+          + `<td class="num">${esc(compact(u.requests_total ?? 0))}</td>`
+          + `<td class="num opt">${esc(u.requests_today ? compact(u.requests_today) : '—')}</td>`
           + `<td class="cliAct">${del}</td></tr>`;
       }).join('')}</tbody></table>` : `<div class="addMuted">${esc(t('cli_empty'))}</div>`;
     box.querySelectorAll('.addDel').forEach((b) => { b.onclick = () => removeOne(b.closest('.cliRow')); });

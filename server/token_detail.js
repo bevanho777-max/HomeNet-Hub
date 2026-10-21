@@ -8,14 +8,21 @@
 
 export const TOKEN_RANGE_DAYS = { '24h': 1, '7d': 7, '30d': 30 };
 
+// v2.27: K / M / G with at most three significant digits (copy of web/fmt.js si3)
 function compact(n) {
-  if (n == null) return '—';
-  n = Number(n);
-  if (!Number.isFinite(n)) return '—';
-  if (n >= 1e9) return (n / 1e9).toFixed(2) + 'B';
-  if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M';
-  if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K';
-  return String(Math.round(n));
+  if (n == null || !Number.isFinite(Number(n))) return '—';
+  const x = Number(n), a = Math.abs(x), sg = x < 0 ? '-' : '';
+  if (a < 999.5) return sg + String(Math.round(a));
+  const units = [['G', 1e9], ['M', 1e6], ['K', 1e3]];
+  for (let i = 0; i < units.length; i++) {
+    const [u, d] = units[i];
+    if (a >= d * 0.9995) {   // (999.6 is "1K", not "1000")
+      const v = Number((a / d).toPrecision(3));
+      if (v >= 1000 && i > 0) { const [u2, d2] = units[i - 1]; return sg + String(Number((a / d2).toPrecision(3))) + u2; }
+      return sg + String(v) + u;
+    }
+  }
+  return sg + String(Math.round(a));
 }
 
 function dayStr(d) {

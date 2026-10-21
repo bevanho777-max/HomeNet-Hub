@@ -85,7 +85,7 @@ grid:
     # GPU quietly falls back to cpu/mem/disk instead of drawing empty axes.
     clickable: detail
     rings: [cpu, mem_pct, disk_pct]
-    items: [mem_bytes, disk_bytes, loadavg, net]
+    items: [mem_bytes, disk_bytes, loadavg, net, procs, latency]   # six cells, 3 x 2 like the GPU nodes beside it
     header_right: uptime
 
   - target: gpu1
@@ -119,7 +119,10 @@ grid:
     # direction: row               # optional: side-by-side (default column); narrow container (<480px) auto-wraps to column
     children: [inference, inference2]
     header_right: badge
-    items: [status, latency, model, role]
+    items: [model, status]
+    # v2.27 `subs`: a second metric on a cell's second line instead of a cell of its own --
+    # here each backend is two full cells (model + role, status + latency), not four sparse ones
+    subs: { model: role, status: latency }
 
   # v2.20 inference nodes — one full-width card, one column per inference machine:
   # instance port(s) (discovered from litellm), live model ID, status / latency,
@@ -227,7 +230,7 @@ grid:
     # An info row's `value` is a literal sentence as often as it is a number, so both
     # halves take a variant — unlike a metric key elsewhere, which is a reference.
     items:
-      - { label: "Version", value: "v2.0.0" }
+      - { label: "Version", value: "HomeNet Hub v2" }
       - { label: "Mode", label_en: "Mode", value: "Demo (synthetic data)", value_en: "Demo (synthetic data)" }
       - { label: "Nodes", value: "3 GPU + gateway" }
       - { label: "Source", value: "config-driven YAML" }

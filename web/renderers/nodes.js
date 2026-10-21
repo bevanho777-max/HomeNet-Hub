@@ -13,15 +13,10 @@
 // a dead node keeps its slot so the other two do not jump.
 import { card, esc } from './common.js';
 import { cv, t } from '../i18n.js';
+import { si3 } from '../fmt.js';
 
-function compact(n) {
-  if (n == null || !Number.isFinite(Number(n))) return '—';
-  n = Number(n);
-  if (n >= 1e9) return (n / 1e9).toFixed(2) + 'B';
-  if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M';
-  if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K';
-  return String(Math.round(n));
-}
+// v2.27: K / M / G with three significant digits, like every count on the board
+const compact = si3;
 
 function hm(sec) {
   const d = new Date(sec * 1000), now = new Date();
@@ -45,16 +40,24 @@ function statusText(state, probeTarget) {
   // cannot tell "powered off" from "on but not serving".
   return probeTarget?.always_on === false ? t('node_off') : t('node_idle');
 }
+// v2.27 the status's short form, for a column too narrow for it (abbreviation table)
+const statusShort = (state, probeTarget) => (state === 'idle' && probeTarget?.always_on === false ? t('abbr_off') : null);
 
 // v2.23: every cell is three lines -- label, value, and a small second line under the value
 // (when it was measured, how much of it came through LiteLLM, the embedding share). The
 // second line is always rendered, empty when there is nothing to say, so a cell without one
 // is exactly as tall as its neighbours; the card's subgrid then lines the cells of all three
 // node columns up row by row.
-function cell(label, value, { cls = '', sub = '' } = {}) {
-  return `<div class="item"><span class="label">${esc(label)}</span>`
-    + `<span class="value ${cls}">${value}</span>`
-    + `<span class="sub">${sub ? esc(sub) : '&nbsp;'}</span></div>`;
+// v2.27: the standard cell (fixed 70px, nothing wraps); every line is .fit (fit.js shrinks
+// it, then swaps in `short` / `subShort`, then cuts it). `value` is HTML (callers escape).
+// labels whose short form is fixed (abbreviation table): Prefill t/s -> Prefill, Decode t/s -> Decode
+const LABEL_SHORT = { node_prefill: 'abbr_prefill', node_decode: 'abbr_decode' };
+const labelShortOf = (label) => { for (const [k, a] of Object.entries(LABEL_SHORT)) if (label === t(k)) return t(a); return null; };
+function cell(label, value, { cls = '', sub = '', short = null, subShort = null, labelShort = labelShortOf(label) } = {}) {
+  const ds = (x) => (x != null && x !== '' ? ` data-short="${esc(x)}"` : '');
+  return `<div class="item"><span class="label fit"${ds(labelShort)}>${esc(label)}</span>`
+    + `<span class="value fit${cls ? ` ${cls}` : ''}"${ds(short)}>${value}</span>`
+    + (sub ? `<span class="sub fit"${ds(subShort)}>${esc(sub)}</span>` : '') + '</div>';
 }
 
 const fmt1 = (x) => (x == null ? '—' : (Math.round(x * 10) / 10).toFixed(1));
@@ -80,13 +83,14 @@ function liveSpeedCells(lv) {
 function multiSpeedCells(lv) {
   const lp = lv.last_prefill;
   const preVal = lp ? fmt1(lp.tps) : '—';
-  const preSub = lv.prefilling?.length
-    ? t('node_prefilling_n', lv.prefilling.map((n) => `#${n}`).join(' '))
-    : (lp ? t('measured_at', hm(lp.at / 1000)) : t('node_prefill_after'));
+  const list = lv.prefilling?.length ? lv.prefilling.map((n) => `#${n}`).join(' ') : '';
+  const preSub = list ? t('node_prefilling_n', list) : (lp ? t('measured_at', hm(lp.at / 1000)) : t('node_prefill_after'));
   const decVal = lv.decode_tps != null ? fmt1(lv.decode_tps) : '—';
-  const decSub = lv.decode_tps != null ? t('node_total_avg', fmt1(lv.decode_avg))
+  // v2.27: "Σ · per stream" only while two or more streams decode -- with one, the total
+  // and the per-stream average are the same number
+  const decSub = lv.decode_tps != null ? ((lv.decoding || 0) >= 2 ? t('node_total_avg', fmt1(lv.decode_avg)) : t('node_live'))
     : (lv.decoding ? t('node_live') : t('node_wait_decode'));
-  return cell(t('node_prefill'), preVal, { sub: preSub })
+  return cell(t('node_prefill'), preVal, { sub: preSub, subShort: list ? t('abbr_prefilling_n', list) : null })
     + cell(t('node_decode'), decVal, { cls: lv.decode_tps != null ? 'lv-cool' : '', sub: decSub });
 }
 
@@ -97,22 +101,36 @@ const nfmt = (x) => Number(x).toLocaleString('en-US');
 // (with a thin bar when the request's max_tokens is known), the prompt while prefilling.
 function streamCell(s) {
   const phase = t(s.state === 'decode' ? 'stream_decode' : s.state === 'prefill' ? 'stream_prefill' : 'stream_idle');
-  let value = '—', sub = '', pct = null;
+  let value = '—', sub = '', short = null, short2 = null, pct = null;
   if (s.state === 'decode') {
     value = fmt1(s.tps);
-    sub = s.max ? t('stream_gen_of', nfmt(s.gen ?? 0), nfmt(s.max)) : t('stream_gen', nfmt(s.gen ?? 0));
+    // tokens generated (of max_tokens, when the request set one) and, where there is room,
+    // the stream's prompt; shorter forms for a narrow cell: the counts in K, then the prompt
+    // dropped (12,345 / 32,768 · prompt 9,362 -> 12.3K / 32.8K · prompt 9.36K -> 12.3K / 32.8K)
+    const gen = (f) => (s.max ? t('stream_gen_of', f(s.gen ?? 0), f(s.max)) : t('stream_gen', f(s.gen ?? 0)));
+    const withPrompt = (f) => gen(f) + (s.prompt != null ? ` · ${t('stream_prompt', f(s.prompt))}` : '');
+    sub = withPrompt(nfmt);
+    short = withPrompt(compact);
+    // (with max_tokens the bar under the cell already shows how far along it is)
+    short2 = t('abbr_stream_gen', compact(s.gen ?? 0));
     if (s.max) pct = Math.min(100, ((s.gen ?? 0) / s.max) * 100);
   } else if (s.state === 'prefill') {
     value = fmt1(s.tps);
     sub = s.prompt != null ? t('stream_prompt', nfmt(s.prompt)) + (s.read != null ? ` · ${t('stream_read', nfmt(s.read))}` : '') : '';
+    short = s.prompt != null ? compact(s.prompt) + (s.read != null ? ` · ${t('abbr_stream_read', compact(s.read))}` : '') : null;
     if (s.prompt && s.read != null) pct = Math.min(100, (s.read / s.prompt) * 100);
   } else if (s.held != null) {
     sub = t('stream_cached', nfmt(s.held));
+    short = t('stream_cached', compact(s.held));
+    short2 = t('abbr_stream_cached', compact(s.held));
   }
   const bar = `<span class="sbar${pct == null ? ' none' : ''}"><i style="width:${pct == null ? 0 : pct.toFixed(1)}%"></i></span>`;
-  return `<div class="item stream stream-${s.state}"><span class="label">#${s.n} · ${esc(phase)}</span>`
-    + `<span class="value${s.state === 'idle' ? '' : ' lv-cool'}">${value}</span>`
-    + `<span class="sub">${sub ? esc(sub) : '&nbsp;'}</span>${bar}</div>`;
+  const ds = (short && short !== sub ? ` data-short="${esc(short)}"` : '') + (short2 && short2 !== short ? ` data-short2="${esc(short2)}"` : '');
+  const phaseShort = s.state === 'decode' ? t('abbr_stream_decode') : s.state === 'prefill' ? t('abbr_stream_prefill') : null;
+  const ls = phaseShort && phaseShort !== phase ? ` data-short="#${s.n} · ${esc(phaseShort)}"` : '';
+  return `<div class="item stream stream-${s.state}"><span class="label fit"${ls}>#${s.n} · ${esc(phase)}</span>`
+    + `<span class="value fit${s.state === 'idle' ? '' : ' lv-cool'}">${value}</span>`
+    + (sub ? `<span class="sub fit"${ds}>${esc(sub)}</span>` : '') + `${bar}</div>`;
 }
 
 function streamsBar(lv, online) {
@@ -138,9 +156,9 @@ function speedCells(speedSnap, col, speedTarget, lv = null) {
       : { v: L.prefill, at: L.at / 1000, expired: L.expired };
     const at = L.at / 1000;
     const pre = !P.expired ? cell(t('node_prefill'), fmt1(P.v), { sub: t('measured_at', hm(P.at)) })
-      : cell(t('node_prefill'), '—', { sub: t('node_sub_last', hm(P.at), fmt1(P.v)) });
+      : cell(t('node_prefill'), '—', { sub: t('node_sub_last', hm(P.at), fmt1(P.v)), subShort: t('abbr_last', hm(P.at), fmt1(P.v)) });
     const dec = !L.expired ? cell(t('node_decode'), fmt1(L.decode), { sub: t('measured_at', hm(at)) })
-      : cell(t('node_decode'), '—', { sub: t('node_sub_last', hm(at), fmt1(L.decode)) });
+      : cell(t('node_decode'), '—', { sub: t('node_sub_last', hm(at), fmt1(L.decode)), subShort: t('abbr_last', hm(at), fmt1(L.decode)) });
     return pre + dec;
   }
   const pp = speedSnap?.metrics?.prefill_speed, tg = speedSnap?.metrics?.decode_speed;
@@ -154,8 +172,9 @@ function speedCells(speedSnap, col, speedTarget, lv = null) {
     // Nothing fresh: the value is a dash and the second line says what the last reading
     // was and when -- each cell its own number.
     if (at == null) return both(t('measured_none', speedTarget?.freshness?.lookback));
-    const last = (m) => t('node_sub_last', hm(at), m?.last != null ? m.last : '—');
-    return cell(t('node_prefill'), '—', { sub: last(pp) }) + cell(t('node_decode'), '—', { sub: last(tg) });
+    const lastOf = (m) => (m?.last != null ? m.last : '—');
+    return cell(t('node_prefill'), '—', { sub: t('node_sub_last', hm(at), lastOf(pp)), subShort: t('abbr_last', hm(at), lastOf(pp)) })
+      + cell(t('node_decode'), '—', { sub: t('node_sub_last', hm(at), lastOf(tg)), subShort: t('abbr_last', hm(at), lastOf(tg)) });
   }
   const v = (m) => (m && !m.expired ? esc(m.display) : '—');
   const sub = at ? t('measured_at', hm(at)) : '';
@@ -210,32 +229,33 @@ export function renderNodes(gc, resolve) {
     // and, on a node that also serves embeddings, the embedding server's own count.
     const mv = (k) => meta?.metrics?.[`${col.node}_${k}`]?.value;
     const cnt = meta?.extra?.nodes?.[col.node]?.counters || {};
+    // v2.27: each second line with its short form ("经 LLM 52.2M · 嵌入 1.2M" -> "LLM 52.2M · 嵌 1.2M")
     const subOf = (ll, emb, embLl) => {
-      const parts = [];
-      if (mv(ll) != null) parts.push(t('node_sub_ll', compact(mv(ll))));
+      const parts = [], short = [];
+      if (mv(ll) != null) { parts.push(t('node_sub_ll', compact(mv(ll)))); short.push(t('abbr_ll', compact(mv(ll)))); }
       const e = mv(emb) != null ? mv(emb) : mv(embLl);
-      if (e != null) parts.push(t('node_sub_emb', compact(e)));
-      return parts.join(' · ');
+      if (e != null) { parts.push(t('node_sub_emb', compact(e))); short.push(t('abbr_emb', compact(e))); }
+      return { sub: parts.join(' · '), subShort: short.join(' · ') };
     };
-    const reqSub = meta && !cnt.requests ? t('node_no_req_counter') : subOf('ll_reqs', 'emb_reqs', 'emb_ll_reqs');
+    const reqSub = meta && !cnt.requests ? { sub: t('node_no_req_counter'), subShort: t('abbr_no_counter') } : subOf('ll_reqs', 'emb_reqs', 'emb_ll_reqs');
     // busy: "推理中" in cyan the moment the server has a request in flight, before any speed
     const multi = Number(lv?.max_streams) > 1;
     const statusCell = busy
       ? (multi
-        // "推理中 N/M": streams running / streams the server can run (read from it)
-        // (may wrap between the word and N/M: "Generating 2/3" does not fit a phone's status column)
-        ? cell(t('node_status'), esc(`${t('node_busy')} ${lv.running}/${lv.max_streams}`), { cls: 'lv-cool wrap', sub: lv.queued ? t('node_queued', lv.queued) : '' })
-        : cell(t('node_status'), esc(t('node_busy')), { cls: 'lv-cool', sub: t('node_busy_n', lv.busy) + (lv.queued ? ` · ${t('node_queued', lv.queued)}` : '') }))
-      : cell(t('node_status'), esc(statusText(state, probeT)), { cls: STATE_CLASS[state] });
+        // "推理中 N/M": streams running / streams the server can run (read from it); in a
+        // column too narrow for it, "推理 N/M" / "Gen N/M" (abbreviation table)
+        ? cell(t('node_status'), esc(`${t('node_busy')} ${lv.running}/${lv.max_streams}`), { cls: 'lv-cool', short: `${t('abbr_busy')} ${lv.running}/${lv.max_streams}`, sub: lv.queued ? t('node_queued', lv.queued) : '' })
+        : cell(t('node_status'), esc(t('node_busy')), { cls: 'lv-cool', short: t('abbr_busy'), sub: t('node_busy_n', lv.busy) + (lv.queued ? ` · ${t('node_queued', lv.queued)}` : '') }))
+      : cell(t('node_status'), esc(statusText(state, probeT)), { cls: STATE_CLASS[state], short: statusShort(state, probeT) });
     const cells = statusCell
       + cell(t('node_latency'), lat)
       + speedCells(speedS, col, speedT, state === 'online' ? lv : null)
-      + cell(t('node_reqs'), compact(mv('reqs')), { sub: reqSub })
-      + cell(t('node_tokens'), compact(mv('tokens')), { sub: subOf('ll_tokens', 'emb_tokens', 'emb_ll_tokens') });
+      + cell(t('node_reqs'), compact(mv('reqs')), { ...reqSub, labelShort: t('abbr_node_reqs') })
+      + cell(t('node_tokens'), compact(mv('tokens')), { ...subOf('ll_tokens', 'emb_tokens', 'emb_ll_tokens'), labelShort: t('abbr_node_tokens') });
 
     return `<div class="node-col node-${state}${busy ? ' node-busy' : ''}" data-col="${idx}">`
-      + `<div class="node-head"><span class="node-name">${esc(name)}</span><span class="node-port">· ${port}</span>${pub}</div>`
-      + `<div class="node-model${modelCls}"${modelTitle}>${esc(model)}</div>`
+      + `<div class="node-head"><span class="node-name">${esc(name)}</span><span class="node-port fit" data-min="10">· ${port}</span>${pub}</div>`
+      + `<div class="node-model fit${modelCls}"${modelTitle || ` title="${esc(model)}"`}>${esc(model)}</div>`
       + `<div class="kv node-kv${anyMulti ? ' has-streams' : ''}">${cells}${multi ? streamsBar(lv, state === 'online' && lv.reachable) : (anyMulti ? '<div class="node-streams" data-m="0"></div>' : '')}</div>`
       + '</div>';
   });

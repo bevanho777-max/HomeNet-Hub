@@ -1,7 +1,7 @@
 // Machine detail modal (§6) — click a machine card, get that host's history as one
 // multi-line chart. Same renderer and same /api/history data as History · Dual
 // Compare; only the shell (Token Detail's modal) and the series selection differ.
-import { esc } from './common.js';
+import { esc, lvClass, setLine } from './common.js';
 import { cv, t } from '../i18n.js';
 import { drawMulti } from './chart.js';
 
@@ -208,10 +208,29 @@ function extraGpuPanels(n) {
   }));
 }
 
+// v2.27: a parts metric (one temperature per disk) may show only "max · min" on the card
+// face when its line does not fit (fit.js); every part's current value is here, one column
+// per part (the bay), each coloured by its own level. By Model (parts_layout: table) is
+// not repeated -- its card cell already lists every model with traffic.
+function showParts(id) {
+  const el = $('#machineModalParts');
+  if (!el) return;
+  const snap = id ? window.__lastSnap?.[id] : null;
+  const ms = metrics();
+  const html = Object.entries(snap?.metrics || {})
+    .filter(([k, m]) => Array.isArray(m?.parts) && m.parts.length && ms[k]?.parts_layout !== 'table')
+    .map(([k, m]) => `<table class="tbl partsTbl"><thead><tr><th title="${esc(cv(ms[k], 'label') || k)}">${esc(cv(ms[k], 'label') || k)}</th>`
+      + `${m.parts.map((p) => `<th class="num">${esc(p.label != null ? `#${p.label}` : '')}</th>`).join('')}</tr></thead>`
+      + `<tbody><tr><td>${esc(t('part_now'))}</td>${m.parts.map((p) => `<td class="num ${lvClass(p.level)}">${esc(p.display)}</td>`).join('')}</tr></tbody></table>`)
+    .join('');
+  el.innerHTML = html;
+  el.hidden = !html;
+}
+
 function mainTitle(text) {
   const el = $('#machineModalMainTitle');
   if (!el) return;
-  el.textContent = text || '';
+  setLine(el, text || '');
   el.hidden = !text;
 }
 
@@ -295,7 +314,7 @@ async function load() {
         const opts = { metrics: gm, emptyText: t('chart_no_data_range', range) };
         drawMulti(canvas, series, legend, { ...opts, subs: panels[0].subs, height: 220 });
         panels.slice(1).forEach((p, k) => {
-          extra[k].title.textContent = t(p.title);
+          setLine(extra[k].title, t(p.title));
           drawMulti(extra[k].canvas, series, extra[k].legend, { ...opts, subs: p.subs, height: 200 });
         });
       } else if (split) {
@@ -348,20 +367,22 @@ export function openMachineModal(id, customRanges) {
   targetId = id;
   ranges = Array.isArray(customRanges) && customRanges.length ? customRanges : RANGES;
   if (!ranges.includes(range)) range = ranges[0];
-  $('#machineModalTitle').textContent = modalTitle(id);
+  setLine($('#machineModalTitle'), modalTitle(id));
   $('#machineModal').classList.add('open');
   clearError();
   $('#machineModalRanges').innerHTML = ranges.map((r) =>
     `<button data-r="${esc(r)}" class="${r === range ? 'active' : ''}">${esc(r)}</button>`).join('');
   showAgent(id);
+  showParts(id);
   load();
 }
 
 /** Re-title and re-draw in the language now selected. No-op while the modal is closed. */
 export function relocalizeMachineModal() {
   if (!targetId || !$('#machineModal')?.classList.contains('open')) return;
-  $('#machineModalTitle').textContent = modalTitle(targetId);
+  setLine($('#machineModalTitle'), modalTitle(targetId));
   showAgent(targetId);
+  if (!nodeCtx) showParts(targetId);
   load();   // the note and any error line are built from the dictionary too
 }
 
@@ -377,11 +398,12 @@ export function openNodeModal({ col, usageTarget, liveTarget = null, ranges: cus
   targetId = col.speed || col.probe;
   ranges = Array.isArray(customRanges) && customRanges.length ? customRanges : ['1d', '3d', '7d'];
   if (!ranges.includes(range)) range = ranges[0];
-  $('#machineModalTitle').textContent = modalTitle(targetId);
+  setLine($('#machineModalTitle'), modalTitle(targetId));
   $('#machineModal').classList.add('open');
   clearError();
   const note = $('#machineModalNote'); if (note) { note.hidden = true; note.textContent = ''; }
   const ag = $('#machineModalAgent'); if (ag) ag.hidden = true;
+  showParts(null);
   $('#machineModalRanges').innerHTML = ranges.map((r) =>
     `<button data-r="${esc(r)}" class="${r === range ? 'active' : ''}">${esc(r)}</button>`).join('');
   load();
@@ -426,11 +448,11 @@ async function loadNode(canvas, legend) {
       [`${p}_emb_ll_tokens`]: { label: t('node_series_emb_ll') }, [`${p}_emb_tokens`]: { label: t('node_series_emb_total') },
     };
     const uOpts = { metrics: um, height: 170, emptyText: t('chart_no_data_range', range) };
-    extra[0].title.textContent = t('node_panel_reqs');
+    setLine(extra[0].title, t('node_panel_reqs'));
     drawMulti(extra[0].canvas, us, extra[0].legend, { ...uOpts, subs: [
       { k: `${p}_reqs`, color: '#f7c948', axis: 'R' }, { k: `${p}_ll_reqs`, color: '#5eead4', axis: 'R' },
       { k: `${p}_emb_reqs`, color: '#e879f9', axis: 'R' }, { k: `${p}_emb_ll_reqs`, color: '#b18cff', axis: 'R' }] });
-    extra[1].title.textContent = t('node_panel_tokens');
+    setLine(extra[1].title, t('node_panel_tokens'));
     drawMulti(extra[1].canvas, us, extra[1].legend, { ...uOpts, subs: [
       { k: `${p}_tokens`, color: '#ff9d5c', axis: 'R' }, { k: `${p}_ll_tokens`, color: '#5eead4', axis: 'R' },
       { k: `${p}_emb_tokens`, color: '#e879f9', axis: 'R' }, { k: `${p}_emb_ll_tokens`, color: '#b18cff', axis: 'R' }] });
@@ -443,7 +465,7 @@ async function loadNode(canvas, legend) {
       const subs = [];
       for (let i = 1; i <= nStreams; i++) { lm[`${p}_s${i}_tps`] = { label: `#${i}` }; subs.push({ k: `${p}_s${i}_tps`, color: COLORS[(i - 1) % COLORS.length], axis: 'R', unit: 't/s' }); }
       subs.push({ k: `${p}_streams`, color: '#cbd5e1', axis: 'L', unit: '' });
-      extra[2].title.textContent = t('node_panel_streams');
+      setLine(extra[2].title, t('node_panel_streams'));
       drawMulti(extra[2].canvas, lvh, extra[2].legend, { metrics: lm, subs, height: 170, emptyText: t('chart_no_data_range', range), maxGapSec, leftMax: Math.max(4, 4 * Math.ceil(nStreams / 4)) });
     }
     clearError();

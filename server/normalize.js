@@ -29,6 +29,29 @@ function num(x) {
 }
 
 // Network rate: input is BYTES/sec (§4.2 rx_bps/tx_bps), auto B->K->M->G.
+// v2.27: at most three significant digits, trailing zeros dropped (389.0 -> 389, 30.2 -> 30.2)
+function sig3(n) {
+  if (n == null || !Number.isFinite(Number(n))) return '—';
+  const x = Number(n);
+  if (x === 0) return '0';
+  const a = Math.abs(x);
+  return (x < 0 ? '-' : '') + (a >= 100 ? String(Math.round(a)) : String(Number(a.toPrecision(3))));
+}
+
+// counts and rates: K / M / G with at most three significant digits (12345 -> 12.3K)
+function si3(n) {
+  const a = Math.abs(n);
+  for (const [d, u] of [[1e9, 'G'], [1e6, 'M'], [1e3, 'K']]) {
+    if (a >= d * 0.9995) {
+      const s = sig3(n / d);
+      // 999.96K rounds to "1000": that is 1M
+      if (Math.abs(Number(s)) >= 1000 && u !== 'G') continue;
+      return s + u;
+    }
+  }
+  return sig3(n);
+}
+
 function fmtNet(bps) {
   let v = num(bps);
   if (v == null) return '—';
@@ -62,9 +85,8 @@ function fmtScalar(value, metric) {
   if (unit === '%' || unit === '°C' || unit === 'W' || unit === 'ms') {
     return Math.round(value) + unit;
   }
-  // generic number (e.g. token_speed, counts)
-  const n = Number.isInteger(value) ? value : Math.round(value * 10) / 10;
-  return unit ? `${n}${unit}` : String(n);
+  // generic number (e.g. token_speed, counts). v2.27: K / M / G, three significant digits
+  return `${si3(value)}${unit}`;
 }
 
 // Substitute {placeholders} in a metric.format string with formatted subfields.
@@ -77,10 +99,10 @@ function applyFormat(format, fields, metricKey, divide) {
   return format.replace(/\{(\w+)\}/g, (_, k) => {
     const raw = fields[k];
     if (raw == null) return '—';
-    if (div > 0) { const n = num(raw); return n == null ? '—' : (n / div).toFixed(1); }
+    if (div > 0) { const n = num(raw); return n == null ? '—' : sig3(n / div); }
     if (metricKey === 'net') return fmtNet(raw);
     if (metricKey === 'loadavg') { const n = num(raw); return n == null ? '—' : n.toFixed(2); }
-    if (metricKey.endsWith('_bytes')) { const n = num(raw); return n == null ? '—' : n.toFixed(1); }
+    if (metricKey.endsWith('_bytes')) { const n = num(raw); return n == null ? '—' : sig3(n); }
     if (metricKey === 'uptime') { const n = num(raw); return n == null ? '—' : String(Math.round(n)); }
     const n = num(raw);
     return n == null ? String(raw) : String(n);
@@ -129,7 +151,7 @@ function normMetric(raw, mapEntry, metric, metricKey) {
         if (k.endsWith('_label')) continue;   // a sibling naming another part, not a part
         const n = num(fields[k]);
         if (n == null) continue;
-        const part = { display: fmtScalar(n, metric), level: computeLevel(n, { thresholds: metric.part_thresholds }) };
+        const part = { display: fmtScalar(n, metric), v: n, level: computeLevel(n, { thresholds: metric.part_thresholds }) };
         // Optional `<key>_label` sibling in the map names the part (e.g. the DSM bay a
         // disk sits in). Rendered as a superscript tag, so it stays a label and never
         // takes the value's status color.
@@ -246,7 +268,7 @@ function applyFreshness(raw, target, metrics, nowSec) {
 // 卡面小字由各合计 metric 上的 `cards` 数组提供(用 cards 而不是 parts,不触发 B20 的分段渲染)。
 const LV_RANK = { ok: 1, warn: 2, danger: 3 };
 const worstLevel = (levels) => levels.reduce((a, l) => ((LV_RANK[l] || 0) > (LV_RANK[a] || 0) ? l : a), null);
-const gb1 = (n) => n.toFixed(1);
+const gb1 = (n) => sig3(n);
 
 function applyGpuMulti(raw, target, tpls, metrics) {
   const list = Array.isArray(raw?.gpus) ? raw.gpus.filter((g) => g && typeof g === 'object') : [];
@@ -387,7 +409,8 @@ export function samplableRows(targetId, normalized, metricTemplates) {
     const reduce = how && PART_REDUCERS[how];
     if (reduce && Array.isArray(m.parts) && m.parts.length) {
       // parts carry formatted display strings, so read the number back off them.
-      const xs = m.parts.map((p) => Number(p.display)).filter((n) => Number.isFinite(n));
+      // (v2.27: the raw number rides along as `v`; the display may be "1.2K")
+      const xs = m.parts.map((p) => (typeof p.v === 'number' ? p.v : Number(p.display))).filter((n) => Number.isFinite(n));
       if (xs.length) rows.push([targetId, `${metric}_${how}`, reduce(xs)]);
     }
   }

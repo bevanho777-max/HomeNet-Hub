@@ -1,6 +1,7 @@
 // Shared rendering helpers for the config-driven renderers (§6).
 // Status color logic lives server-side (normalize → level); the frontend only
 // maps level → lv-* class / --c color. Visuals match the .24 baseline 1:1.
+import { t } from '../i18n.js';
 
 export const LV_VAR = {
   ok: 'var(--lv-ok)', warn: 'var(--lv-warn)', danger: 'var(--lv-danger)', cool: 'var(--lv-cool)',
@@ -29,6 +30,10 @@ export function esc(s) {
   ));
 }
 
+// v2.27: a one-line title (modal heads, chart panel titles) -- cut with an ellipsis when it
+// does not fit (tokens.css), so the full text rides along in title.
+export const setLine = (el, text) => { el.textContent = text; el.title = text; };
+
 // A metric cell from /api/snapshot: { value, level, display }.
 export const mget = (snap, key) => (snap?.metrics?.[key] || { value: null, level: 'cool', display: '—' });
 
@@ -48,29 +53,70 @@ export function ring(label, m) {
 // in the machine modal. Alerting is unchanged: the hub gives an aggregate the WORST level
 // of its cards (vram / temp / power), and that level is what colours the ring and cell.
 
+// v2.27 the standard cell (tokens.css: label / value / second line, fixed 70px, nothing
+// wraps). Every line is .fit: fit.js shrinks a line that does not fit, then swaps in its
+// short form (`short` / `subShort`, from the abbreviation table in i18n.js), then cuts it.
+// `value` is HTML when `html` is set (callers escape), text otherwise.
+export function cellHtml({ label, value, cls = '', sub = '', itemCls = '', short = null, subShort = null, html = false }) {
+  const attr = (s) => (s != null && s !== '' ? ` data-short="${esc(s)}"` : '');
+  return `<div class="item${itemCls ? ` ${itemCls}` : ''}"><span class="label fit">${esc(label)}</span>`
+    + `<span class="value fit${cls ? ` ${cls}` : ''}"${attr(short)}>${html ? value : esc(value)}</span>`
+    + (sub ? `<span class="sub fit"${attr(subShort)}>${esc(sub)}</span>` : '')
+    + '</div>';
+}
+
+const partNum = (p) => (typeof p.v === 'number' ? p.v : Number(p.display));
+
 // Key/value item; ratio metrics (have numeric value) get a status class.
 // B20: a metric normalized with `part_thresholds` arrives with `parts` — each
 // subfield already carries its own level, so render them as separately colored
 // spans instead of tinting the whole value one color.
-export function kvItem(label, m, tpl = null, extraCls = '') {
+// opts.sub: the cell's second line (layout `subs`, e.g. the 5-minute count under today's).
+export function kvItem(label, m, tpl = null, { sub = '', itemCls = '' } = {}) {
   const cls = lvClass(m.level);
-  // v2.22 `parts_layout: table` (metrics.yaml): parts as a 2-column mini table -- label
-  // left, number right -- so a many-part cell (the gateway's By Model) stays aligned
-  // instead of wrapping into ragged lines.
-  const table = m.parts && tpl?.parts_layout === 'table';
-  const body = table
-    ? `<span class="value parts-table">${m.parts.map((p) => `<span class="pt"><span class="pt-l" title="${esc(p.label || '')}">${esc(p.label || '')}</span>`
-        + `<span class="pt-v ${lvClass(p.level)}">${esc(p.display)}</span></span>`).join('')}</span>`
-    : m.parts
-    ? `<span class="value parts">${m.parts.map((p) => `<i class="${lvClass(p.level)}">${esc(p.display)}`
-        + `${p.label ? `<sup>${esc(p.label)}</sup>` : ''}</i>`).join('')}</span>`
-    : `<span class="value ${cls}">${esc(m.display)}</span>`;
   // Border tint only for the states that need attention (for a parts metric that is
   // the worst part). ok/cool keep the neutral frame, so a healthy card looks exactly
   // as it did before and a warm drive is the only thing that lights up.
-  const edge = (m.level === 'warn' || m.level === 'danger') ? ` ${cls}` : '';
-  const more = [table ? 'has-table' : '', extraCls].filter(Boolean).join(' ');
-  return `<div class="item${edge}${more ? ` ${more}` : ''}"><span class="label">${esc(label)}</span>${body}</div>`;
+  const edge = (m.level === 'warn' || m.level === 'danger') ? cls : '';
+  const itemClass = [edge, itemCls].filter(Boolean).join(' ');
+  const open = `<div class="item${itemClass ? ` ${itemClass}` : ''}"><span class="label fit">${esc(label)}</span>`;
+  const subHtml = sub ? `<span class="sub fit">${esc(sub)}</span>` : '';
+
+  // v2.27 `parts_layout: table` (gateway By Model): the entries above zero, in at most two
+  // rows (--pc columns), label left and number right; a long model name shrinks, then reads
+  // as its short form (abbr_model), then is cut.
+  if (m.parts && tpl?.parts_layout === 'table') {
+    const parts = m.parts.filter((p) => partNum(p) !== 0);
+    if (!parts.length) return `${open}<span class="value fit">${m.parts.length ? '0' : '—'}</span>${subHtml}</div>`;
+    const abbr = t('abbr_model') || {};
+    const pc = Math.max(1, Math.ceil(parts.length / 2));
+    const cells = parts.map((p) => {
+      const l = p.label || '';
+      const short = typeof abbr === 'object' && abbr[l] && abbr[l] !== l ? ` data-short="${esc(abbr[l])}"` : '';
+      return `<span class="pt"><span class="pt-l fit"${short} title="${esc(l)}">${esc(l)}</span><span class="pt-v ${lvClass(p.level)}">${esc(p.display)}</span></span>`;
+    }).join('');
+    return `${open}<span class="ptab" style="--pc:${pc}">${cells}</span></div>`;
+  }
+
+  // parts in one line (a temperature per disk, the bay as a tag); the short form is the
+  // hottest disk (its bay tagged) and the coolest, "max · min" on the line under them.
+  if (m.parts) {
+    const full = m.parts.map((p) => `<i class="${lvClass(p.level)}">${esc(p.display)}</i>${p.label ? `<sup>${esc(p.label)}</sup>` : ''}`).join('');
+    const nums = m.parts.map((p) => ({ p, v: partNum(p) })).filter((x) => Number.isFinite(x.v));
+    let alt = '';
+    if (nums.length >= 2) {
+      const hi = Math.max(...nums.map((x) => x.v));
+      const lo = Math.min(...nums.map((x) => x.v));
+      const hot = nums.filter((x) => x.v === hi);
+      const cold = nums.find((x) => x.v === lo);
+      const bays = hot.map((x) => x.p.label).filter(Boolean).join(',');
+      alt = `<span class="alt-form"><span class="value fit"><i class="${lvClass(hot[0].p.level)}">${esc(hot[0].p.display)}°</i>${bays ? `<sup>${esc(bays)}</sup>` : ''}`
+        + `<span class="mm-sep">·</span><i class="${lvClass(cold.p.level)}">${esc(cold.p.display)}°</i></span>`
+        + `<span class="sub fit">${esc(t('abbr_hdd_maxmin'))}</span></span>`;
+    }
+    return `${open}<span class="value parts fit${alt ? ' full-form' : ''}">${full}</span>${alt}${subHtml}</div>`;
+  }
+  return `${open}<span class="value fit ${cls}">${esc(m.display)}</span>${subHtml}</div>`;
 }
 
 // Card model consumed by mountCards (matches the .24 shell-persist contract).

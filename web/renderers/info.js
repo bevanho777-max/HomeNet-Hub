@@ -3,7 +3,7 @@
 // literal string, with optional {metric} placeholders resolved from this card's
 // target snapshot (same templating as header_right). No per-purpose logic — add
 // any "info box" by adding a type:info card in layout.yaml, zero code changes.
-import { card, mget, lvClass, esc } from './common.js';
+import { card, mget, lvClass, cellHtml } from './common.js';
 import { cv } from '../i18n.js';
 
 export function renderInfo(gridCard, target, snap) {
@@ -16,9 +16,9 @@ export function renderInfo(gridCard, target, snap) {
     // often a sentence ("Demo (synthetic data)"), not just a labelled number.
     const val = String(cv(it, 'value') ?? '').replace(/\{(\w+)\}/g, (_, k) => mget(snap, k).display ?? '—');
     const cls = it.level ? lvClass(it.level) : '';
-    return `<div class="item"><span class="label">${esc(cv(it, 'label'))}</span><span class="value ${cls}">${esc(val)}</span></div>`;
+    return cellHtml({ label: cv(it, 'label'), value: val, cls });
   }).join('');
 
   const n = (gridCard.items || []).filter((it) => it && typeof it === 'object').length;
-  return card({ key: gridCard.target || title, title, body: `<div class="kv" data-n="${n}">${items}</div>`, accent });
+  return card({ key: gridCard.target || title, title, body: `<div class="kv kv-info" data-n="${n}">${items}</div>`, accent });
 }

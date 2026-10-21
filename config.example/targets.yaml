@@ -35,6 +35,8 @@ targets:
       loadavg:    { m1: "$.load[0]", m5: "$.load[1]", m15: "$.load[2]" }
       net:        { rx: "$.net.rx", tx: "$.net.tx" }
       uptime:     { s: "$.uptime_s" }   # protocol field: seconds → {d}d {h}h in normalize
+      procs:      "$.procs"            # services running on the gateway host
+      latency:    "$.latency_ms"       # its own probe latency
 
   # ── GPU node 1 ──
   # i18n: `name` and `badge` may carry `name_en` / `badge_en`, used when the viewer picks

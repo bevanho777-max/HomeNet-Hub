@@ -1,5 +1,5 @@
 // service renderer (§6) — no rings; KV list + header_right status/badge.
-import { card, mget, lvClass, esc, statusLevel } from './common.js';
+import { card, mget, lvClass, esc, statusLevel, cellHtml } from './common.js';
 import { cv, t } from '../i18n.js';
 
 // v2.19 measurement age. A metric the hub tracks for freshness carries `at` (unix
@@ -59,10 +59,13 @@ export function renderService(gridCard, target, snap, metrics) {
   const itemKeys = gridCard.items || [];
   const items = itemKeys.map((k) => {
     const m = mget(snap, k);
-    // v2.23: one type scale in every cell (the 12px model/role override is gone); a long
-    // model name wraps inside its cell instead.
+    // v2.23: one type scale in every cell (the 12px model/role override is gone). v2.27: a
+    // long model name shrinks, then is cut (full name in title) -- the cell never grows.
     const cls = k === 'status' ? lvClass(statusLevel(m.value)) : lvClass(m.level);
-    return `<div class="item"><span class="label">${esc(label(k))}</span><span class="value ${cls}">${esc(m.display)}</span></div>`;
+    // v2.27 `subs`: a second metric on the cell's second line (see machine.js)
+    const sk = gridCard.subs?.[k];
+    const sub = sk ? `${label(sk)} ${mget(snap, sk).display ?? '—'}` : '';
+    return cellHtml({ label: label(k), value: m.display, cls, sub });
   }).join('');
 
   // no items configured → show a note instead of a silent empty card body

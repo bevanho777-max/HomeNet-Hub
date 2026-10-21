@@ -168,6 +168,38 @@ const ZH = {
   cred_intro: '密钥加密后存入本机数据库,存进去就再也读不出来 —— 只能改名重存或删除。',
 
   // clients (litellm virtual keys)
+  // ── 简写表(v2.27,中英共用一套键,集中管理)────────────────────────────────
+  // 格子里的一行放不下时,fit.js 依次:① 缩小字体(数值最小 13px、其余最小 10px)
+  // ② 换成这里的简写 ③ 最后才省略号截断(title 显示全文)。卡面上的常驻文字也已直接用短写:
+  //   Total · Avg per stream → Σ · 每路      via LiteLLM → 经 LLM      Measured 13:30 → 测 13:30
+  //   已生成 N → 已生成 N(en: N gen)       缓存 N        N 请求        结束后      本次
+  abbr_busy: '推理',                       // 推理中 N/M → 推理 N/M
+  abbr_off: '离线',                        // 未开机 / 无服务
+  abbr_last: (when, v) => `${when} · ${v}`,  // 最后 13:30 · 63.5
+  abbr_measured_last: (when) => `测 ${when}`, // 最后测量 13:30
+  abbr_ll: (n) => `LLM ${n}`,              // 经 LLM 1.2M
+  abbr_emb: (n) => `嵌 ${n}`,              // 嵌入 1.2M
+  abbr_no_counter: '无计数',               // 无请求计数器
+  abbr_prefilling_n: (list) => `${list} 预填`, // #1 #3 预填中
+  abbr_stream_read: (n) => `读 ${n}`,      // prompt N · 读 N 的第二段
+  abbr_stream_gen: (n) => `生成 ${n}`,     // 已生成 N
+  abbr_stream_cached: (n) => `缓存 ${n}`,  // 缓存 N(英文 cached → cache)
+  abbr_stream_decode: '生成中',            // 并发条各路状态(中文本身已短)
+  abbr_stream_prefill: '预填中',
+  abbr_hdd_maxmin: '最高 · 最低',          // HDD/SSD 温度一行放不下时:最高(盘号) · 最低
+  abbr_route_stale: '待删',                // litellm 4002 待移除
+  abbr_route_pending: '未接',              // litellm 4002 未接入
+  abbr_tk_total: '累计',                   // Token 卡表头
+  abbr_tk_today: '今日',
+  abbr_tk_net: '净增',
+  abbr_tk_reqs: '请求',
+  abbr_tk_ll: '经 LLM',
+  abbr_model: { flashnext: 'flash', orcarouter: 'orca' },  // By Model 名称
+  abbr_node_reqs: '今日请求',                // 推理节点格子标签(中文本身已短)
+  abbr_node_tokens: '今日 tok',            // 今日 tokens
+  abbr_prefill: 'Prefill',                // Prefill t/s
+  abbr_decode: 'Decode',                  // Decode t/s
+  part_now: '当前',
   cli_title: '客户端',
   cli_off_head: '未配置 LITELLM_MASTER_KEY',
   // 注意那个空格:改前这句在 index.html 里跨了两行,HTML 把换行折叠成一个空格,
@@ -183,7 +215,7 @@ const ZH = {
   cli_section: '客户端与用量',
   cli_unconfigured: '未配置',
   cli_api_down: (e) => `litellm 的 key 接口没响应:${e}`,
-  cli_system: '网关自己的 key',
+  cli_system: '系统 key',
   cli_revoked: '已撤销',
   cli_usage: (tok, net, reqs) => `${tok} tok · 净 ${net} · ${reqs} 次`,
   cli_today: (n) => `今日 ${n} 次`,
@@ -285,7 +317,7 @@ const ZH = {
   agent_unreported: 'agent 未上报版本（旧版 agent）',
   // v2.19 service/stack: an expected-absent service, and measurement age
   svc_idle: '目前无服务',
-  measured_at: (when) => `测量于 ${when}`,
+  measured_at: (when) => `测 ${when}`,
   measured_last: (when) => `最后测量 ${when}`,
   measured_none: (span) => (span ? `近 ${span} 无测量` : '无测量记录'),
   // v2.20 推理节点 card + node modal
@@ -304,13 +336,13 @@ const ZH = {
   node_unrouted: '未接入 litellm',
   node_model_last: '最后一次看到的模型（当前无服务）',
   node_speed_last: (when, pp, tg) => `最后 ${when} · ${pp} / ${tg}`,
-  node_speed_unavailable: '测速数据源不可用',
-  node_no_speed_src: '没有测速数据源',
+  node_speed_unavailable: '测速不可用',
+  node_no_speed_src: '无测速源',
   node_embed: (r, k) => `embedding · ${r} 请求 · ${k} tokens`,
   node_modal_title: (n) => `${n} · 推理节点`,
   node_panel_speed: '速度（上 Prefill / 下 Decode）',
-  node_panel_reqs: '今日请求（当日累计；总计 vs 经 LiteLLM）',
-  node_panel_tokens: '今日 tokens（当日累计；总计 vs 经 LiteLLM）',
+  node_panel_reqs: '今日请求（累计；总计 vs 经 LLM）',
+  node_panel_tokens: '今日 tokens（累计；总计 vs 经 LLM）',
   node_series_chat: '对话',
   node_series_embed: 'Embedding',
   node_series_total: '总计（服务端计数）',
@@ -319,14 +351,14 @@ const ZH = {
   node_series_emb_total: 'Embedding（服务端计数）',
   node_via_ll: (r, k) => `其中经 litellm：${r} 请求 / ${k} tokens`,
   node_emb_ll: (r, k) => `embedding（经 litellm）· ${r} 请求 · ${k} tokens`,
-  node_no_req_counter: '服务端没有请求计数器',
+  node_no_req_counter: '无请求计数器',
   node_litellm_port: (p) => `litellm ${p}`,
   node_route_stale: '待移除',
   node_route_pending: '未接入',
   node_public_via: (d) => `对外 ${d}`,
   // v2.23 cell second lines (inference nodes card)
   node_sub_last: (when, v) => `最后 ${when} · ${v}`,
-  node_sub_ll: (n) => `经 LiteLLM ${n}`,
+  node_sub_ll: (n) => `经 LLM ${n}`,
   node_sub_emb: (n) => `嵌入 ${n}`,
   // v2.24 Token Usage (all usage, counters first)
   tk_cov: (list) => `直连用量自 ${list} 起计入,此前只含经 LiteLLM`,
@@ -341,28 +373,28 @@ const ZH = {
   tk_range_today: '今日',
   // v2.25 live inference state
   node_busy: '推理中',
-  node_busy_n: (n) => `${n} 个请求`,
+  node_busy_n: (n) => `${n} 请求`,
   node_queued: (n) => `排队 ${n}`,
-  node_prefilling: '处理提示中',
-  node_prefill_read: (n) => `处理提示 · 已读 ${n}`,
-  node_prefill_after: '结束后给出',
-  node_this_req: '本次请求',
+  node_prefilling: '预填中',
+  node_prefill_read: (n) => `已读 ${n}`,
+  node_prefill_after: '结束后',
+  node_this_req: '本次',
   node_estimate: '估算',
   node_live: '实时',
   node_parallel: (n) => `${n} 个并行合计`,
   node_wait_decode: '等待生成',
   // v2.26 concurrent streams
-  node_total_avg: (x) => `合计 · 平均每路 ${x}`,
+  node_total_avg: (x) => `Σ · 每路 ${x}`,
   node_prefilling_n: (list) => `${list} 预填中`,
   stream_decode: '生成中',
   stream_prefill: '预填中',
   stream_idle: '空闲',
   stream_gen: (n) => `已生成 ${n}`,
-  stream_gen_of: (n, m) => `已生成 ${n} / ${m}`,
+  stream_gen_of: (n, m) => `${n} / ${m}`,
   stream_prompt: (n) => `prompt ${n}`,
-  stream_read: (n) => `已读 ${n}`,
-  stream_cached: (n) => `缓存 ${n} tokens`,
-  node_panel_streams: '并发(每一路的 decode t/s;并发数)',
+  stream_read: (n) => `读 ${n}`,
+  stream_cached: (n) => `缓存 ${n}`,
+  node_panel_streams: '并发（各路 decode t/s；并发数）',
   node_series_streams: '并发数',
 
   // table card
@@ -484,6 +516,33 @@ const EN = {
   cred_intro: 'The secret is encrypted into this machine’s database and can never be read '
     + 'back out — only renamed, re-stored or deleted.',
 
+  abbr_busy: 'Gen',
+  abbr_off: 'Off',
+  abbr_last: (when, v) => `${when} · ${v}`,
+  abbr_measured_last: (when) => `@${when}`,
+  abbr_ll: (n) => `LLM ${n}`,
+  abbr_emb: (n) => `e ${n}`,
+  abbr_no_counter: 'n/a',
+  abbr_prefilling_n: (list) => `${list} pre`,
+  abbr_stream_read: (n) => `rd ${n}`,
+  abbr_stream_gen: (n) => `${n} gen`,
+  abbr_stream_cached: (n) => `cache ${n}`,
+  abbr_stream_decode: 'Gen',
+  abbr_stream_prefill: 'Prefill',
+  abbr_hdd_maxmin: 'max · min',
+  abbr_route_stale: 'stale',
+  abbr_route_pending: 'pending',
+  abbr_tk_total: 'Total',
+  abbr_tk_today: 'Today',
+  abbr_tk_net: 'Net',
+  abbr_tk_reqs: 'Reqs',
+  abbr_tk_ll: 'via LLM',
+  abbr_model: { flashnext: 'flash', orcarouter: 'orca' },
+  abbr_node_reqs: 'Reqs/day',
+  abbr_node_tokens: 'Tok/day',
+  abbr_prefill: 'Prefill',
+  abbr_decode: 'Decode',
+  part_now: 'Now',
   cli_title: 'Clients',
   cli_off_head: 'LITELLM_MASTER_KEY not configured',
   cli_off_why: (why) => `Cannot reach the litellm key API (${why}), so client keys cannot be minted or revoked.`,
@@ -498,7 +557,7 @@ const EN = {
   cli_section: 'Clients and usage',
   cli_unconfigured: 'not configured',
   cli_api_down: (e) => `The litellm key API did not answer: ${e}`,
-  cli_system: 'the gateway’s own key',
+  cli_system: 'system',
   cli_revoked: 'revoked',
   cli_usage: (tok, net, reqs) => `${tok} tok · net ${net} · ${reqs} reqs`,
   cli_today: (n) => `${n} today`,
@@ -598,7 +657,7 @@ const EN = {
   agent_head_unknown: (sha) => `Agent ${sha} (HEAD version unknown)`,
   agent_unreported: 'Agent does not report its version (old agent)',
   svc_idle: 'No service right now',
-  measured_at: (when) => `Measured ${when}`,
+  measured_at: (when) => `@${when}`,
   measured_last: (when) => `Last measured ${when}`,
   measured_none: (span) => (span ? `No measurement in ${span}` : 'No measurement on record'),
   node_card_title: 'Inference Nodes',
@@ -616,13 +675,13 @@ const EN = {
   node_unrouted: 'not in litellm',
   node_model_last: 'Last model seen (no service now)',
   node_speed_last: (when, pp, tg) => `Last ${when} · ${pp} / ${tg}`,
-  node_speed_unavailable: 'Speed source unavailable',
-  node_no_speed_src: 'No speed source',
+  node_speed_unavailable: 'no speed src',
+  node_no_speed_src: 'no speed src',
   node_embed: (r, k) => `embedding · ${r} req · ${k} tokens`,
   node_modal_title: (n) => `${n} · Inference node`,
-  node_panel_speed: 'Speed (prefill above / decode below)',
-  node_panel_reqs: 'Requests today (running total; total vs via LiteLLM)',
-  node_panel_tokens: 'Tokens today (running total; total vs via LiteLLM)',
+  node_panel_speed: 'Speed (prefill / decode)',
+  node_panel_reqs: 'Requests today (total vs via LLM)',
+  node_panel_tokens: 'Tokens today (total vs via LLM)',
   node_series_chat: 'Chat',
   node_series_embed: 'Embedding',
   node_series_total: 'Total (server counters)',
@@ -631,13 +690,13 @@ const EN = {
   node_series_emb_total: 'Embedding (server counters)',
   node_via_ll: (r, k) => `Via LiteLLM: ${r} req / ${k} tokens`,
   node_emb_ll: (r, k) => `embedding (via LiteLLM) · ${r} req · ${k} tokens`,
-  node_no_req_counter: 'no request counter on the server',
+  node_no_req_counter: 'no counter',
   node_litellm_port: (p) => `litellm ${p}`,
   node_route_stale: 'to be removed',
   node_route_pending: 'not connected',
   node_public_via: (d) => `Public · ${d}`,
   node_sub_last: (when, v) => `Last ${when} · ${v}`,
-  node_sub_ll: (n) => `via LiteLLM ${n}`,
+  node_sub_ll: (n) => `via LLM ${n}`,
   node_sub_emb: (n) => `emb ${n}`,
   tk_cov: (list) => `Direct use counted from ${list}; LiteLLM only before`,
   tk_partial: 'some counters unavailable — that part of today is LiteLLM only',
@@ -650,27 +709,27 @@ const EN = {
   tk_kind_embed_requests: 'embedding requests',
   tk_range_today: 'Today',
   node_busy: 'Generating',
-  node_busy_n: (n) => (n === 1 ? '1 request' : `${n} requests`),
+  node_busy_n: (n) => `${n} req`,
   node_queued: (n) => `Queued ${n}`,
-  node_prefilling: 'Reading prompt',
-  node_prefill_read: (n) => `Reading · ${n} done`,
-  node_prefill_after: 'shown when done',
-  node_this_req: 'this request',
+  node_prefilling: 'Prefilling',
+  node_prefill_read: (n) => `read ${n}`,
+  node_prefill_after: 'at end',
+  node_this_req: 'this req',
   node_estimate: 'estimate',
   node_live: 'live',
   node_parallel: (n) => `sum of ${n} parallel`,
   node_wait_decode: 'waiting',
-  node_total_avg: (x) => `Total · Avg per stream ${x}`,
+  node_total_avg: (x) => `Σ · /stream ${x}`,
   node_prefilling_n: (list) => `${list} Prefilling`,
   stream_decode: 'Decoding',
   stream_prefill: 'Prefilling',
   stream_idle: 'Idle',
-  stream_gen: (n) => `${n} generated`,
-  stream_gen_of: (n, m) => `${n} / ${m} generated`,
+  stream_gen: (n) => `${n} gen`,
+  stream_gen_of: (n, m) => `${n} / ${m}`,
   stream_prompt: (n) => `prompt ${n}`,
-  stream_read: (n) => `${n} read`,
-  stream_cached: (n) => `cached ${n} tokens`,
-  node_panel_streams: 'Concurrency (each stream\'s decode t/s; streams running)',
+  stream_read: (n) => `read ${n}`,
+  stream_cached: (n) => `cached ${n}`,
+  node_panel_streams: 'Concurrency (t/s per stream; streams)',
   node_series_streams: 'Streams',
 
   table_more: 'View all',

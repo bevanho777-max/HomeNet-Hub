@@ -17,7 +17,9 @@ import { bindCredentials, closeCredPanel, relocalizeCredPanel } from './renderer
 import { bindClients, closeClientsPanel, relocalizeClientsPanel } from './renderers/clients.js';
 import { bindSession, refreshSession, sessionLost, closeLoginPanel, closeSetupPanel, maybeOpenSetup, isAuthed, openLoginPanel, relocalizeSession } from './renderers/session.js';
 import { bindDemoBar, applyDemoBar, emptyBoardHtml } from './renderers/demo.js';
-import { esc, statusLevel } from './renderers/common.js';
+import { esc, statusLevel, setLine } from './renderers/common.js';
+import { si3 } from './fmt.js';
+import { fitCards } from './fit.js';
 import { applyDocumentLang, applyStaticText, cmap, colmap, cv, getLang, onLangChange, setLang, t } from './i18n.js';
 
 const FAST_MS = 1500;     // snapshot poll (machine/GPU rhythm)
@@ -42,7 +44,7 @@ function mountCards(containerId, cards) {
       el.className = 'card';
       el.dataset.key = c.key;
       if (c.accent) el.style.setProperty('--accent', c.accent);
-      el.innerHTML = `<h2>${esc(c.title)}${c.tag ? `<span class="tag">${c.tag}</span>` : ''}</h2><div class="card-body">${c.body}</div>`;
+      el.innerHTML = `<h2>${esc(c.title)}${c.tag ? `<span class="tag fit">${c.tag}</span>` : ''}</h2><div class="card-body">${c.body}</div>`;
       el._body = c.body;
       container.appendChild(el);
     } else {
@@ -72,7 +74,7 @@ function mountCards(containerId, cards) {
       // present, remove it when the tag goes empty.
       let tagEl = h2 && h2.querySelector('.tag');
       if (c.tag) {
-        if (!tagEl && h2) { tagEl = document.createElement('span'); tagEl.className = 'tag'; h2.appendChild(tagEl); }
+        if (!tagEl && h2) { tagEl = document.createElement('span'); tagEl.className = 'tag fit'; h2.appendChild(tagEl); }
         if (tagEl && tagEl.innerHTML !== c.tag) tagEl.innerHTML = c.tag;
       } else if (tagEl) {
         tagEl.remove();
@@ -217,6 +219,12 @@ function autoColor(target, snap, cardType) {
 }
 
 // ── v2.23 grid packing: explicit rows, never a hole ───────────────────────
+// v2.27 fit-text (fit.js) for the cards whose body, header tag or width changed since they were
+// last fitted. Runs after packGrid, so the widths are final.
+function fitBoard() {
+  fitCards([...document.querySelectorAll('#grid > .card')]);
+}
+
 // CSS decides HOW MANY columns (1/2/3/4 by screen width, see .grid in tokens.css); this
 // decides WHERE each card goes. Rows are filled in config order by span. A row that ends
 // short is closed by (1) widening the row's `stretch` cards in proportion to their span,
@@ -281,47 +289,13 @@ function packGrid() {
   });
 }
 
-// v2.23: cards side by side in one grid row line their key/value rows up -- the n-th row
-// of cells sits at the same height in every card (labels and values on one baseline),
-// even when one card's cell holds two lines (a disk-temperature list, the By Model table).
-// Only cards whose cell grids have the same column count are matched.
-function alignKvRows() {
-  const grid = document.getElementById('grid');
-  if (!grid) return;
-  const kvs = [...grid.querySelectorAll(':scope > .card .card-body .mach > .kv')];
-  kvs.forEach((kv) => { kv.style.gridTemplateRows = ''; });
-  const groups = new Map();
-  for (const kv of kvs) {
-    const row = kv.closest('.card').style.gridRow;
-    if (!groups.has(row)) groups.set(row, []);
-    groups.get(row).push(kv);
-  }
-  for (const list of groups.values()) {
-    if (list.length < 2) continue;
-    // n-th cell row of every card in the grid row gets the tallest n-th row's height,
-    // whatever each card's column count (a 4-cell card in 2 columns still has 2 rows that
-    // line up with its 6-cell neighbours' 2 rows of 3).
-    // rows are read from where the cells actually landed (a narrow card moves By Model to
-    // the end and lets it span the row, so the DOM index says nothing about the row)
-    const heights = list.map((kv) => {
-      const rows = new Map();
-      for (const it of kv.children) {
-        const r = it.getBoundingClientRect();
-        const top = Math.round(r.top);
-        rows.set(top, Math.max(rows.get(top) || 0, r.height));
-      }
-      return [...rows.entries()].sort((a, b) => a[0] - b[0]).map(([, h]) => h);
-    });
-    const n = Math.max(...heights.map((h) => h.length));
-    const max = Array.from({ length: n }, (_, r) => Math.max(...heights.map((h) => h[r] || 0)));
-    list.forEach((kv, i) => { kv.style.gridTemplateRows = heights[i].map((_, r) => `${Math.ceil(max[r])}px`).join(' '); });
-  }
-}
+// (v2.27: alignKvRows is gone. Every cell is the standard fixed height, so cells in a row of
+// cards line up by construction; nothing is stretched to match a taller neighbour.)
 
 let packRaf = 0;
 window.addEventListener('resize', () => {
   cancelAnimationFrame(packRaf);
-  packRaf = requestAnimationFrame(() => { packGrid(); alignKvRows(); });
+  packRaf = requestAnimationFrame(() => { packGrid(); fitBoard(); });
 });
 
 // B12-row: a row-stack lays out horizontally only when its measured width meets
@@ -379,7 +353,7 @@ function render() {
     mountCards('grid', cards);
     layoutStacks();
     packGrid();
-    alignKvRows();
+    fitBoard();
   }
 
   // The banner reads the same config payload everything else does, so it appears and
@@ -431,6 +405,7 @@ function renderLive() {
       const tagEl = el.querySelector('h2 .tag');
       if (tagEl && c.tag && tagEl.innerHTML !== c.tag) tagEl.innerHTML = c.tag;
     }
+    fitCards([el]);
   }
 }
 // A stream is one long-lived HTTP connection, and over plain HTTP/1.1 (the board opened at
@@ -656,7 +631,7 @@ let tokenTargetId = null;
 
 async function openTokenModal(targetId) {
   tokenTargetId = targetId;
-  $('#tokenModalTitle').textContent = cv(tokenCardCfg(), 'detail_title') || 'Detail';
+  setLine($('#tokenModalTitle'), cv(tokenCardCfg(), 'detail_title') || 'Detail');
   $('#tokenModal').classList.add('open');
   $('#tokenModalRanges').innerHTML = TOKEN_RANGES.map((r) =>
     // v2.24: "24h" is the Beijing calendar day (usage source), so it says "today"
@@ -674,7 +649,7 @@ function closeTokenModal() { $('#tokenModal').classList.remove('open'); }
 /** Re-title and re-fetch in the language now selected. No-op while the modal is closed. */
 function relocalizeTokenModal() {
   if (!$('#tokenModal').classList.contains('open')) return;
-  $('#tokenModalTitle').textContent = cv(tokenCardCfg(), 'detail_title') || 'Detail';
+  setLine($('#tokenModalTitle'), cv(tokenCardCfg(), 'detail_title') || 'Detail');
   loadTokenDetail();
 }
 
@@ -700,22 +675,24 @@ async function loadTokenDetail() {
     if (j.error) { tbl.innerHTML = `<div class="note">Detail unavailable: ${esc(j.error)}</div>`; drawTokenChart({ days: [], classes: [], matrix: {} }); return; }
     drawTokenChart(j.series || { days: [], classes: [], matrix: {} });
     const col = colmap(tokenCardCfg(), 'columns');
-    const th = (k, fb) => esc(col[k]?.label || fb);
+    const th = (k, fb) => `<span title="${esc(col[k]?.label || fb)}">${esc(col[k]?.label || fb)}</span>`;
     // The Net column appears only when the rows carried it (see token_detail.js) --
     // an older queries/ file or the demo collector yields null, and a blank column
     // would read as "zero new tokens" rather than "not measured".
     const hasNet = (j.table || []).some((row) => row.net != null);
     // v2.23: figures right-aligned under right-aligned headers (.num), the model name left.
-    const netTh = hasNet ? `<th class="num">${th('net', 'Net')}</th>` : '';
+    // v2.27: fixed layout -- the header row sets the widths (tokens.css): figures by the
+    // longest figure (Net carries its percentage, so it is wider), the model the rest.
+    const netTh = hasNet ? `<th class="num w-pct">${th('net', 'Net')}</th>` : '';
     // v2.24 usage source: the LiteLLM share per class, a total row, and a note on where the
     // counters start (before that: LiteLLM only) and which days are UTC buckets.
     const hasLl = (j.table || []).some((row) => row.ll != null);
     const llTh = hasLl ? `<th class="num opt">${th('ll', 'via LiteLLM')}</th>` : '';
     // .opt columns step aside on a phone-width modal (tokens.css) so the rest fit unclipped.
     tbl.innerHTML = `<table class="tbl"><thead><tr><th>${th('model', 'Model')}</th><th class="num">${th('tokens', 'Tokens')}</th>${netTh}<th class="num">${th('requests', 'Requests')}</th>${llTh}<th class="num opt">${th('share', 'Share')}</th></tr></thead><tbody>${
-      (j.table || []).map((row) => `<tr${row.total ? ' class="tot"' : ''}><td><span class="sw" style="background:${esc(row.color)}"></span>${esc(row.label)}</td><td class="num">${esc(row.tokens)}</td>${
-        hasNet ? `<td class="num">${esc(row.net ?? '—')}${row.net_pct != null ? ` <span class="pct">${esc(row.net_pct)}%</span>` : ''}</td>` : ''
-      }<td class="num">${esc(Number(row.requests ?? 0).toLocaleString('en-US'))}</td>${hasLl ? `<td class="num opt">${esc(row.ll ?? '—')}</td>` : ''}<td class="num opt">${esc(row.share)}%</td></tr>`).join('')
+      (j.table || []).map((row) => `<tr${row.total ? ' class="tot"' : ''}><td title="${esc(row.label)}"><span class="sw" style="background:${esc(row.color)}"></span>${esc(row.label)}</td><td class="num">${esc(row.tokens)}</td>${
+        hasNet ? `<td class="num w-pct">${esc(row.net ?? '—')}${row.net_pct != null ? ` <span class="pct">${esc(row.net_pct)}%</span>` : ''}</td>` : ''
+      }<td class="num">${esc(si3(Number(row.requests ?? 0)))}</td>${hasLl ? `<td class="num opt">${esc(row.ll ?? '—')}</td>` : ''}<td class="num opt">${esc(row.share)}%</td></tr>`).join('')
     }</tbody></table>${tokenCoverageNote(j)}`;
   } catch (e) {
     tbl.innerHTML = `<div class="note">Detail request failed</div>`;
