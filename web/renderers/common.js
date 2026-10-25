@@ -2,6 +2,7 @@
 // Status color logic lives server-side (normalize → level); the frontend only
 // maps level → lv-* class / --c color. Visuals match the .24 baseline 1:1.
 import { t } from '../i18n.js';
+import { fitLine } from '../fit.js';
 
 export const LV_VAR = {
   ok: 'var(--lv-ok)', warn: 'var(--lv-warn)', danger: 'var(--lv-danger)', cool: 'var(--lv-cool)',
@@ -32,7 +33,9 @@ export function esc(s) {
 
 // v2.27: a one-line title (modal heads, chart panel titles) -- cut with an ellipsis when it
 // does not fit (tokens.css), so the full text rides along in title.
-export const setLine = (el, text) => { el.textContent = text; el.title = text; };
+// v2.29: `forms` = shorter forms for a line too narrow for `text` (fit.js fitLine; the full
+// text stays in the title)
+export const setLine = (el, text, forms = []) => { el.textContent = text; el.title = text; el._lineForms = [text, ...forms]; fitLine(el); };
 
 // A metric cell from /api/snapshot: { value, level, display }.
 export const mget = (snap, key) => (snap?.metrics?.[key] || { value: null, level: 'cool', display: '—' });

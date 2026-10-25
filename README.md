@@ -614,6 +614,22 @@ request counter, and an `--embedding` server counts nothing. `agents/llama-log-e
 serves `homenet_llama_requests_total{unit}` (plus input tokens for units marked `:embed`)
 for Prometheus; point an `inference_nodes` node's `counters` at it (see
 `config.example/targets.yaml`). It never touches the inference server itself.
+With `--unit auto` it follows whichever units run a llama-server right now, and with
+`--mirror PORT` it also serves a read-only mirror of a llama-server that only listens on
+127.0.0.1 (`/slots` reduced to numbers, `/metrics` plus the process start time; GET only,
+`--allow` limits the clients).
+
+**Engine auto-detection (v2.29).** Instead of naming a node's engine, give it a host and
+candidate ports — `engine: { host, ports: [...], key_env, logs }`. The hub asks each port in
+order (at start, every 3 minutes, and soon after the live reader loses the node):
+`/v1/status` answering means Strata, `/slots` (or `/props`) means llama.cpp. The live view,
+the counters and Prometheus follow what answered; a change is logged and the node column's
+title shows the current engine. For Prometheus, point the `strata`, `llamacpp` and
+`llama_logs` jobs at the hub with `http_sd_configs` (`http://<hub>:3100/api/prom/sd/<job>`,
+LAN only) and give the nodes the labels the static jobs had (`prom_labels`), so the series
+continue. A counter that cannot be read, that Prometheus does not scrape while the engine is
+up, or that counts less than LiteLLM delivered shows **Counter error** (yellow, reason in the
+title) instead of a 0; the minutes a counter did not cover are filled from LiteLLM's records.
 
 ---
 

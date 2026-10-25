@@ -64,7 +64,7 @@ const sourceSchema = {
   type: 'object',
   required: ['type'],
   properties: {
-    type: { enum: ['http', 'http_push', 'sql', 'exec', 'demo', 'tcp', 'tls', 'prometheus', 'ssh', 'inference_nodes', 'usage', 'usage_projects', 'inference_live'] },
+    type: { enum: ['http', 'http_push', 'sql', 'exec', 'demo', 'tcp', 'tls', 'prometheus', 'ssh', 'inference_nodes', 'usage', 'usage_projects', 'inference_live', 'node_speed'] },
     // http
     url: { type: 'string' },
     readiness: { enum: ['llamacpp_models'] },
@@ -131,6 +131,8 @@ const sourceSchema = {
     { if: { properties: { type: { const: 'usage_projects' } } }, then: { required: ['usage_target'] } },
     // v2.25: live state read from each node's own server (the nodes' `live` blocks)
     { if: { properties: { type: { const: 'inference_live' } } }, then: { required: ['nodes_target'] } },
+    // v2.29: a node's Prefill / Decode, the Prometheus query built from that node's `engine`
+    { if: { properties: { type: { const: 'node_speed' } } }, then: { required: ['nodes_target', 'node'] } },
   ],
 };
 
@@ -217,6 +219,29 @@ const targetsSchema = {
                   additionalProperties: false,
                 },
                 embed_endpoints: { type: 'array', items: { type: 'string' } },   // embedding host:port
+                // v2.29: find the engine instead of naming it (engine.js): the candidate ports
+                // are asked in order; live, Prometheus (/api/prom/sd) and the counters follow
+                // what answers. `logs` = llama-log-exporter.py's port (request counter);
+                // `logs_unit` picks one unit of a static exporter (else role="chat").
+                engine: {
+                  type: 'object',
+                  required: ['host', 'ports'],
+                  properties: {
+                    host: { type: 'string', pattern: '^[A-Za-z0-9.-]{1,253}$' },
+                    ports: { type: 'array', minItems: 1, maxItems: 8, uniqueItems: true, items: { type: 'integer', minimum: 1, maximum: 65535 } },
+                    key_env: { type: 'string', pattern: '^[A-Z][A-Z0-9_]{0,63}$' },
+                    logs: { type: 'integer', minimum: 1, maximum: 65535 },
+                    logs_unit: { type: 'string', pattern: '^[A-Za-z0-9@._-]{1,128}$' },
+                  },
+                  additionalProperties: false,
+                },
+                // v2.29: labels Prometheus gives this node's scraped series (http_sd) -- keep
+                // them as they were in a static job, or the series start over
+                prom_labels: {
+                  type: 'object',
+                  propertyNames: { pattern: '^[a-zA-Z][a-zA-Z0-9_]{0,63}$' },
+                  additionalProperties: { type: 'string', maxLength: 128, pattern: '^[^"\\\\\\n]*$' },
+                },
                 // v2.22: Prometheus counter selectors summed into today's totals
                 counters: {
                   type: 'object',

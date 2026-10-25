@@ -14,12 +14,16 @@
 -- table counted only part of them anyway). tokens = prompt + completion as LiteLLM bills
 -- them; cached = the prompt prefix served from the backend's KV cache, so the hub can
 -- derive the actually-computed tokens (prompt - cached + completion).
+-- v2.29: ok_requests = the successful rows that produced tokens, i.e. reached a model: what a
+-- node's own request counter can see (used to fill the minutes a counter was not collected).
 SELECT
   (extract(epoch FROM date_trunc('minute', "startTime")))::bigint                AS minute,
   COALESCE(api_key, '')                                                          AS api_key,
   COALESCE(model, '')                                                            AS model,
   COALESCE(api_base, '')                                                         AS api_base,
   COUNT(*) FILTER (WHERE status = 'success')::bigint                             AS requests,
+  COUNT(*) FILTER (WHERE status = 'success'
+    AND COALESCE(prompt_tokens, 0) + COALESCE(completion_tokens, 0) > 0)::bigint AS ok_requests,
   COALESCE(SUM(prompt_tokens), 0)::bigint                                        AS prompt,
   COALESCE(SUM(completion_tokens), 0)::bigint                                    AS completion,
   COALESCE(SUM((metadata->'usage_object'->'prompt_tokens_details'->>'cached_tokens')::bigint), 0)::bigint AS cached

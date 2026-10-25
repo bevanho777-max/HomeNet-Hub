@@ -25,9 +25,19 @@
 // numbers the 推理节点 card shows, so the two cards agree by construction), the LiteLLM part
 // from SpendLogs since Beijing midnight (indexed on startTime; grouped per minute, so even
 // an embedding retry storm returns at most 1440 rows per key/model/backend).
+//
+// v2.29 a counter covers only the stretches it was collected (nodes.js promCounterWindow):
+// a LiteLLM row in a minute its node's counter did not cover is NOT covered -- it counts as
+// LiteLLM (its requests that produced tokens), exactly what the 推理节点 card adds for that
+// gap. And a day whose counter still came out below the LiteLLM rows it covered (a counter
+// that broke before v2.29 -- m25 on 10-23 / 10-24 -- or one that counts wrong) is shown from
+// LiteLLM for that node, marked partial: a total is never smaller than its LiteLLM share.
+// Nodes with `engine:` get their selectors from engine.js; their switch instants no longer
+// depend on how the selectors are written (the earliest one stored for the node is kept).
 import Database from 'better-sqlite3';
 import { collectSqlRowsInts } from './collectors/sql.js';
-import { promIncreaseRange, promFirstSample, promQuery, hostPort, TZ_OFFSET_SEC } from './collectors/nodes.js';
+import { promCounterWindow, promFirstSample, promQuery, hostPort, covered, TZ_OFFSET_SEC } from './collectors/nodes.js';
+import { nodeCounters } from './engine.js';
 
 const DAY = 86400;
 const SETTLE_SEC = 600;            // a day is final 10 min after it ends (late log rows, last scrape)
@@ -74,6 +84,16 @@ export function keyLabel(raw) {
   return raw.slice(0, 16);
 }
 
+/** (engine-derived selectors) the earliest first sample of ANY of them, or null */
+async function earliestSample(prom, sels, nowSec) {
+  let first = null;
+  for (const sel of sels) {
+    const t = await promFirstSample(prom, [sel], nowSec);
+    if (t != null) first = first == null ? t : Math.min(first, t);
+  }
+  return first;
+}
+
 export class UsageEngine {
   constructor(dbPath, { snapshot, env }) {
     this.snapshot = snapshot;
@@ -107,7 +127,7 @@ export class UsageEngine {
     this.prom = nodesTarget?.source?.prometheus || null;
     this.logsSince = Math.floor(Date.parse(this.src.logs_since) / 1000);
     this.nodes = (nodesTarget?.nodes || []).map((n) => ({
-      id: n.id, counters: n.counters || {}, chat: new Set(n.endpoints || []), emb: new Set(n.embed_endpoints || []),
+      id: n.id, counters: nodeCounters(n), auto: !!n.engine, chat: new Set(n.endpoints || []), emb: new Set(n.embed_endpoints || []),
     }));
     const rules = (target.classify?.rules || []).map((r, i) => ({
       key: `c${i}`, label: r.name, color: r.color, re: safeRegex(r.match?.regex), counters: r.counters || null,
@@ -142,12 +162,20 @@ export class UsageEngine {
       for (const [kind] of KINDS) {
         const sels = n.counters[kind];
         if (!sels || !sels.length) continue;
-        const mk = `switch:${n.id}:${kind}:${JSON.stringify(sels)}`;
+        // v2.29 engine-derived selectors: one key per node and kind, seeded with the earliest
+        // switch stored under any earlier spelling of them (the series are the same)
+        const mk = n.auto ? `switch:${n.id}:${kind}:engine` : `switch:${n.id}:${kind}:${JSON.stringify(sels)}`;
         const saved = this._metaGet.get(mk);
         if (saved) { out[`${n.id}:${kind}`] = Number(saved.v); continue; }
+        if (n.auto) {
+          const old = this.db.prepare('SELECT MIN(CAST(v AS INTEGER)) AS t FROM usage_meta WHERE k LIKE ? AND k <> ?').get(`switch:${n.id}:${kind}:%`, mk);
+          if (old?.t != null) { this._metaSet.run(mk, String(old.t)); out[`${n.id}:${kind}`] = Number(old.t); continue; }
+        }
         if (!this.prom) continue;
         try {
-          const first = await promFirstSample(this.prom, sels, nowSec);
+          // (engine-derived selectors are alternatives -- Strata's request counter OR the log
+          // exporter's --, so the counter exists from the EARLIEST of them)
+          const first = n.auto ? await earliestSample(this.prom, sels, nowSec) : await promFirstSample(this.prom, sels, nowSec);
           if (first == null) continue;           // counter not collected yet: no switch, LiteLLM only
           // Before logs_since a LiteLLM row cannot be told apart by backend (the daily
           // table has no api_base), so a counter older than that switches at logs_since.
@@ -161,23 +189,33 @@ export class UsageEngine {
   }
 
   // ── LiteLLM rows ──────────────────────────────────────────────────
-  /** SpendLogs for [start, end), grouped per minute, already tagged with coverage. */
-  async llWindow(start, end, T) {
+  /** SpendLogs for [start, end), grouped per minute, already tagged with coverage.
+   *  `cover` (v2.29): `${node}:${kind}` -> the stretches that counter covered in the window;
+   *  a row in a minute outside them is not covered, and counts its requests that produced
+   *  tokens (what the counter would have seen). A kind with no entry is covered from T on. */
+  async llWindow(start, end, T, cover = {}) {
     const rows = await collectSqlRowsInts(this.src, this.env, this.src.rows_query_file, [Math.floor(start), Math.ceil(end)]);
     const acc = new Map();
     for (const r of rows) {
       const minute = num(r.minute);
       const endpoint = this.endpointOf(r.api_base);
       const nd = endpoint ? this.nodeOf(endpoint) : null;
+      let gapReq = false;
       const cov = (measure) => {
         if (!nd) return 0;
-        const t = T[`${nd.node.id}:${COVER[nd.type][measure]}`];
-        return t != null && minute >= t - 59 ? 1 : 0;   // minute bucket containing T counts as after
+        const kind = COVER[nd.type][measure];
+        const t = T[`${nd.node.id}:${kind}`];
+        if (t == null || minute < t - 59) return 0;      // minute bucket containing T counts as after
+        const c = cover[`${nd.node.id}:${kind}`];
+        if (c && !covered(c, minute)) { if (measure === 'req') gapReq = true; return 0; }
+        return 1;
       };
+      const covTok = cov('tok'), covReq = cov('req');
       const row = {
         day: dayOf(minute), api_key: String(r.api_key ?? ''), model: String(r.model ?? ''), endpoint,
-        cov_tok: cov('tok'), cov_req: cov('req'),
-        tokens: num(r.prompt) + num(r.completion), net: netOf(num(r.prompt), num(r.cached), num(r.completion)), requests: num(r.requests),
+        cov_tok: covTok, cov_req: covReq,
+        tokens: num(r.prompt) + num(r.completion), net: netOf(num(r.prompt), num(r.cached), num(r.completion)),
+        requests: gapReq && r.ok_requests != null ? num(r.ok_requests) : num(r.requests),
       };
       const k = [row.day, row.api_key, row.model, row.endpoint, row.cov_tok, row.cov_req].join('\u0001');
       const a = acc.get(k);
@@ -198,36 +236,41 @@ export class UsageEngine {
   }
 
   // ── counters ──────────────────────────────────────────────────────
-  /** counter increases for one Beijing day, each (node, kind) clipped to its switch. */
+  /** counter increases for one Beijing day, each (node, kind) clipped to its switch, and
+   *  the stretches each covered (v2.29) */
   async ctrDay(day, T, endCap) {
-    const out = [];
+    const out = [], cover = {};
     const d0 = dayStart(day), d1 = Math.min(d0 + DAY, endCap);
     for (const n of this.nodes) {
       for (const [kind] of KINDS) {
         const t = T[`${n.id}:${kind}`];
         if (t == null || t >= d1) continue;
-        const v = await promIncreaseRange(this.prom, n.counters[kind], Math.max(d0, t), d1);
-        out.push({ day, node: n.id, kind, value: v });
+        const w = await promCounterWindow(this.prom, n.counters[kind], Math.max(d0, t), d1);
+        out.push({ day, node: n.id, kind, value: w.value });
+        cover[`${n.id}:${kind}`] = w.cover;
       }
     }
-    return out;
+    return { rows: out, cover };
   }
 
-  /** today's counter values = the inference_nodes snapshot (same numbers as that card) */
+  /** today's counter values = the inference_nodes snapshot (same numbers as that card): the
+   *  counter itself (v2.29: without the card's gap filling -- here the uncovered LiteLLM rows
+   *  do that) and its stretches; a counter the card reports as broken is missing */
   ctrToday(day, T) {
     const snap = this.snapshot.get(this.nodesTarget?.id);
     this.nodesPending = !snap;      // inference_nodes not polled yet (hub just started)
-    const out = [];
+    const out = [], cover = {};
     const missing = new Set();
     for (const n of this.nodes) {
       for (const [kind, suffix] of KINDS) {
         if (T[`${n.id}:${kind}`] == null) continue;
-        const v = snap && snap.online !== false ? snap.metrics?.[`${n.id}_${suffix}`]?.value : null;
-        if (typeof v === 'number') out.push({ day, node: n.id, kind, value: v });
+        const k = snap && snap.online !== false ? snap.extra?.nodes?.[n.id]?.counters?.kinds?.[suffix] : null;
+        const v = k ? (k.error ? null : k.raw) : (snap && snap.online !== false ? snap.metrics?.[`${n.id}_${suffix}`]?.value : null);
+        if (typeof v === 'number') { out.push({ day, node: n.id, kind, value: v }); if (k?.cover) cover[`${n.id}:${kind}`] = k.cover; }
         else missing.add(`${n.id}:${kind}`);
       }
     }
-    return { rows: out, missing };
+    return { rows: out, missing, cover };
   }
 
   // ── refresh: finalize completed days, then build the live view ────
@@ -254,8 +297,9 @@ export class UsageEngine {
       const d0 = dayStart(d), d1 = d0 + DAY;
       const settled = nowSec >= d1 + SETTLE_SEC;
       try {
-        const ll = await this.llWindow(Math.max(d0, this.logsSince), d1, T);
-        const ctr = this.prom ? await this.ctrDay(d, T, d1) : [];
+        const cd = this.prom ? await this.ctrDay(d, T, d1) : { rows: [], cover: {} };
+        const ctr = cd.rows;
+        const ll = await this.llWindow(Math.max(d0, this.logsSince), d1, T, cd.cover);
         // SpendLogs keeps ~7 days. An old day that comes back empty was most likely pruned
         // while the hub was not running: never store that as a real zero.
         if (!ll.length && nowSec - d1 > 6 * DAY) { partial.add(d); live.ctr.push(...ctr); continue; }
@@ -277,10 +321,10 @@ export class UsageEngine {
     }
 
     // today
-    let llToday = [];
-    try { llToday = await this.llWindow(Math.max(dayStart(today), this.logsSince), nowSec + 60, T); }
-    catch (e) { this.lastError = String(e?.message || e); partial.add(today); }
     const ct = this.ctrToday(today, T);
+    let llToday = [];
+    try { llToday = await this.llWindow(Math.max(dayStart(today), this.logsSince), nowSec + 60, T, ct.cover); }
+    catch (e) { this.lastError = String(e?.message || e); partial.add(today); }
     // a counter that is due but missing from the snapshot (inference_nodes not polled
     // yet, Prometheus down): its LiteLLM rows are not covered today, so nothing is lost
     if (ct.missing.size) {
@@ -333,6 +377,34 @@ export class UsageEngine {
 
   // ── the view ──────────────────────────────────────────────────────
   build({ ll, ctr }, { today, T, partial, speed }) {
+    // v2.29: a (day, node) whose token counter is below the LiteLLM tokens it covered did not
+    // really count that day: that node's rows are not covered and its counters are left out
+    // -- the day shows LiteLLM for it, and is marked partial.
+    const covTok = new Map();
+    for (const r of ll) {
+      if (!r.cov_tok) continue;
+      const nd = this.nodeOf(r.endpoint);
+      if (!nd) continue;
+      const k = `${r.day}|${nd.node.id}|${COVER[nd.type].tok}`;
+      covTok.set(k, (covTok.get(k) || 0) + r.tokens);
+    }
+    const broken = new Set();
+    for (const c of ctr) {
+      // (today: the 推理节点 card's check -- it leaves out the last 2 minutes, which a scrape
+      // may not have reached yet -- reports a broken counter, and ctrToday leaves it out)
+      if (c.day === today || (c.kind !== 'tokens' && c.kind !== 'embed_tokens')) continue;
+      if (c.value < (covTok.get(`${c.day}|${c.node}|${c.kind}`) || 0)) broken.add(`${c.day}|${c.node}|${c.kind === 'tokens' ? 'chat' : 'embed'}`);
+    }
+    if (broken.size) {
+      const typeOf = (kind) => (kind.startsWith('embed') ? 'embed' : 'chat');
+      ll = ll.map((r) => {
+        const nd = (r.cov_tok || r.cov_req) && this.nodeOf(r.endpoint);
+        return nd && broken.has(`${r.day}|${nd.node.id}|${nd.type}`) ? { ...r, cov_tok: 0, cov_req: 0 } : r;
+      });
+      ctr = ctr.filter((c) => !broken.has(`${c.day}|${c.node}|${typeOf(c.kind)}`));
+      partial = [...new Set([...partial, ...[...broken].map((b) => b.split('|')[0])])];
+    }
+    this.brokenDays = [...broken].map((b) => { const [day, node, type] = b.split('|'); return { day, node, type }; });
     const zero = () => ({ tok: 0, net: 0, req: 0, llTok: 0, llNet: 0, llReq: 0 });
     const days = new Map();          // day -> Map(classKey -> agg)
     const keys = new Map();          // api_key -> Map(day -> {tok, net, req})

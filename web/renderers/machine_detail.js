@@ -2,6 +2,7 @@
 // multi-line chart. Same renderer and same /api/history data as History · Dual
 // Compare; only the shell (Token Detail's modal) and the series selection differ.
 import { esc, lvClass, setLine } from './common.js';
+import { fitLines } from '../fit.js';
 import { cv, t } from '../i18n.js';
 import { drawMulti } from './chart.js';
 
@@ -369,6 +370,7 @@ export function openMachineModal(id, customRanges) {
   if (!ranges.includes(range)) range = ranges[0];
   setLine($('#machineModalTitle'), modalTitle(id));
   $('#machineModal').classList.add('open');
+  fitLines($('#machineModal'));
   clearError();
   $('#machineModalRanges').innerHTML = ranges.map((r) =>
     `<button data-r="${esc(r)}" class="${r === range ? 'active' : ''}">${esc(r)}</button>`).join('');
@@ -400,6 +402,7 @@ export function openNodeModal({ col, usageTarget, liveTarget = null, ranges: cus
   if (!ranges.includes(range)) range = ranges[0];
   setLine($('#machineModalTitle'), modalTitle(targetId));
   $('#machineModal').classList.add('open');
+  fitLines($('#machineModal'));
   clearError();
   const note = $('#machineModalNote'); if (note) { note.hidden = true; note.textContent = ''; }
   const ag = $('#machineModalAgent'); if (ag) ag.hidden = true;

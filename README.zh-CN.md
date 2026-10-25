@@ -537,7 +537,18 @@ docker compose restart homenet-hub
 `--embedding` 服务更是什么都不计。`agents/llama-log-exporter.py`(只用标准库、只读)数每个任务结束时
 写进 journal 的那一行,给 Prometheus 提供 `homenet_llama_requests_total{unit}`(标了 `:embed` 的单元再加
 输入 token 数);把 `inference_nodes` 节点的 `counters` 指过去即可(见 `config.example/targets.yaml`)。
-它从不碰推理服务本身。
+它从不碰推理服务本身。加 `--unit auto` 就跟随当前在跑 llama-server 的单元;加 `--mirror 端口` 还能给只听
+127.0.0.1 的 llama-server 提供只读镜像(`/slots` 只留数字,`/metrics` 附进程启动时间;只回 GET,`--allow`
+限定来源)。
+
+**引擎自动识别(v2.29)。** 节点不必写死引擎,写 host 和候选端口即可 ——
+`engine: { host, ports: [...], key_env, logs }`。hub 启动时、每 3 分钟、以及实时读取连续失败后,按顺序问
+各端口:`/v1/status` 有回应是 Strata,`/slots`(或 `/props`)有回应是 llama.cpp。实时状态、计数器和 Prometheus
+都跟着识别结果走;结果变化时记日志,节点栏的 title 显示当前引擎。Prometheus 那边把 `strata`、`llamacpp`、
+`llama_logs` 三个 job 改成 `http_sd_configs` 指向 hub(`http://<hub>:3100/api/prom/sd/<job>`,只限局域网),
+节点的 `prom_labels` 写成原静态 job 的标签,序列就能接上。计数器读不到、引擎在线但 Prometheus 没在抓、或者
+计到的比经 LiteLLM 的还少时,卡上显示黄色的 **计数来源异常**(原因在 title 里),不显示 0;计数器没覆盖到的
+分钟用 LiteLLM 的记录补上。
 
 ---
 

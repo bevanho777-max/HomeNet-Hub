@@ -277,17 +277,20 @@ targets:
           # live "Generating X t/s" is a 1-minute rate of.
           net: ['llamacpp:prompt_tokens_total{instance="192.0.2.10:8080"}', 'llamacpp:tokens_predicted_total{instance="192.0.2.10:8080"}']
           generated: ['llamacpp:tokens_predicted_total{instance="192.0.2.10:8080"}']
+      # v2.29: or let the hub FIND the engine (server/engine.js) -- candidate ports asked in order
+      # (/v1/status = Strata, /slots or /props = llama.cpp) at start and every 3 min; live, the
+      # counters and Prometheus (http_sd_configs -> /api/prom/sd/<job>) follow what answers.
+      # `logs` = llama-log-exporter.py's port (llama.cpp has no request counter of its own);
+      # `prom_labels` = the labels the node's series carry (keep those of an old static job).
+      # Explicit `counters` kinds still win (here: the embedding server, not the node's engine).
       - id: gpu_b
         endpoints: ["192.0.2.11:12346"]
         embed_endpoints: ["192.0.2.11:12347"]
-        live: { kind: llamacpp, url: "http://192.0.2.11:12346" }
-        counters:            # llama.cpp: token counters only; requests via llama-log-exporter.py
-          tokens: ['llamacpp:prompt_tokens_total{instance="192.0.2.11:12346"}', 'llamacpp:prompt_tokens_cached_total{instance="192.0.2.11:12346"}', 'llamacpp:tokens_predicted_total{instance="192.0.2.11:12346"}']
-          requests: ['homenet_llama_requests_total{instance="192.0.2.11:9877",unit="llama-chat.service"}']
+        engine: { host: 192.0.2.11, ports: [12346, 9878], logs: 9877 }
+        prom_labels: { host: "gpu-b" }
+        counters:
           embed_requests: ['homenet_llama_requests_total{instance="192.0.2.11:9877",unit="llama-embed.service"}']
           embed_tokens: ['homenet_llama_tokens_total{instance="192.0.2.11:9877",unit="llama-embed.service"}']
-          net: ['llamacpp:prompt_tokens_total{instance="192.0.2.11:12346"}', 'llamacpp:tokens_predicted_total{instance="192.0.2.11:12346"}']
-          generated: ['llamacpp:tokens_predicted_total{instance="192.0.2.11:12346"}']
 
   # v2.25: what the nodes are doing RIGHT NOW, read from each server every 2 s (not through
   # Prometheus, whose counters only move when a request ends): "Generating · N" on the nodes

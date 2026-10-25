@@ -25,7 +25,21 @@
 //   <node>_emb_ll_reqs  <node>_emb_ll_tokens   via LiteLLM (embed endpoints), if any
 //   unassigned_ll_reqs  unassigned_ll_tokens   LiteLLM rows that reached no known node
 // extra.nodes[<node>] = { routes: [{port, intended, public}], ports, public, counters: {...} }
+//
+// v2.29 a counter only counts while it is collected. For each counter the samples since
+// midnight give its COVERAGE: from midnight when the series ran through it, else from the
+// server's start (llama-log-exporter.py publishes it -- the mirror's process start, a unit's
+// invocation start -- so a server restarted at 04:35 whose first scrape is at 21:00 still
+// counts from 04:35), else from its first sample; it ends at the last sample (a dead series,
+// a scrape that broke) and has a hole where the counter dropped across a missing stretch.
+// Today's figure = the counter + the LiteLLM requests (that produced tokens) in the minutes
+// it did not cover, so a gap never shows as missing usage. A counter is reported as broken
+// (counters.kinds[k].error, the card says "Counter error") when it could not be read, when
+// the node's engine is up but Prometheus does not scrape it, or when it counts less than
+// LiteLLM delivered to the node while it was covering (the last 2 minutes left out: a
+// request LiteLLM has logged may not be in the latest scrape yet).
 import { collectSqlRows } from './sql.js';
+import { nodeCounters } from '../engine.js';
 
 const ROUTES_TIMEOUT_MS = 5000;
 const PROM_TIMEOUT_MS = 8000;
@@ -95,35 +109,111 @@ export async function promQuery(promUrl, q, time) {
   return j.data?.result || [];
 }
 
+const GAP_SEC = 300;       // samples further apart than this are a missing stretch
+const TAIL_SEC = 120;      // a series whose last sample is this recent is still running
+
+/** a counter's covered stretch(es) of [from, end] from its raw samples (see the header) */
+function coverOf(values, base, from, end) {
+  const out = [];
+  let a = from, prevT = from, prevX = base;
+  for (const [t, v] of values) {
+    const tt = Number(t), x = Number(v);
+    if (!Number.isFinite(x)) continue;
+    // a drop across a missing stretch: the server restarted somewhere in it, and what it
+    // counted between the last sample and the restart is lost
+    if (prevX != null && x < prevX && tt - prevT > GAP_SEC) { if (prevT > a) out.push([a, prevT]); a = tt; }
+    prevT = tt; prevX = x;
+  }
+  if (values.length) out.push([a, end - prevT <= TAIL_SEC ? end : prevT]);
+  return out;
+}
+
+export function mergeCover(list) {
+  const s = list.filter(([a, b]) => b > a).sort((x, y) => x[0] - y[0]);
+  const out = [];
+  for (const [a, b] of s) {
+    const last = out[out.length - 1];
+    if (last && a <= last[1] + 60) last[1] = Math.max(last[1], b); else out.push([a, b]);
+  }
+  return out;
+}
+
+/** a LiteLLM minute bucket is covered when it starts inside a covered stretch */
+export const covered = (cover, minute) => cover.some(([a, b]) => minute >= a && minute < b);
+
+const startKey = (m) => `${m?.instance || ''}|${m?.unit || ''}`;
+
+/** when each exporter-published server started, as seen in the window: instance|unit -> sec */
+async function serverStarts(promUrl, s0, s1) {
+  const out = new Map();
+  for (const m of ['homenet_llama_process_start_seconds', 'homenet_llama_invocation_start_seconds']) {
+    try {
+      for (const r of await promQuery(promUrl, `min_over_time(${m}[${s1 - s0}s] @ ${s1})`, s1)) {
+        const v = Number(r.value?.[1]);
+        if (v > 0) out.set(startKey(r.metric), v);
+      }
+    } catch { /* no exporter, or Prometheus too old for @: first-sample baselines only */ }
+  }
+  return out;
+}
+
 /**
- * Exact counter increase over [startSec, endSec] (v2.24: any window, not only "today").
- * Baseline per series (`@` pins the evaluation instant to the window start):
+ * Exact counter increase over [startSec, endSec] (v2.24: any window, not only "today"), and
+ * (v2.29) the stretches of it the counter covered. Baseline per series (`@` pins the
+ * evaluation instant to the window start):
  *   a sample in the hour before the start -> that value (the server ran through it);
  *   seen in the week before but not in that hour -> 0: the server was down at the start
  *     (m110 is switched off overnight), so everything it counts now started after it came
  *     back -- a days-old value is not a baseline for a restarted process;
- *   never seen in the week before -> null: a brand-new series (counterIncrease).
+ *   never seen in the week before -> a brand-new series (counterIncrease): 0 when its server
+ *     is known to have started inside the window (it counted from 0 then), else null.
  * Raw samples inside the window: a range vector ending at the window end.
  */
-export async function promIncreaseRange(promUrl, selectors, startSec, endSec) {
-  const span = Math.floor(endSec) - Math.floor(startSec);
-  if (span <= 0) return 0;
-  let total = 0;
+export async function promCounterWindow(promUrl, selectors, startSec, endSec) {
+  const s0 = Math.floor(startSec), s1 = Math.floor(endSec), span = s1 - s0;
+  if (span <= 0) return { value: 0, cover: [] };
+  let total = 0, starts = null;
+  const cover = [];
   for (const sel of selectors) {
-    const at = async (q) => new Map((await promQuery(promUrl, q, endSec)).map((s) => [seriesKey(s.metric), Number(s.value?.[1])]));
-    const fresh = await at(`last_over_time(${sel}[1h] @ ${Math.floor(startSec)})`);
-    const seen = await at(`last_over_time(${sel}[7d] @ ${Math.floor(startSec)})`);
-    for (const s of await promQuery(promUrl, `${sel}[${span}s] @ ${Math.floor(endSec)}`, endSec)) {
+    const at = async (q) => new Map((await promQuery(promUrl, q, s1)).map((s) => [seriesKey(s.metric), Number(s.value?.[1])]));
+    const fresh = await at(`last_over_time(${sel}[1h] @ ${s0})`);
+    const seen = await at(`last_over_time(${sel}[7d] @ ${s0})`);
+    for (const s of await promQuery(promUrl, `${sel}[${span}s] @ ${s1}`, s1)) {
       const k = seriesKey(s.metric);
-      const b = Number.isFinite(fresh.get(k)) ? fresh.get(k) : (seen.has(k) ? 0 : null);
-      total += counterIncrease(s.values || [], b);
+      const vals = s.values || [];
+      let b = Number.isFinite(fresh.get(k)) ? fresh.get(k) : (seen.has(k) ? 0 : null);
+      let from = s0;
+      if (b === null) {
+        if (!starts) starts = await serverStarts(promUrl, s0, s1);
+        const st = starts.get(startKey(s.metric));
+        if (st != null && st >= s0 - 5) { b = 0; from = Math.max(s0, Math.floor(st)); }
+        else from = Number(vals[0]?.[0]) || s1;
+      }
+      total += counterIncrease(vals, b);
+      cover.push(...coverOf(vals, b, from, s1));
     }
   }
-  return Math.round(total);
+  return { value: Math.round(total), cover: mergeCover(cover) };
 }
 
-async function promIncrease(promUrl, selectors, nowSec) {
-  return promIncreaseRange(promUrl, selectors, localDay(nowSec).midnight, nowSec);
+export async function promIncreaseRange(promUrl, selectors, startSec, endSec) {
+  return (await promCounterWindow(promUrl, selectors, startSec, endSec)).value;
+}
+
+/** Prometheus' active scrape targets: instance -> { job, health, error } */
+async function promTargets(promUrl) {
+  const r = await fetch(`${promUrl.replace(/\/+$/, '')}/api/v1/targets?state=active`, { signal: AbortSignal.timeout(PROM_TIMEOUT_MS) });
+  if (!r.ok) throw new Error(`prometheus HTTP ${r.status}`);
+  const j = await r.json();
+  const out = new Map();
+  for (const t of j.data?.activeTargets || []) {
+    const inst = t.labels?.instance;
+    if (!inst) continue;
+    const cur = out.get(inst);
+    // the same address in two jobs (it should not be): an up one wins
+    if (!cur || (cur.health !== 'up' && t.health === 'up')) out.set(inst, { job: t.labels?.job, health: t.health, error: t.lastError ? String(t.lastError).slice(0, 160) : null });
+  }
+  return out;
 }
 
 /**
@@ -142,42 +232,48 @@ export async function promFirstSample(promUrl, selectors, nowSec, lookback = '30
   return start === null ? null : Math.floor(start);
 }
 
-export async function collectNodes(target, env) {
+const KIND_KEYS = [['requests', 'reqs'], ['tokens', 'tokens'], ['net', 'net'], ['embed_requests', 'emb_reqs'], ['embed_tokens', 'emb_tokens']];
+const LOW_SKIP_SEC = 120;          // see the header: the newest LiteLLM rows are not compared
+
+/** the scrape address a counter kind depends on (null: not known) */
+function sourceOf(kind, sels, inst) {
+  if (inst && (kind === 'tokens' || kind === 'net')) return inst.engine;
+  if (inst && kind === 'requests') return inst.job === 'strata' ? inst.engine : inst.logs;
+  const m = String(sels?.[0] || '').match(/instance="([^"]+)"/);
+  return m ? m[1] : null;
+}
+
+/**
+ * @param ctx.engine  v2.29 EngineDetector: where each node's engine is (for the counters'
+ *                    scrape health); nodes without `engine:` are checked by their selectors
+ */
+export async function collectNodes(target, env, { engine = null } = {}) {
   const src = target.source || {};
   const nodes = (target.nodes || []).map((n) => ({
-    ...n, chat: new Set(n.endpoints || []), emb: new Set(n.embed_endpoints || []),
+    ...n, counters: nodeCounters(n), chat: new Set(n.endpoints || []), emb: new Set(n.embed_endpoints || []),
   }));
   const metrics = {};
   const put = (k, v) => { metrics[k] = { value: v, level: null, display: String(v) }; };
   const nowSec = Math.floor(Date.now() / 1000);
+  const { midnight } = localDay(nowSec);
 
-  // ── totals from the servers' own counters ──
-  const counterInfo = {};
-  for (const n of nodes) {
-    const c = n.counters || {};
-    counterInfo[n.id] = {
-      requests: !!(c.requests && c.requests.length), tokens: !!(c.tokens && c.tokens.length),
-      embed_requests: !!(c.embed_requests && c.embed_requests.length), embed_tokens: !!(c.embed_tokens && c.embed_tokens.length),
-    };
-    if (!src.prometheus) continue;
-    for (const [kind, key] of [['requests', 'reqs'], ['tokens', 'tokens'], ['net', 'net'], ['embed_requests', 'emb_reqs'], ['embed_tokens', 'emb_tokens']]) {
-      if (!c[kind] || !c[kind].length) continue;
-      try { put(`${n.id}_${key}`, await promIncrease(src.prometheus, c[kind], nowSec)); }
-      catch (e) { counterInfo[n.id][`${kind}_error`] = String(e?.message || e); }
-    }
-  }
-
-  // ── via LiteLLM ──
+  // ── via LiteLLM (first: a counter's gaps are filled from it) ──
+  // Only rows that produced tokens count for a node (v2.29); unassigned keeps every row, it
+  // is there to show what reached no node at all.
   const rows = await collectSqlRows(src, env, src.query_file);
-  const acc = Object.fromEntries(nodes.map((n) => [n.id, { reqs: 0, tokens: 0, emb_reqs: 0, emb_tokens: 0 }]));
+  const perMinute = rows.some((r) => r.minute != null);   // (a pre-v2.29 query: no gap filling)
+  const acc = Object.fromEntries(nodes.map((n) => [n.id, { reqs: 0, tokens: 0, emb_reqs: 0, emb_tokens: 0, rows: { chat: [], embed: [] } }]));
   const un = { reqs: 0, tokens: 0 };
   for (const r of rows) {
     const at = r.api_base ? hostPort(r.api_base.replace(/\/v1.*$/, '')) : null;
     const reqs = num(r.requests), tokens = num(r.tokens);
     const n = at && nodes.find((x) => x.chat.has(at) || x.emb.has(at));
     if (!n) { un.reqs += reqs; un.tokens += tokens; continue; }
-    if (n.emb.has(at)) { acc[n.id].emb_reqs += reqs; acc[n.id].emb_tokens += tokens; }
-    else { acc[n.id].reqs += reqs; acc[n.id].tokens += tokens; }
+    const ok = r.ok != null ? num(r.ok) > 0 : tokens > 0;
+    if (!ok) continue;
+    const type = n.emb.has(at) ? 'embed' : 'chat';
+    if (type === 'embed') { acc[n.id].emb_reqs += reqs; acc[n.id].emb_tokens += tokens; } else { acc[n.id].reqs += reqs; acc[n.id].tokens += tokens; }
+    acc[n.id].rows[type].push({ minute: num(r.minute), reqs, tokens });
   }
   for (const n of nodes) {
     const a = acc[n.id];
@@ -185,6 +281,49 @@ export async function collectNodes(target, env) {
     if (n.emb.size) { put(`${n.id}_emb_ll_reqs`, a.emb_reqs); put(`${n.id}_emb_ll_tokens`, a.emb_tokens); }
   }
   put('unassigned_ll_reqs', un.reqs); put('unassigned_ll_tokens', un.tokens);
+
+  // ── totals from the servers' own counters ──
+  let health = null, healthErr = null;
+  if (src.prometheus) { try { health = await promTargets(src.prometheus); } catch (e) { healthErr = String(e?.message || e); } }
+  const counterInfo = {};
+  for (const n of nodes) {
+    const c = n.counters || {};
+    const info = counterInfo[n.id] = {
+      requests: !!(c.requests && c.requests.length), tokens: !!(c.tokens && c.tokens.length),
+      embed_requests: !!(c.embed_requests && c.embed_requests.length), embed_tokens: !!(c.embed_tokens && c.embed_tokens.length),
+      kinds: {},
+    };
+    if (!src.prometheus) continue;
+    const inst = engine?.has(n.id) ? engine.instances(n.id) : null;
+    // the engine answers on some port: then a counter Prometheus does not scrape is a fault
+    // (a node that is off -- m110 -- is not)
+    const eInfo = engine?.has(n.id) ? engine.info(n.id) : null;
+    const nodeUp = !!(eInfo && eInfo.engine && !eInfo.error);
+    for (const [kind, key] of KIND_KEYS) {
+      if (!c[kind] || !c[kind].length) continue;
+      const k = info.kinds[key] = { raw: null, cover: [], gap: 0, ll_cover: 0, error: null, source: sourceOf(kind, c[kind], inst) };
+      let w;
+      try { w = await promCounterWindow(src.prometheus, c[kind], midnight, nowSec); }
+      catch (e) { k.error = { code: 'read', detail: String(e?.message || e).slice(0, 160) }; info[`${kind}_error`] = k.error.detail; continue; }
+      k.raw = w.value; k.cover = w.cover;
+      // the LiteLLM rows of this measure, split by whether the counter covered their minute
+      const type = kind.startsWith('embed') ? 'embed' : 'chat';
+      const field = kind.endsWith('requests') ? 'reqs' : 'tokens';
+      if (kind !== 'net' && perMinute) {
+        for (const r of acc[n.id].rows[type]) {
+          if (!covered(w.cover, r.minute)) k.gap += r[field];
+          else if (r.minute < nowSec - LOW_SKIP_SEC) k.ll_cover += r[field];
+        }
+      }
+      const h = k.source && health ? health.get(k.source) : null;
+      if (k.source && nodeUp && health && !h) k.error = { code: 'missing', instance: k.source };
+      else if (k.source && nodeUp && h && h.health !== 'up') k.error = { code: 'down', instance: k.source, detail: h.error };
+      else if (k.source && nodeUp && healthErr) k.error = { code: 'read', detail: healthErr };
+      else if (kind !== 'net' && k.raw < k.ll_cover) k.error = { code: 'low', value: k.raw, ll: k.ll_cover };
+      if (k.error) { info[`${kind}_error`] = k.error.code; continue; }
+      put(`${n.id}_${key}`, k.raw + k.gap);
+    }
+  }
 
   // ── routes ── one failing instance must not blank the others: its routes are simply
   // unknown, and a node whose every instance failed reports routes: null ("—").

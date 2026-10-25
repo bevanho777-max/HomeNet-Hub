@@ -31,6 +31,10 @@
 //              max_tokens, prompt_read, elapsed_s), shown in the first free cell. Per-slot
 //              max_tokens is not reported, so a slot stream has no progress bar.
 //
+// v2.29: a node with `engine:` (inference_nodes) is read where the engine detector found it
+// (engine.js) -- llama.cpp or Strata, whichever port answered -- and is re-read from scratch
+// when that changes. Three failed readings in a row ask the detector to look again.
+//
 // Decode speed of a stream = increase of its decoded-token count between readings ÷ the
 // time between them, over the last ~10 s. A node's decode = the sum over its streams. The
 // value a finished request leaves behind ("last") is the server's own record when there is
@@ -93,9 +97,10 @@ function push(arr, t, n) {
 }
 
 export class LiveCollector {
-  constructor({ env }) {
+  constructor({ env, engine = null }) {
     this.env = env;
-    this.nodes = new Map();         // node id -> { def, st }
+    this.engine = engine;           // v2.29 EngineDetector (nodes with `engine:`)
+    this.nodes = new Map();         // node id -> { id, def, st, auto }
   }
 
   configure(target, nodesTarget, { timeoutMs = 1000, maxAgeMs = 600000 } = {}) {
@@ -104,8 +109,10 @@ export class LiveCollector {
     this.maxAgeMs = maxAgeMs;
     const next = new Map();
     for (const n of nodesTarget?.nodes || []) {
-      if (!n.live?.url || !n.live?.kind) continue;
-      next.set(n.id, { def: { id: n.id, ...n.live }, st: this.nodes.get(n.id)?.st || freshState() });
+      const auto = !!(n.engine && this.engine);
+      if (!auto && (!n.live?.url || !n.live?.kind)) continue;
+      const old = this.nodes.get(n.id);
+      next.set(n.id, { id: n.id, def: auto ? old?.def || null : { id: n.id, ...n.live }, st: old?.st || freshState(), auto });
     }
     this.nodes = next;
   }
@@ -117,6 +124,14 @@ export class LiveCollector {
   }
 
   async _pollNode(n, now) {
+    if (n.auto) {
+      // where the detector says the engine is now; a different engine or port is a different
+      // server: nothing carries over
+      const d = this.engine.liveDef(n.id);
+      if (!d) { n.def = null; return; }               // not found yet: no live state
+      if (!n.def || n.def.kind !== d.kind || n.def.url !== d.url) { n.def = d; n.st = freshState(); }
+      else n.def = d;
+    }
     const { def, st } = n;
     if (now < st.nextAt) return;               // backing off
     try {
@@ -130,6 +145,7 @@ export class LiveCollector {
       st.reachable = false; st.queued = 0; st.tasks.clear();
       st.err = String(e?.name === 'TimeoutError' ? 'timeout' : e?.message || e).slice(0, 120);
       st.nextAt = now + Math.min(2000 * 2 ** st.fails, BACKOFF_MAX_MS);
+      if (n.auto && st.fails === 3) this.engine.poke(def.id);
     }
   }
 
@@ -186,13 +202,15 @@ export class LiveCollector {
   // ── llama.cpp ──────────────────────────────────────────────────────
   async _llamacpp(def, st, now) {
     const base = def.url.replace(/\/+$/, '');
-    const slots = (await getJson(`${base}/slots`, {}, this.timeoutMs)) || [];
+    const key = def.key_env ? this.env[def.key_env] : null;
+    const headers = key ? { Authorization: `Bearer ${key}` } : {};
+    const slots = (await getJson(`${base}/slots`, headers, this.timeoutMs)) || [];
     const list = Array.isArray(slots) ? slots : [];
     st.maxStreams = Math.min(Math.max(list.length, 1), MAX_STREAMS);
     st.held = [];
     st.queued = 0;
     const busy = list.filter((s) => s && s.is_processing);
-    const metrics = async () => promText(await (await fetch(`${base}/metrics`, { signal: AbortSignal.timeout(this.timeoutMs) })).text());
+    const metrics = async () => promText(await (await fetch(`${base}/metrics`, { headers, signal: AbortSignal.timeout(this.timeoutMs) })).text());
     const seen = new Set();
     for (const s of busy) {
       const cell = Number.isInteger(s.id) ? s.id : list.indexOf(s);
@@ -302,6 +320,14 @@ export class LiveCollector {
     const nodes = {};
     let total = 0, anyDecode = false;
     for (const [id, { def, st }] of this.nodes) {
+      const engine = this.engine?.has(id) ? this.engine.info(id) : null;
+      if (!def) {                              // (auto) no engine found on any port yet
+        nodes[id] = { kind: null, reachable: null, max_streams: 1, busy: 0, running: 0, queued: 0, phase: null, decoding: 0,
+          decode_tps: null, decode_avg: null, prefill_tps: null, prefill_exact: false, prefill_read: null, prefilling: [],
+          streams: [{ n: 1, state: 'idle', tps: null, gen: null, max: null, prompt: null, read: null, held: null }],
+          last_prefill: null, last: null, at: null, error: engine?.error || null, engine };
+        continue;
+      }
       const M = st.reachable === false ? (st.maxStreams || 1) : st.maxStreams || 1;
       const tasks = [...st.tasks.values()];
       const streams = Array.from({ length: M }, (_, i) => ({ n: i + 1, state: 'idle', tps: null, gen: null, max: null, prompt: null, read: null, held: st.held?.[i] ?? null }));
@@ -334,7 +360,7 @@ export class LiveCollector {
         prefill_read: lone && lone.phase === 'prefill' ? lone.read ?? null : null,
         prefilling: streams.filter((s) => s.state === 'prefill').map((s) => s.n),
         streams, last_prefill: lp, last,
-        at: st.at || null, error: st.reachable === false ? st.err : null,
+        at: st.at || null, error: st.reachable === false ? st.err : null, engine,
       };
     }
     return { at: now, nodes, decode_total: anyDecode && total > 0 ? round1(total) : null };

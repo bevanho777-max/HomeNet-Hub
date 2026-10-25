@@ -10,7 +10,8 @@ import { collectExec } from './exec.js';
 import { collectSql, collectSqlScalar, collectSqlRows } from './sql.js';
 import { collectDemo, demoTokenRows, demoTokenSpeed } from './demo.js';
 import { markPush, isPushStale, checkPushToken } from './push.js';
-import { collectNodes } from './nodes.js';
+import { collectNodes, promQuery } from './nodes.js';
+import { speedQuery } from '../engine.js';
 import { normalize, samplableRows } from '../normalize.js';
 import { pivotTokens } from '../token_detail.js';
 
@@ -54,6 +55,11 @@ export class Scheduler {
     if (usageT && this.ctx.usage) this.ctx.usage.configure(usageT, enabled.find((t) => t.id === usageT.source.nodes_target) || null);
     this.usageProjects = enabled.filter((t) => t.source?.type === 'usage_projects');
     this.usageTarget = usageT || null;
+    // v2.29: which engine answers on each node with `engine:` (engine.js) -- before the live
+    // reader, which reads where it says
+    this.nodesTargets = new Map(enabled.filter((t) => t.source?.type === 'inference_nodes').map((t) => [t.id, t]));
+    const nodesT = [...this.nodesTargets.values()][0] || null;
+    if (this.ctx.engine) this.ctx.engine.configure(nodesT, { every: parseDuration(nodesT?.source?.engine_probe_every, 180000) });
     // v2.25 live inference state (2 s, straight from the servers)
     const liveT = enabled.find((t) => t.source?.type === 'inference_live');
     if (liveT && this.ctx.live) {
@@ -74,7 +80,7 @@ export class Scheduler {
       // hand-written target omitted `interval`.
       const interval = parseDuration(target.source?.interval,
         type === 'inference_live' ? 2000
-          : type === 'usage' || type === 'usage_projects' ? 30000
+          : type === 'usage' || type === 'usage_projects' || type === 'node_speed' ? 30000
           : type === 'http' ? 1500 : type === 'demo' ? 2000
           : type === 'tls' ? 3600000 : type === 'tcp' ? 10000
             : type === 'prometheus' ? 10000 : type === 'ssh' ? 10000
@@ -132,7 +138,7 @@ export class Scheduler {
       // (pg returns bigint as a string; the renderer coerces.)
       // v2.20 推理节点: today's usage split by node + which litellm instance routes to it.
       if (type === 'inference_nodes') {
-        const { metrics: m, extra } = await collectNodes(target, env);
+        const { metrics: m, extra } = await collectNodes(target, env, { engine: this.ctx.engine });
         snapshot.update(target.id, { online: true, metrics: m, extra });
         const rows = samplableRows(target.id, { metrics: m }, metrics);
         if (rows.length) tsdb.record(rows);
@@ -261,6 +267,7 @@ export class Scheduler {
           timeoutMs: parseDuration(target.source.timeout, 6000),
         })
         : type === 'demo' ? collectDemo(target, metrics)
+        : type === 'node_speed' ? await this._nodeSpeed(target)
         : null;
       if (raw == null) throw new Error(`unsupported source type: ${type}`);
       const norm = normalize(raw, target, metrics);
@@ -272,6 +279,23 @@ export class Scheduler {
       snapshot.update(target.id, { online: false, error: String(e?.message || e) });
       this._recallModel(target);
     }
+  }
+
+  /**
+   * v2.29 node_speed: a node's Prefill / Decode from Prometheus, the query built from its
+   * `engine:` (every candidate port, any job: Strata and llama.cpp export the same families),
+   * answered in the shape of a Prometheus /api/v1/query response -- so the target's map and
+   * freshness are those of a hand-written query URL.
+   */
+  async _nodeSpeed(target) {
+    const nt = this.nodesTargets?.get(target.source.nodes_target);
+    const node = nt?.nodes?.find((n) => n.id === target.source.node);
+    if (!node?.engine) throw new Error(`node_speed: no node ${target.source.node} with engine in ${target.source.nodes_target}`);
+    const prom = nt.source?.prometheus;
+    if (!prom) throw new Error('node_speed: the nodes target has no prometheus');
+    const now = Math.floor(Date.now() / 1000);
+    const result = await promQuery(prom, speedQuery(node.engine, target.freshness?.lookback || '7d'), now);
+    return { status: 'success', data: { resultType: 'vector', result } };
   }
 
   // v2.20: a node that is often switched off (always_on: false — m110) shows the last model

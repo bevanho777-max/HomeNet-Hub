@@ -29,6 +29,11 @@
 // Value checking applies ONLY to derived columns. Blanking a declared column would mean
 // silently disagreeing with the card the operator is looking at.
 import { esc, setLine } from './common.js';
+import { fitLine } from '../fit.js';
+
+// v2.29 the title's shorter form on a narrow modal: its " · " parts dropped, the count kept
+// ("Per-Project Tokens · chat only (9 total)" -> "Per-Project Tokens (9 total)")
+const titleForms = (title, n) => (String(title).includes(' · ') ? [t('table_title_count', String(title).split(' · ').slice(0, -1).join(' · '), n)] : []);
 import { cv, t } from '../i18n.js';
 import { parseColumns, cell, colKind, val } from './table.js';
 
@@ -94,8 +99,9 @@ export function openTableModal(c) {
   current = c.detail;
   const n = current.rows.length;
   setLine($('#tableModalTitle'), cv(current.gridCard, 'detail_title')
-    || t('table_title_count', current.title, n));
+    || t('table_title_count', current.title, n), titleForms(current.title, n));
   $('#tableModal').classList.add('open');
+  fitLine($('#tableModalTitle'));
   render();
 }
 
@@ -107,7 +113,7 @@ export function relocalizeTableModal() {
   // declared title here; a name-derived one is re-read from the card on the next open.
   const title = cv(current.gridCard, 'title') || current.title;
   setLine($('#tableModalTitle'), cv(current.gridCard, 'detail_title')
-    || t('table_title_count', title, current.rows.length));
+    || t('table_title_count', title, current.rows.length), titleForms(title, current.rows.length));
   render();
 }
 

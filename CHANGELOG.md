@@ -49,6 +49,73 @@ on screen is the one from `package.json`, and this file is what needs fixing.
 
 ---
 
+## v2.29.0 — 2026-10-25
+
+**推理节点自动识别引擎(llama.cpp / Strata),换模型、换引擎、换端口不再断数据;m25 恢复实时状态、Prefill / Decode、
+今日请求 / tokens 与 Prometheus 历史;计数来源异常时显示「计数来源异常」而不是 0;小字不再被省略号截断。**
+
+*Rebuild required — `server/` + `web/` changed. 配置变更:`nodes` 目标的节点改用 `engine` + `prom_labels`(旧的
+`live` / `counters` 写法照常可用),速度目标改为 `type: node_speed`,`queries/node_usage.sql` 与 `usage_rows.sql`
+各加一列;Prometheus 的 `strata` / `llamacpp` / `llama_logs` job 改为 `http_sd_configs`(见下)。m25 新增
+`homenet-llama-exporter.service`。*
+
+- **原因(m25,2026-10-23 11:40 起)**:m25 从 Strata(`strata-flashnext.service`,绑 192.168.1.25:8080)换成了
+  llama.cpp —— `securities-q8.service` 的 llama-server 只绑 **127.0.0.1:18081**(`--parallel 2`,别名
+  `qwen38-27b-q8-shared256k`),8080 换成了证券网关(`securities-gateway.service`,uvicorn,只转发 `/health`、
+  `/v1/models` 和聊天接口)。hub 三条路都还指着 8080 上的 Strata:实时读 `/v1/status`(404 →「无实时状态」)、
+  Prometheus 抓 `/metrics/prometheus`(404 → Prefill / Decode 停在 10-23 11:40)、计数器查
+  `{instance="192.168.1.25:8080"}`(没有新样本 → 今日请求 / tokens 为 0,而「经 LLM」照常增长)。
+- **m25 只读旁路**:`agents/llama-log-exporter.py` 新增 `--unit auto`(跟随当前跑 llama-server 的单元,按 /proc 每
+  15 秒检查)和 `--mirror PORT`(本机 llama-server 的只读镜像:`/slots` 只留数字、`/metrics` 附
+  `homenet_llama_process_start_seconds`、`/props` / `/health` / `/v1/models`;只回 GET,`--allow` 限来源)。上游
+  从 /proc 找(最新的非 embedding llama-server 的 `--host/--port/--api-key[-file]`),换端口或换 key 不用改它;key
+  不出机器。m25 上以 `aiserver2` 身份运行(要读 llama-server 的 key 文件),`--port 9877 --unit auto --mirror 9878
+  --allow 192.168.1.24`,推理服务本身没有动。静态 `--unit` 的输出不变(m26 不受影响)。
+- **引擎自动识别**(`server/engine.js`):节点写 `engine: { host, ports: [候选...], key_env, logs }`。启动时、每 3 分钟
+  (连不上时每 1 分钟)、以及实时读取连续 3 次失败后,按顺序问每个端口:`/v1/status` 有回应 = Strata,`/slots`
+  (或 `/props`)= llama.cpp,第一个回应的端口胜出;都不回应的节点保留上次的引擎(关机不算换引擎)。变化时记
+  容器日志与 `engine_log` 表(`[engine] m25: Strata@8080 -> llama.cpp@9878 (mirror)`),识别结果存 `engine_state`
+  表(重启不丢)。节点栏与栏头的 title 显示:引擎 · 地址(经只读镜像)· N 路并发 · 识别时间 · 候选端口 · 最近探测。
+  - 实时状态:按识别到的引擎和端口读(换了就从头读);
+  - Prometheus:新接口 `GET /api/prom/sd/<strata|llamacpp|llama_logs>`(只限局域网直连),给 `http_sd_configs`
+    用;标签取节点的 `prom_labels`(与原静态 job 一致,m26 / m110 的序列原样接上)。空结果返回一个空目标组
+    (Prometheus 收到空列表会一直抓 reload 前的旧目标);
+  - 计数器:选择器由引擎配置生成,覆盖**所有候选端口**(Strata 也导出 `llamacpp:*`,当天中途换引擎不丢),请求数
+    取 Strata 的 `strata:requests_total` 或日志 exporter 的(`role="chat"`,或 `logs_unit` 指定的单元);显式写的
+    `counters` 种类优先(m26 的 embedding);
+  - Prefill / Decode:`type: node_speed`(`nodes_target` + `node`),查询由候选端口生成、不限 job,形状与原手写
+    查询 URL 相同(map / freshness 不变)。
+  m110、m25、m26 都改成这种写法;m25 候选 8080 → 9878(换回 Strata 时自动切回 8080)。
+- **计数器只算它采到的时段**:`promCounterWindow` 给出今日增量和**覆盖时段**:午夜前就在的序列从 0 点起;新序列若
+  exporter 报了服务进程的启动时间且在窗口内,从启动时刻起、基线 0(m25 的 llama-server 04:35:25 启动,第一次被抓
+  是 21:00 左右,仍从 04:35 算起);否则从第一个样本起;序列停掉处结束,跨长缺口回落处断开。今日数 = 计数器 + 它
+  没覆盖的分钟里经 LiteLLM、产生了 token 的请求(title 写明哪几段、多少来自 LiteLLM)。Token Usage 同一口径:
+  没覆盖的分钟里的 LiteLLM 行不算「已被计数器覆盖」,按 LiteLLM 计。
+- **数据合理性防护**:计数器读不到、引擎在线但 Prometheus 没在抓(或抓取失败)、或覆盖时段内计数 < 同时段经 LiteLLM
+  的(最近 2 分钟不比,LiteLLM 已记下的请求可能还没进最新一次抓取)时,那一格显示黄色「计数来源异常 / Counter error」
+  (窄时「计数异常 / Ctr error」),原因在 title;不显示 0,Token Usage 里这一项当天按 LiteLLM 计。已存的日子里计数器
+  比它覆盖的 LiteLLM 还少的(m25 的 10-23、10-24;m26 的 10-19 差 15 tokens),改按 LiteLLM 计并标 partial ——
+  10-24 补回 m25 经 8080 的 39 笔 / 451K tokens。
+- **「经 LLM」只算产生了 token 的请求**:没出 token 就失败的调用没在节点上做任何事,节点自己的计数器也看不到
+  (`node_usage.sql` 按分钟 × 是否有 token 返回)。m25 的端点加上 `192.168.1.25:18080`(10-23 ~ 10-25 06:15 网关的
+  端口,当天打到它的 75 笔原先算「未归属」)。
+- **小字不再被省略号截断**:「无实时状态」放不下时为「无实时 / no live」;「最后 10-23 11:40 · 44.3」放不下时依次
+  「10-23 11:40 · 44.3」→「10-23 11:40」(数值进 title);`fit.js` 在写好的简写都放不下时,自动依次去掉末尾的
+  「 · …」段再试,最后才用省略号。小字移进格子 title 时,保留渲染器自己写的 title(接在后面)。
+- **版面检查**(`scripts/homenet-layoutcheck.cjs`,私有仓)新增第 12 项 `ellipsis`:除表格的文字栏(非数字的
+  td / th、By Model 名称)外,任何被省略号截断的文字都算违规 —— 带 title 也算。
+- **核对(2026-10-25 21:24:09 生产,Bevan 在 m25 上的真实流量,同一次抓取对比)**:卡上 m25 计数部分 10,060,066
+  tokens = llama-server `/metrics` 的 prompt 1,867,630 + 缓存 7,956,240 + 生成 236,196;请求 148 = exporter 148 =
+  journal 本次启动以来的 slot release 148。加上 00:00–04:35 经 LiteLLM 的 45 笔 / 1,332,181 tokens,今日 193 笔 /
+  11,392,247 tokens ≥ 经 LiteLLM 186 / 11,228,130。m26 不变(36 / 1,559,824)。Token Usage 今日 12,952,071 =
+  m25 + m26,请求 229 = 193 + 36,≥ 经 LiteLLM 的 12,480,179(升级前生产这里是 4.92M,比经 LiteLLM 的部分还小)。
+  实时:m25 2 路并发、推理中 1/2、单路 decode 34.5 t/s;Prefill / Decode 406 / 35.4(21:24)。
+- **版面检查**:生产在 390 / 1280 / 1440 / 1920 / 2560 × 中英文,12 项(溢出、越界、重叠、横向滚动、空洞、对齐、
+  稀疏、换行、空白、行数一致、字体、省略号)全部为 0;另用模拟数据(m25 计数来源异常 + 无实时状态、m26 计数偏低 +
+  覆盖缺口)跑了同样一轮,也全部为 0。升级前生产有 8 处小字被省略号截断(390、1920 宽的节点卡「10-22 17:05 · 681.9」
+  等)、390 宽 Per-Project 弹窗标题被截断 —— 现在分别显示「10-22 17:05」(数值进 title)与「Per-Project Tokens
+  (共 9)」。截图:`/home/openclaw/homenet-shots/v2.29.0/prod/`。
+
 ## v2.28.0 — 2026-10-22
 
 **格子不再预留空行:高度 = 实际行数 + 统一内边距;同一行的格子行数一致 —— 整行都需要小字时三行对齐,只有个别格子有

@@ -11,6 +11,11 @@
 // target says `always_on: false` (m110 is switched off a lot) is grey when unreachable, never
 // red; every other node going unreachable is a fault. Columns never reorder or disappear —
 // a dead node keeps its slot so the other two do not jump.
+//
+// v2.29: the column's title says which engine the hub found on the node (server/engine.js);
+// a counter the server reports as broken shows "Counter error" in yellow, never a 0, with
+// the reason in the cell's title; a counter that did not cover the whole day says, in the
+// title, how much of the figure came from LiteLLM and for which hours.
 import { card, esc } from './common.js';
 import { cv, t } from '../i18n.js';
 import { si3 } from '../fmt.js';
@@ -47,7 +52,7 @@ const statusShort = (state, probeTarget) => (state === 'idle' && probeTarget?.al
 // (read from it), why a grey node is grey, why a red one is red
 function statusSub(state, probeSnap, lv) {
   if (state === 'online') {
-    if (!lv?.reachable) return { sub: t('node_sub_nolive') };
+    if (!lv?.reachable) return { sub: t('node_sub_nolive'), subShort: t('abbr_nolive') };
     const M = Number(lv.max_streams) || 1;
     return M > 1 ? { sub: t('node_sub_max', M), subShort: t('abbr_sub_max', M) } : { sub: t('node_sub_single'), subShort: t('abbr_sub_single') };
   }
@@ -66,11 +71,13 @@ function statusSub(state, probeSnap, lv) {
 // labels whose short form is fixed (abbreviation table): Prefill t/s -> Prefill, Decode t/s -> Decode
 const LABEL_SHORT = { node_prefill: 'abbr_prefill', node_decode: 'abbr_decode' };
 const labelShortOf = (label) => { for (const [k, a] of Object.entries(LABEL_SHORT)) if (label === t(k)) return t(a); return null; };
-function cell(label, value, { cls = '', sub = '', short = null, subShort = null, labelShort = labelShortOf(label) } = {}) {
-  const ds = (x) => (x != null && x !== '' ? ` data-short="${esc(x)}"` : '');
-  return `<div class="item"><span class="label fit"${ds(labelShort)}>${esc(label)}</span>`
+// v2.29: `subShort2` = a still shorter second line ("10-23 11:40" for "10-23 11:40 · 44.3": the
+// number goes to the title); `title` / `itemCls` on the cell itself.
+function cell(label, value, { cls = '', sub = '', short = null, subShort = null, subShort2 = null, labelShort = labelShortOf(label), title = '', itemCls = '' } = {}) {
+  const ds = (x, n = '') => (x != null && x !== '' ? ` data-short${n}="${esc(x)}"` : '');
+  return `<div class="item${itemCls ? ` ${itemCls}` : ''}"${title ? ` title="${esc(title)}"` : ''}><span class="label fit"${ds(labelShort)}>${esc(label)}</span>`
     + `<span class="value fit${cls ? ` ${cls}` : ''}"${ds(short)}>${value}</span>`
-    + (sub ? `<span class="sub fit"${ds(subShort)}>${esc(sub)}</span>` : '') + '</div>';
+    + (sub ? `<span class="sub fit"${ds(subShort)}${subShort2 && subShort2 !== subShort ? ds(subShort2, '2') : ''}>${esc(sub)}</span>` : '') + '</div>';
 }
 
 const fmt1 = (x) => (x == null ? '—' : (Math.round(x * 10) / 10).toFixed(1));
@@ -171,9 +178,9 @@ function speedCells(speedSnap, col, speedTarget, lv = null) {
       : { v: L.prefill, at: L.at / 1000, expired: L.expired };
     const at = L.at / 1000;
     const pre = !P.expired ? cell(t('node_prefill'), fmt1(P.v), { sub: t('measured_at', hm(P.at)) })
-      : cell(t('node_prefill'), '—', { sub: t('node_sub_last', hm(P.at), fmt1(P.v)), subShort: t('abbr_last', hm(P.at), fmt1(P.v)) });
+      : cell(t('node_prefill'), '—', { sub: t('node_sub_last', hm(P.at), fmt1(P.v)), subShort: t('abbr_last', hm(P.at), fmt1(P.v)), subShort2: hm(P.at) });
     const dec = !L.expired ? cell(t('node_decode'), fmt1(L.decode), { sub: t('measured_at', hm(at)) })
-      : cell(t('node_decode'), '—', { sub: t('node_sub_last', hm(at), fmt1(L.decode)), subShort: t('abbr_last', hm(at), fmt1(L.decode)) });
+      : cell(t('node_decode'), '—', { sub: t('node_sub_last', hm(at), fmt1(L.decode)), subShort: t('abbr_last', hm(at), fmt1(L.decode)), subShort2: hm(at) });
     return pre + dec;
   }
   const pp = speedSnap?.metrics?.prefill_speed, tg = speedSnap?.metrics?.decode_speed;
@@ -188,12 +195,45 @@ function speedCells(speedSnap, col, speedTarget, lv = null) {
     // was and when -- each cell its own number.
     if (at == null) return both(t('measured_none', speedTarget?.freshness?.lookback));
     const lastOf = (m) => (m?.last != null ? m.last : '—');
-    return cell(t('node_prefill'), '—', { sub: t('node_sub_last', hm(at), lastOf(pp)), subShort: t('abbr_last', hm(at), lastOf(pp)) })
-      + cell(t('node_decode'), '—', { sub: t('node_sub_last', hm(at), lastOf(tg)), subShort: t('abbr_last', hm(at), lastOf(tg)) });
+    return cell(t('node_prefill'), '—', { sub: t('node_sub_last', hm(at), lastOf(pp)), subShort: t('abbr_last', hm(at), lastOf(pp)), subShort2: hm(at) })
+      + cell(t('node_decode'), '—', { sub: t('node_sub_last', hm(at), lastOf(tg)), subShort: t('abbr_last', hm(at), lastOf(tg)), subShort2: hm(at) });
   }
   const v = (m) => (m && !m.expired ? esc(m.display) : '—');
   const sub = at ? t('measured_at', hm(at)) : '—';
   return cell(t('node_prefill'), v(pp), { sub }) + cell(t('node_decode'), v(tg), { sub });
+}
+
+// v2.29 the engine found on the node, for the column's title
+function engineTitle(e) {
+  if (!e) return '';
+  const parts = [];
+  if (e.engine) {
+    parts.push(t('engine_line', e.name, `${e.host}:${e.port}`, e.mirror));
+    if (e.slots) parts.push(t('engine_slots', e.slots));
+    if (e.since) parts.push(t('engine_since', hm(e.since / 1000)));
+  } else parts.push(t('engine_unknown'));
+  parts.push(t('engine_cands', (e.candidates || []).join(' / ')));
+  if (e.checked) parts.push(t('engine_checked', hm(e.checked / 1000)));
+  return parts.join(' · ') + (e.error ? `\n${t('engine_err', e.error)}` : '');
+}
+
+function ctrReason(err) {
+  if (err.code === 'missing') return t('ctr_reason_missing', err.instance);
+  if (err.code === 'down') return t('ctr_reason_down', err.instance, err.detail);
+  if (err.code === 'low') return t('ctr_reason_low', nfmt(err.value), nfmt(err.ll));
+  return t('ctr_reason_read', err.detail || '?');
+}
+
+// the stretches of today a counter did NOT cover, "00:00–04:35, 13:10–13:40"
+function gapRanges(cover, dayStart, nowSec) {
+  const out = [];
+  let at = dayStart;
+  for (const [a, b] of cover || []) {
+    if (a - at > 60) out.push([at, a]);
+    at = Math.max(at, b);
+  }
+  if (nowSec - at > 120) out.push([at, nowSec]);
+  return out.map(([a, b]) => `${hm(a)}–${hm(b)}`).join(', ');
 }
 
 /**
@@ -255,6 +295,17 @@ export function renderNodes(gc, resolve) {
       return { sub: parts.join(' · '), subShort: short.join(' · ') };
     };
     const reqSub = meta && !cnt.requests ? { sub: t('node_no_req_counter'), subShort: t('abbr_no_counter') } : subOf('ll_reqs', 'emb_reqs', 'emb_ll_reqs');
+    // v2.29 a counter the server reports as broken: "Counter error" in yellow, the reason in
+    // the title; one that missed part of the day: the LiteLLM share of the figure, and when
+    const usage = (key, label, labelShort, sub) => {
+      const k = cnt.kinds?.[key];
+      if (k?.error) {
+        return cell(label, esc(t('node_ctr_err')), { ...sub, cls: 'lv-warn', itemCls: 'lv-warn', short: t('abbr_ctr_err'), labelShort, title: t('ctr_err_title', ctrReason(k.error)) });
+      }
+      const nowSec = Date.now() / 1000, day0 = Number(meta?.extra?.day_start) || 0;
+      const title = k && k.gap > 0 && day0 ? t('ctr_gap_title', compact(k.gap), gapRanges(k.cover, day0, nowSec)) : '';
+      return cell(label, compact(mv(key)), { ...sub, labelShort, title });
+    };
     // busy: "推理中" in cyan the moment the server has a request in flight, before any speed
     const multi = Number(lv?.max_streams) > 1;
     const statusCell = busy
@@ -270,11 +321,12 @@ export function renderNodes(gc, resolve) {
     const cells = statusCell
       + cell(t('node_latency'), lat, latSub)
       + speedCells(speedS, col, speedT, state === 'online' ? lv : null)
-      + cell(t('node_reqs'), compact(mv('reqs')), { ...reqSub, labelShort: t('abbr_node_reqs') })
-      + cell(t('node_tokens'), compact(mv('tokens')), { ...subOf('ll_tokens', 'emb_tokens', 'emb_ll_tokens'), labelShort: t('abbr_node_tokens') });
+      + usage('reqs', t('node_reqs'), t('abbr_node_reqs'), reqSub)
+      + usage('tokens', t('node_tokens'), t('abbr_node_tokens'), subOf('ll_tokens', 'emb_tokens', 'emb_ll_tokens'));
 
-    return `<div class="node-col node-${state}${busy ? ' node-busy' : ''}" data-col="${idx}">`
-      + `<div class="node-head"><span class="node-name">${esc(name)}</span><span class="node-port fit" data-min="10">· ${port}</span>${pub}</div>`
+    const eng = engineTitle(lv?.engine);
+    return `<div class="node-col node-${state}${busy ? ' node-busy' : ''}" data-col="${idx}"${eng ? ` title="${esc(eng)}"` : ''}>`
+      + `<div class="node-head"${eng ? ` title="${esc(eng)}"` : ''}><span class="node-name">${esc(name)}</span><span class="node-port fit" data-min="10">· ${port}</span>${pub}</div>`
       + `<div class="node-model fit${modelCls}"${modelTitle || ` title="${esc(model)}"`}>${esc(model)}</div>`
       + `<div class="kv node-kv${anyMulti ? ' has-streams' : ''}">${cells}${multi ? streamsBar(lv, state === 'online' && lv.reachable) : (anyMulti ? '<div class="node-streams" data-m="0"></div>' : '')}</div>`
       + '</div>';

@@ -26,6 +26,7 @@ import { demoTokenRows } from './collectors/demo.js';
 import { pivotTokens, TOKEN_RANGE_DAYS } from './token_detail.js';
 import { UsageEngine } from './usage.js';
 import { LiveCollector } from './collectors/live.js';
+import { EngineDetector, PROM_JOBS } from './engine.js';
 import { discoverTarget } from './collectors/discovery.js';
 import { UserStore } from './store/user_store.js';
 import { EffectiveStore } from './config/effective.js';
@@ -102,8 +103,10 @@ const litellmKeys = createLitellmKeys();
 // v2.24: all-usage engine (Token Usage, Per-Project, Clients); its day tables live in the
 // same database file.
 const usage = new UsageEngine(join(DATA_DIR, 'homenet.db'), { snapshot, env: process.env });
+// v2.29: which engine (llama.cpp / Strata) answers on each inference node, and where
+const engine = new EngineDetector(join(DATA_DIR, 'homenet.db'), { env: process.env });
 // v2.25: live inference state (2 s) and the browsers listening for it (SSE)
-const live = new LiveCollector({ env: process.env });
+const live = new LiveCollector({ env: process.env, engine });
 const liveClients = new Set();
 let liveLast = null;
 const liveBus = {
@@ -113,7 +116,7 @@ const liveBus = {
     for (const res of liveClients) { try { res.write(msg); } catch { liveClients.delete(res); } }
   },
 };
-const scheduler = new Scheduler({ snapshot, tsdb, env: process.env, vault, credStore, litellmKeys, usage, live, liveBus });
+const scheduler = new Scheduler({ snapshot, tsdb, env: process.env, vault, credStore, litellmKeys, usage, live, liveBus, engine });
 console.log(`[litellm] key API ${litellmKeys.configured ? `enabled (${litellmKeys.status().base_url})` : `off — ${litellmKeys.reason}`}`);
 console.log(`[vault] ${vault.locked ? `locked — ${vault.reason}` : 'unlocked'}`
   + ` (${credStore.count()} credential(s) stored)`);
@@ -573,6 +576,20 @@ app.get('/api/live/stream', VIEW, async (req, reply) => {
   liveClients.add(res);
   const ping = setInterval(() => { try { res.write(': ping\n\n'); } catch { /* closed */ } }, 15000);
   req.raw.on('close', () => { clearInterval(ping); liveClients.delete(res); });
+});
+
+// v2.29: Prometheus http_sd_configs -- the scrape targets of the inference nodes, by the
+// engine found on each (engine.js): strata (/metrics/prometheus), llamacpp (/metrics), and
+// llama_logs (the log exporters). LAN only, never through the reverse proxy: it lists
+// internal addresses. Prometheus keeps the last answer while the hub is down.
+app.get('/api/prom/sd/:job', async (req, reply) => {
+  if (!directLanHit(req)) return reply.code(403).send({ error: 'LAN only' });
+  const job = String(req.params.job || '');
+  if (!PROM_JOBS.includes(job)) return reply.code(404).send({ error: 'unknown job' });
+  const cfg = effective.get();
+  const nodesT = (cfg.targets.targets || []).find((t) => t.enabled !== false && t.source?.type === 'inference_nodes');
+  reply.header('Cache-Control', 'no-store');
+  return engine.sd(job, nodesT);
 });
 
 app.get('/api/history', VIEW, async (req) => {

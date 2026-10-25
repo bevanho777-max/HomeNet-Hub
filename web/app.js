@@ -19,7 +19,7 @@ import { bindSession, refreshSession, sessionLost, closeLoginPanel, closeSetupPa
 import { bindDemoBar, applyDemoBar, emptyBoardHtml } from './renderers/demo.js';
 import { esc, statusLevel, setLine } from './renderers/common.js';
 import { si3 } from './fmt.js';
-import { fitCards } from './fit.js';
+import { fitCards, fitLine, fitLines } from './fit.js';
 import { applyDocumentLang, applyStaticText, cmap, colmap, cv, getLang, onLangChange, setLang, t } from './i18n.js';
 
 const FAST_MS = 1500;     // snapshot poll (machine/GPU rhythm)
@@ -295,7 +295,7 @@ function packGrid() {
 let packRaf = 0;
 window.addEventListener('resize', () => {
   cancelAnimationFrame(packRaf);
-  packRaf = requestAnimationFrame(() => { packGrid(); fitBoard(); });
+  packRaf = requestAnimationFrame(() => { packGrid(); fitBoard(); fitLines(); });
 });
 
 // B12-row: a row-stack lays out horizontally only when its measured width meets
@@ -633,6 +633,7 @@ async function openTokenModal(targetId) {
   tokenTargetId = targetId;
   setLine($('#tokenModalTitle'), cv(tokenCardCfg(), 'detail_title') || 'Detail');
   $('#tokenModal').classList.add('open');
+  fitLine($('#tokenModalTitle'));
   $('#tokenModalRanges').innerHTML = TOKEN_RANGES.map((r) =>
     // v2.24: "24h" is the Beijing calendar day (usage source), so it says "today"
     `<button data-r="${r}" class="${r === tokenRange ? 'active' : ''}">${r === '24h' ? esc(t('tk_range_today')) : r}</button>`).join('');

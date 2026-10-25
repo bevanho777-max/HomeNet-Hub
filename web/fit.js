@@ -6,7 +6,10 @@
 //   (b) its short form: data-short (then data-short2, shorter still) on the element, or, for a cell whose short
 //       form is a different arrangement (HDD temperatures -> "max · min"), the .alt-form
 //       sibling the renderer put next to it (the item gets .is-alt), again from full size;
-//   (c) an ellipsis, with the full text in the element's title.
+//   (b2) v2.29: no written short form left -- the text without its trailing " · " parts,
+//       longest first ("10-23 11:40 · 44.3" -> "10-23 11:40"), the full text in the title;
+//   (c) an ellipsis, with the full text in the element's title (a last resort: the layout
+//       check counts every one outside a table's text column as a fault).
 // v2.28: before any of that, lineRows() gives each row of cells one line count (a row keeps
 // its third lines only when every cell in it has one; elsewhere a third line joins its value
 // line, .sub-inline). Such an inline third line is fitted last, into the room the value left:
@@ -75,8 +78,8 @@ function fitOne(el, base) {
     }
     return;
   }
-  // short forms, longest first (data-short, then data-short2)
-  for (const sh of [el.dataset.short, el.dataset.short2]) {
+  // short forms, longest first (data-short, then data-short2), then (b2)
+  for (const sh of [el.dataset.short, el.dataset.short2, ...segmentForms(el)]) {
     if (sh == null) continue;
     if (el._fitFull == null) el._fitFull = el.innerHTML;
     el.textContent = sh;
@@ -87,6 +90,16 @@ function fitOne(el, base) {
   el.style.fontSize = `${floor}px`;
   el.classList.add('is-cut');
   setTitle(el);
+}
+
+// (b2) the text without its trailing " · " parts, longest first
+function segmentForms(el) {
+  const base = el.dataset.short2 ?? el.dataset.short ?? (el._fitFull != null
+    ? (() => { const d = document.createElement('div'); d.innerHTML = el._fitFull; return d.textContent; })() : el.textContent);
+  const parts = String(base).split(' · ');
+  const out = [];
+  for (let n = parts.length - 1; n >= 1; n--) out.push(parts.slice(0, n).join(' · ').trim());
+  return out.filter((x) => x);
 }
 
 function setTitle(el) {
@@ -126,7 +139,9 @@ function resetInline(el) {
   reset(el);
   el.classList.remove('sub-away');
   const item = el.closest('.item');
-  if (item?._fitTitle) { item.removeAttribute('title'); item._fitTitle = false; }
+  if (item?._fitTitle === 'merged') item.setAttribute('title', item._ownTitle);
+  else if (item?._fitTitle) item.removeAttribute('title');
+  if (item) item._fitTitle = false;
 }
 
 // an inline third line: smaller, then its short forms, else out of the line into the title
@@ -135,7 +150,7 @@ function fitInline(el) {
   const base = parseFloat(getComputedStyle(el).fontSize);
   const floor = Math.min(floorOf(el), base);
   if (shrink(el, base, floor) != null) return;
-  for (const sh of [el.dataset.short, el.dataset.short2]) {
+  for (const sh of [el.dataset.short, el.dataset.short2, ...segmentForms(el)]) {
     if (sh == null) continue;
     if (el._fitFull == null) el._fitFull = el.innerHTML;
     el.textContent = sh;
@@ -145,8 +160,14 @@ function fitInline(el) {
   if (el._fitFull != null) el.innerHTML = el._fitFull;
   el.style.fontSize = '';
   el.classList.add('sub-away');
+  // its text goes to the cell's title -- after the renderer's own title, if it set one
   const item = el.closest('.item');
   if (item && !item.hasAttribute('title')) { item.setAttribute('title', el.textContent.trim()); item._fitTitle = true; }
+  else if (item && !item._fitTitle) {
+    item._ownTitle = item.getAttribute('title');
+    item.setAttribute('title', `${item._ownTitle}\n${el.textContent.trim()}`);
+    item._fitTitle = 'merged';
+  }
 }
 
 // the By Model mini table on one line: entries largest first (the renderer sorts them); the
@@ -195,6 +216,24 @@ export function fitAll(root = document) {
   root.querySelectorAll('.ptab').forEach(fitPtab);
   for (const el of inline) fitInline(el);
 }
+
+// v2.29 a one-line title outside the cell grid (a modal's / a panel's h2, set by setLine):
+// the full text, else its written shorter forms, else those without their trailing " · "
+// parts; the full text stays in the title. Measured only while it is laid out -- call again
+// once its modal is open, and on resize (fitLines).
+export function fitLine(el) {
+  const forms = el?._lineForms;
+  if (!forms || el.offsetParent === null) return;
+  const seg = (f) => { const p = f.split(' · '); const o = []; for (let n = p.length - 1; n >= 1; n--) o.push(p.slice(0, n).join(' · ')); return o; };
+  const all = [...new Set([...forms, ...forms.flatMap(seg)].filter(Boolean))];
+  for (const f of all) {
+    el.textContent = f;
+    if (textWidth(el) <= boxWidth(el) + 0.05) return;
+  }
+  el.textContent = all[all.length - 1];
+}
+
+export const fitLines = (root = document) => root.querySelectorAll('h2, .gpu-panel-title').forEach((el) => { if (el._lineForms) fitLine(el); });
 
 /** Fit the cards (and their header tags) whose body changed or whose width changed since they
  *  were last fitted. */
