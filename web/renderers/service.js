@@ -65,7 +65,7 @@ export function renderService(gridCard, target, snap, metrics) {
     // v2.27 `subs`: a second metric on the cell's second line (see machine.js)
     const sk = gridCard.subs?.[k];
     const sub = sk ? `${label(sk)} ${mget(snap, sk).display ?? '—'}` : '';
-    return cellHtml({ label: label(k), value: m.display, cls, sub });
+    return cellHtml({ label: label(k), value: m.display, cls, sub, labelShort: cv(metrics?.[k], 'label_short') });
   }).join('');
 
   // no items configured → show a note instead of a silent empty card body

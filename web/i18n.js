@@ -203,6 +203,9 @@ const ZH = {
   abbr_sub_single: '单路',                 // 单路(中文本身已短;英文 single stream → single)
   abbr_probe: (iv) => `每 ${iv}`,          // 每 15s 探测
   abbr_nolive: '无实时',                   // v2.29 无实时状态
+  abbr_latency: '延迟',                    // v2.30 推理节点格子标签(中文本身已短;英文 Latency → Lat)
+  abbr_ondemand: '按需',                   // 按需开机
+  abbr2_sub_max: (m) => `≤${m}`,           // 最多 N 路并发 → ≤N 路 → ≤N
   abbr_ctr_err: '计数异常',                 // v2.29 计数来源异常
   part_now: '当前',
   cli_title: '客户端',
@@ -577,6 +580,9 @@ const EN = {
   abbr_sub_single: 'single',
   abbr_probe: (iv) => `every ${iv}`,
   abbr_nolive: 'no live',
+  abbr_latency: 'Lat',
+  abbr_ondemand: 'on call',
+  abbr2_sub_max: (m) => `max ${m}`,
   abbr_ctr_err: 'Ctr error',
   part_now: 'Now',
   cli_title: 'Clients',

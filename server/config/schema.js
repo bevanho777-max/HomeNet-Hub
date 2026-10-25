@@ -29,6 +29,9 @@ const metricsSchema = {
         properties: {
           label: { type: 'string' },
           label_en: enString,
+          // v2.30: a cell label's short form, for a cell too narrow for `label` (fit.js)
+          label_short: { type: 'string' },
+          label_short_en: enString,
           // `unit` is a symbol (%, °C, W, G) and `format` is a template — neither is prose,
           // so neither takes a variant.
           unit: { type: 'string' },

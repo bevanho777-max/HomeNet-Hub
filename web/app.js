@@ -231,6 +231,9 @@ function fitBoard() {
 // or, when it has none, (2) pulling up later cards that fit, and only then (3) widening
 // its last card -- so no column count leaves an empty cell, and no filler card is ever
 // inserted. Full-width cards (nodes; Dual Compare lives outside the grid) take a row alone.
+// v2.30: a full-width card is a section break -- (2) never pulls a card up across one, so
+// what the config puts after the nodes card (Token Usage, Per-Project) stays after it at
+// every column count; the machine row before it closes by widening its own cards.
 // Placement is written as explicit grid-row / grid-column, so CSS `span` classes are just
 // the no-JS fallback.
 export function packLayout(cards, cols) {
@@ -254,7 +257,8 @@ export function packLayout(cards, cols) {
       if (!st.length) {
         for (let i = 0; i < pending.length && free > 0;) {
           const it = pending[i];
-          if (!it.full && it.w <= free) { row.push(it); free -= it.w; pending.splice(i, 1); } else i += 1;
+          if (it.full) break;                 // (never across a section break)
+          if (it.w <= free) { row.push(it); free -= it.w; pending.splice(i, 1); } else i += 1;
         }
         st = row.filter((r) => r.stretch);
       }

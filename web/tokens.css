@@ -513,23 +513,30 @@ h2:empty { display: none; } /* 堆叠卡外框无标题时不留空行 */
 @container (min-width: 480px) { .kv[data-n="3"]:not(.node-kv) { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 /* (v2.27: a service card's four cells -- counts, a status, a latency -- go four across from
    400px, ~95px each, so a short reading is not alone in a 200px cell; an info card's values
-   are sentences and wait for 520px) */
-@container (min-width: 400px) { .card-body > .kv[data-n="4"]:not(.kv-info) { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+   are sentences and wait for 520px. v2.30: from 380px -- a one-column card on an 1800px screen
+   is 391px inside, and 2 x 2 there left "Skills 4" alone in a 167px cell) */
+@container (min-width: 380px) { .card-body > .kv[data-n="4"]:not(.kv-info) { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
 @container (min-width: 520px) { .card-body > .kv.kv-info[data-n="4"] { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
 @container (min-width: 820px) { .kv[data-n="5"]:not(.node-kv) { grid-template-columns: repeat(5, minmax(0, 1fr)); } }
 /* machine card: rings above cells; six cells (a two-wide By Model counts as two) go 3 x 2
    once each cell can be ~110px, so a 6-cell card and a 4-cell card (2 x 2) next to it have
    the same two rows of cells */
 @container card (min-width: 340px) { .kv[data-n="6"] { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
-/* a machine card the grid has widened: rings on the left, cells beside them */
-@container card (min-width: 900px) {
-  .mach { display: grid; grid-template-columns: minmax(260px, 1fr) minmax(0, 2.6fr); column-gap: var(--s5); align-items: center; }
+/* v2.30 a machine card the grid has widened -- the 4 + 2 machine row on four columns: two
+   cards, each two columns wide, 830-1160px inside. Its cells keep about the width they have
+   in a one-column card (~130-150px; a wider cell is a short reading in a wide box) and the
+   rings take the rest, side by side with them:
+     >= 760px   rings on the left (~46%), cells beside them 3 x 2 (four cells: 4 x 1)
+     >= 1100px  rings narrower (~26%), all six cells in one row (four cells: one row, the
+                rings wider) */
+@container card (min-width: 760px) {
+  .mach { display: grid; grid-template-columns: minmax(0, 0.85fr) minmax(0, 1fr); column-gap: var(--s5); align-items: center; }
   .mach > .kv { margin-top: 0; grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .mach > .kv[data-n="4"], .mach > .kv[data-n="8"] { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 }
-/* very wide (a machine card stretched across 3 of 4 columns): all six cells in one row */
-@container card (min-width: 1400px) {
-  .mach { grid-template-columns: minmax(300px, 0.8fr) minmax(0, 3.6fr); }
+@container card (min-width: 1100px) {
+  .mach { grid-template-columns: minmax(0, 1fr) minmax(0, 2.9fr); }
+  .mach:has(> .kv[data-n="4"]) { grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); }
   .mach > .kv[data-n="6"] { grid-template-columns: repeat(6, minmax(0, 1fr)); }
 }
 /* v2.18 多卡:环下/格子下逐卡小字,每张卡按自己的状态着色;单卡机器不输出这行 */
@@ -641,7 +648,10 @@ h2:empty { display: none; } /* 堆叠卡外框无标题时不留空行 */
 @container card (min-width: 760px) {
   .card .tbl .col-x { display: table-cell; }
   .card .tbl.has-x th:first-child { width: 24%; }
-  .card .tbl.has-x th.num, .card .tbl.has-x th.txt { width: auto; }
+  .card .tbl.has-x th.num { width: auto; }
+  /* v2.30: a date column keeps room for a whole date (36px gap after a figure + "2026-10-26")
+     -- split evenly, a two-column table card (Per-Project on four columns) cut it to "2026-0…" */
+  .card .tbl.has-x th.txt { width: 118px; }
   .card .tbl.has-x th, .card .tbl.has-x td { padding-left: 14px; }
   /* a left-aligned text column right after a right-aligned figure: keep them apart */
   .card .tbl.has-x th.num + th:not(.num), .card .tbl.has-x td.num + td:not(.num) { padding-left: 36px; }

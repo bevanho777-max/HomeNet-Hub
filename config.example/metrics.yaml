@@ -118,7 +118,7 @@ metrics:
 
   # service-card scalar fields (no thresholds, shown verbatim)
   status:      { label: "Status" }
-  procs:       { label: "Processes" }
+  procs:       { label: "Processes", label_short: "Procs" }   # v2.30: short form for a narrow cell
   sessions:    { label: "Sessions" }
   skills:      { label: "Skills" }
   model:       { label: "Model" }

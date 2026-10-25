@@ -54,9 +54,9 @@ function statusSub(state, probeSnap, lv) {
   if (state === 'online') {
     if (!lv?.reachable) return { sub: t('node_sub_nolive'), subShort: t('abbr_nolive') };
     const M = Number(lv.max_streams) || 1;
-    return M > 1 ? { sub: t('node_sub_max', M), subShort: t('abbr_sub_max', M) } : { sub: t('node_sub_single'), subShort: t('abbr_sub_single') };
+    return M > 1 ? { sub: t('node_sub_max', M), subShort: t('abbr_sub_max', M), subShort2: t('abbr2_sub_max', M) } : { sub: t('node_sub_single'), subShort: t('abbr_sub_single') };
   }
-  if (state === 'idle') return { sub: t('node_sub_ondemand') };
+  if (state === 'idle') return { sub: t('node_sub_ondemand'), subShort: t('abbr_ondemand') };
   return { sub: probeSnap?.error === 'timeout' ? t('node_sub_timeout') : t('node_sub_unreachable') };
 }
 
@@ -69,7 +69,7 @@ function statusSub(state, probeSnap, lv) {
 // The standard cell (nothing wraps); every line is .fit (fit.js shrinks it, then swaps in
 // `short` / `subShort`, then cuts it). `value` is HTML (callers escape).
 // labels whose short form is fixed (abbreviation table): Prefill t/s -> Prefill, Decode t/s -> Decode
-const LABEL_SHORT = { node_prefill: 'abbr_prefill', node_decode: 'abbr_decode' };
+const LABEL_SHORT = { node_prefill: 'abbr_prefill', node_decode: 'abbr_decode', node_latency: 'abbr_latency' };
 const labelShortOf = (label) => { for (const [k, a] of Object.entries(LABEL_SHORT)) if (label === t(k)) return t(a); return null; };
 // v2.29: `subShort2` = a still shorter second line ("10-23 11:40" for "10-23 11:40 · 44.3": the
 // number goes to the title); `title` / `itemCls` on the cell itself.
@@ -317,7 +317,8 @@ export function renderNodes(gc, resolve) {
       : cell(t('node_status'), esc(statusText(state, probeT)), { cls: STATE_CLASS[state], short: statusShort(state, probeT), ...statusSub(state, probeS, lv) });
     // v2.28 latency's second line: how often the hub probes the node (the target's interval)
     const iv = probeT?.interval;
-    const latSub = iv ? { sub: t('node_sub_probe', iv), subShort: t('abbr_probe', iv) } : { sub: t('node_sub_probe_any') };
+    // (v2.30: and in the narrowest column only the interval, the rest in the title)
+    const latSub = iv ? { sub: t('node_sub_probe', iv), subShort: t('abbr_probe', iv), subShort2: iv } : { sub: t('node_sub_probe_any') };
     const cells = statusCell
       + cell(t('node_latency'), lat, latSub)
       + speedCells(speedS, col, speedT, state === 'online' ? lv : null)

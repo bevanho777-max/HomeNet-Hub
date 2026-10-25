@@ -73,7 +73,8 @@ grid:
   # stretch (v2.23, optional, true/false): the card may be WIDENED to close a gap. Rows are
   # filled in the order below by span; a row that ends short first widens its stretch cards
   # (in proportion to their span), and only when it has none pulls a later card up that
-  # fits. So no column count (1/2/3/4) leaves a hole, and no filler card is ever added.
+  # fits -- never across a full-width card (v2.30). So no column count (1/2/3/4) leaves a
+  # hole, and no filler card is ever added.
   # A widened card lays itself out for the room: token boxes go beside the chart, a table
   # card shows its detail_columns too, a machine card puts its cells beside the rings.
   # row 1 — four machine cards
@@ -126,23 +127,6 @@ grid:
     # here; in a row where only some do, it follows the value on the value line instead)
     subs: { model: role, status: latency }
 
-  # v2.20 inference nodes — one full-width card, one column per inference machine:
-  # instance port(s) (discovered from litellm), live model ID, status / latency,
-  # prefill / decode, today's requests / tokens. Status is Online / No service / Down;
-  # a probe target with `always_on: false` goes grey instead of red. Pairs with
-  # nodes_example in targets.yaml (disabled there) — uncomment both together.
-  #
-  # - type: nodes
-  #   target: nodes_example
-  #   span: full
-  #   title: "推理节点"
-  #   title_en: "Inference Nodes"
-  #   clickable: detail                 # click a column -> that node's speed + usage history
-  #   detail_ranges: [1d, 3d, 7d]
-  #   nodes:
-  #     - { node: gpu_a, name: "gpu-a", probe: inference, speed_note: "no /metrics yet", speed_note_en: "no /metrics yet" }
-  #     - { node: gpu_b, name: "gpu-b", probe: inference2 }      # speed: <prometheus speed target>
-
   # B20/B22 card shapes for the two real-backend examples in targets.yaml (both
   # ship disabled there, so these stay commented — uncomment both sides together).
   #
@@ -167,6 +151,83 @@ grid:
   #   rings: [cpu, cache_hit, success]
   #   items: [mem_bytes, disk_bytes, reqs_today, reqs_5m, reqs_by_model, net]
   #   header_right: uptime
+
+  # §12-step4: generic info card — pure label/value list, no target needed.
+  # Add any "info box" by adding a type:info card here; no code changes.
+  - type: info
+    title: "About"
+    title_en: "About"
+    stretch: true                   # closes its row on 2- and 4-column screens
+    # An info row's `value` is a literal sentence as often as it is a number, so both
+    # halves take a variant — unlike a metric key elsewhere, which is a reference.
+    items:
+      - { label: "Version", value: "HomeNet Hub v2" }
+      - { label: "Mode", label_en: "Mode", value: "Demo (synthetic data)", value_en: "Demo (synthetic data)" }
+      - { label: "Nodes", value: "3 GPU + gateway" }
+      - { label: "Source", value: "config-driven YAML" }
+
+  # v2.30 order: host cards -> the inference nodes card (a whole row) -> Token Usage,
+  # Per-Project -> Dual Compare (below the grid). A full-width card is a section break:
+  # filling a short row never pulls a card up across it.
+  # v2.20 inference nodes — one full-width card, one column per inference machine:
+  # instance port(s) (discovered from litellm), live model ID, status / latency,
+  # prefill / decode, today's requests / tokens. Status is Online / No service / Down;
+  # a probe target with `always_on: false` goes grey instead of red. Pairs with
+  # nodes_example in targets.yaml (disabled there) — uncomment both together.
+  #
+  # - type: nodes
+  #   target: nodes_example
+  #   span: full
+  #   title: "推理节点"
+  #   title_en: "Inference Nodes"
+  #   clickable: detail                 # click a column -> that node's speed + usage history
+  #   detail_ranges: [1d, 3d, 7d]
+  #   nodes:
+  #     - { node: gpu_a, name: "gpu-a", probe: inference, speed_note: "no /metrics yet", speed_note_en: "no /metrics yet" }
+  #     - { node: gpu_b, name: "gpu-b", probe: inference2 }      # speed: <prometheus speed target>
+
+  # token usage — span 2 + stretch: on a 4-column screen it is widened to the whole row
+  - target: token
+    type: token
+    span: 2                         # the class boxes + spark need the room on wide screens
+    stretch: true                   # v2.23: may be widened to close a gap at the end of its row
+    clickable: detail               # click → /api/token_detail modal
+    front_max: 3                    # §12-step6: max class boxes on card front (modal shows all)
+    header_right: "LiteLLM · {token_speed} t/s"
+    hint: "Click the card for per-model detail"
+    hint_en: "Click the card for per-model detail"
+    detail_title: "Token Detail · by Model"
+    detail_title_en: "Token Detail · by Model"
+    columns:
+      model: "Model"
+      tokens: "Tokens"
+      # Actually-new tokens: prompt minus the KV-cached prefix, plus completion — what
+      # the backend really had to process. The bracketed percentage is that as a share
+      # of the class's own total; a low one means the class is mostly replayed context.
+      # Shown only when the queries/ files supply a net_tokens column (this file's
+      # neutral examples do not — see queries/token_summary.sql).
+      net: "Net"
+      requests: "Requests"
+      share: "Share"
+    # The EN half of `columns`, same keys. A bare string replaces just the label; an
+    # object is merged over the base entry (so it can also change `format`).
+    columns_en:
+      model: "Model"
+      tokens: "Tokens"
+      net: "Net"
+      requests: "Requests"
+      share: "Share"
+    labels:                              # §12-step2 patch: token card front labels
+      today: "Today"                     # stat-box "today" prefix
+      net: "Net"                         # stat-box "actually-new" prefix (today only;
+                                         # the all-time figure lives in the modal table)
+      requests_suffix: "req"             # stat-box request-count suffix
+      total: "Total"                     # the total/aggregate column label
+    labels_en:                           # the EN half, same keys
+      today: "Today"
+      net: "Net"
+      requests_suffix: "req"
+      total: "Total"
 
   # Generic table card — one row per row the target's query returned, no pivot.
   # `columns` is an ordered map of row-key → "Label", or → { label, format }
@@ -222,63 +283,6 @@ grid:
   #   # frontend supplies its own, already translated.
   #   more_label: "View all"
   #   more_label_en: "View all"
-
-  # §12-step4: generic info card — pure label/value list, no target needed.
-  # Add any "info box" by adding a type:info card here; no code changes.
-  - type: info
-    title: "About"
-    title_en: "About"
-    stretch: true                   # closes its row on 2- and 4-column screens
-    # An info row's `value` is a literal sentence as often as it is a number, so both
-    # halves take a variant — unlike a metric key elsewhere, which is a reference.
-    items:
-      - { label: "Version", value: "HomeNet Hub v2" }
-      - { label: "Mode", label_en: "Mode", value: "Demo (synthetic data)", value_en: "Demo (synthetic data)" }
-      - { label: "Nodes", value: "3 GPU + gateway" }
-      - { label: "Source", value: "config-driven YAML" }
-
-  # token usage — span 2 + stretch: on a 4-column screen it is widened to the whole row
-  - target: token
-    type: token
-    span: 2                         # the class boxes + spark need the room on wide screens
-    stretch: true                   # v2.23: may be widened to close a gap at the end of its row
-    clickable: detail               # click → /api/token_detail modal
-    front_max: 3                    # §12-step6: max class boxes on card front (modal shows all)
-    header_right: "LiteLLM · {token_speed} t/s"
-    hint: "Click the card for per-model detail"
-    hint_en: "Click the card for per-model detail"
-    detail_title: "Token Detail · by Model"
-    detail_title_en: "Token Detail · by Model"
-    columns:
-      model: "Model"
-      tokens: "Tokens"
-      # Actually-new tokens: prompt minus the KV-cached prefix, plus completion — what
-      # the backend really had to process. The bracketed percentage is that as a share
-      # of the class's own total; a low one means the class is mostly replayed context.
-      # Shown only when the queries/ files supply a net_tokens column (this file's
-      # neutral examples do not — see queries/token_summary.sql).
-      net: "Net"
-      requests: "Requests"
-      share: "Share"
-    # The EN half of `columns`, same keys. A bare string replaces just the label; an
-    # object is merged over the base entry (so it can also change `format`).
-    columns_en:
-      model: "Model"
-      tokens: "Tokens"
-      net: "Net"
-      requests: "Requests"
-      share: "Share"
-    labels:                              # §12-step2 patch: token card front labels
-      today: "Today"                     # stat-box "today" prefix
-      net: "Net"                         # stat-box "actually-new" prefix (today only;
-                                         # the all-time figure lives in the modal table)
-      requests_suffix: "req"             # stat-box request-count suffix
-      total: "Total"                     # the total/aggregate column label
-    labels_en:                           # the EN half, same keys
-      today: "Today"
-      net: "Net"
-      requests_suffix: "req"
-      total: "Total"
 
 history:                            # bottom — dual-pane compare
   type: compare                     # B10: N-pane compare (dual_compare still accepted)

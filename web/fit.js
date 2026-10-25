@@ -127,10 +127,15 @@ function lineRows(root) {
   for (const { items: row } of rows) {
     // (the HDD short form's "max · min" line only exists once fit.js has picked that form,
     // so it never makes a row three lines: it is always an inline candidate)
-    if (row.every((it) => it.querySelector(':scope > .sub'))) continue;
+    // v2.30: a row of wide stack-child cells (>= 240px: two cells across a wide backend) puts
+    // its second lines beside the values too -- under them, a 270px cell held "online" over
+    // "Latency 4ms" and little else
+    if (row.every((it) => it.querySelector(':scope > .sub')) && !row.every(wideStackCell)) continue;
     for (const it of row) if (it.querySelector(':scope > .sub, :scope > .alt-form > .sub')) it.classList.add('sub-inline');
   }
 }
+
+const wideStackCell = (it) => !!it.closest('.stack-item') && it.getBoundingClientRect().width >= 240;
 
 const isInlineSub = (el) => el.classList.contains('sub') && !!el.closest('.item.sub-inline')
   && (el.parentElement.classList.contains('item') || el.parentElement.classList.contains('alt-form'));

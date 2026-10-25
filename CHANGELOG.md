@@ -49,6 +49,41 @@ on screen is the one from `package.json`, and this file is what needs fixing.
 
 ---
 
+## v2.30.0 — 2026-10-26
+
+**卡片顺序改为:六张机器卡 → 推理节点(整行)→ Token Usage、Per-Project → Dual Compare。整行卡是分隔,补位不会把
+它后面的卡拉到它上面;四栏时机器卡 4 + 2,第二行两张各加宽到 2 栏,加宽的机器卡用容器查询重排。**
+
+*Rebuild required — `web/` + `server/`(schema:metrics 的 `label_short`)changed. 配置变更:`config/layout.yaml` 与
+`config.example/layout.yaml` 的卡片顺序,六张机器卡都加 `stretch: true`;两份 `metrics.yaml` 的 `procs` 加 `label_short`。*
+
+- **顺序是硬性的**(`web/app.js` `packLayout`):一行排不满时,先加宽这一行的 `stretch` 卡,没有才从后面拉卡补位 ——
+  v2.30 起拉卡**不越过整行卡**(推理节点),所以 Token Usage / Per-Project 在任何栏数下都在推理节点下面。
+- **各栏数的排法**(生产):
+  - 1 栏:逐张一列(m110、m25、m26、m27、m24、nas75、推理节点、Token Usage、Per-Project);
+  - 2 栏:机器卡 2 + 2 + 2,推理节点整行,Token Usage、Per-Project 各占一整行;
+  - 3 栏:机器卡 3 + 3,推理节点整行,Token Usage、Per-Project 各加宽到一整行;
+  - 4 栏:机器卡 4 + 2(m24、nas75 各加宽到 2 栏),推理节点整行,Token Usage + Per-Project 各 2 栏。
+  任何栏数都没有空洞,也不插空白卡。
+- **加宽的机器卡**(`web/tokens.css`,容器查询,取代 v2.23 的 900px / 1400px 两档):格子保持单栏机器卡的宽度
+  (约 130–150px),环占其余:
+  - 卡内宽 ≥ 760px(1800 / 1920 宽时 m24、nas75 约 830 / 890px):环在左(约 46%),格子在右 3 × 2;
+  - 卡内宽 ≥ 1100px(2560 宽时约 1160px):环区收窄(约 26%),六个格子排成一行。
+  实测格子 134–151px,文字占格子宽 37–74%(单栏卡 28–46%)。
+- **Per-Project 表格**:四栏时它从整行变成 2 栏宽,加宽表格平分栏宽会把「首次」日期截成「2026-0…」;日期栏现在固定
+  118px(含与前面数字栏的 36px 间距),数字栏平分其余。所有宽度下表格不再截断。
+- **推理节点卡的窄栏简写**(1000、1800 宽英文版原有的省略号截断):Latency → Lat、on demand → on call(中文「按需」)、
+  ≤2 streams → max 2(中文「≤2」)、every 15s → 15s,完整文字在 title。
+- **演示配置(config.example)的两处原有问题**(生产看板没有这两种卡):
+  - 服务卡四个格子横排的门槛 400px → 380px —— 1800 宽时单栏卡内宽 391px,原来排成 2 × 2,「Skills 4」独占 167px 的格子;
+  - stack 子卡一行的格子都 ≥ 240px 时,第二行小字跟在数值后面(v2.28 的 sub-inline),不再单独一行 —— 2560 宽时
+    「online / Latency 4ms」在 270px 的格子里只占 24%(随机延迟一位数时);
+  - metrics 模板新增可选的 `label_short`(`label_short_en`):格子标签放不下时的简写(演示的 Processes → Procs)。
+- **版面检查**:生产在 390 / 1000 / 1280 / 1440 / 1800 / 1920 / 2560 × 中英文,12 项全部为 0(除标准五种宽度,另补了
+  两栏的 1000 和四栏最窄的 1800);config.example(演示)同样 7 种宽度 × 中英文全部为 0。各栏数下的卡片位置逐一核对过,
+  Token Usage / Per-Project 都在推理节点下面。截图:`/home/openclaw/homenet-shots/v2.30.0/{prod,demo}/`(整页 +
+  各卡 + 各弹窗;加宽的机器卡是 `w1800 / w1920 / w2560-*-card-gateway-m24.png` 与 `*-card-nas.png`)。
+
 ## v2.29.0 — 2026-10-25
 
 **推理节点自动识别引擎(llama.cpp / Strata),换模型、换引擎、换端口不再断数据;m25 恢复实时状态、Prefill / Decode、

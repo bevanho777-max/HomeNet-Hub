@@ -1,7 +1,7 @@
 // Shared rendering helpers for the config-driven renderers (§6).
 // Status color logic lives server-side (normalize → level); the frontend only
 // maps level → lv-* class / --c color. Visuals match the .24 baseline 1:1.
-import { t } from '../i18n.js';
+import { cv, t } from '../i18n.js';
 import { fitLine } from '../fit.js';
 
 export const LV_VAR = {
@@ -62,9 +62,9 @@ export function ring(label, m) {
 // cuts it. v2.28: no line is reserved -- without a `sub` the cell is two lines -- and in a row
 // where not every cell has a second line, fit.js puts it on the value line instead.
 // `value` is HTML when `html` is set (callers escape), text otherwise.
-export function cellHtml({ label, value, cls = '', sub = '', itemCls = '', short = null, subShort = null, html = false }) {
+export function cellHtml({ label, value, cls = '', sub = '', itemCls = '', short = null, subShort = null, labelShort = null, html = false }) {
   const attr = (s) => (s != null && s !== '' ? ` data-short="${esc(s)}"` : '');
-  return `<div class="item${itemCls ? ` ${itemCls}` : ''}"><span class="label fit">${esc(label)}</span>`
+  return `<div class="item${itemCls ? ` ${itemCls}` : ''}"><span class="label fit"${labelShort !== label ? attr(labelShort) : ''}>${esc(label)}</span>`
     + `<span class="value fit${cls ? ` ${cls}` : ''}"${attr(short)}>${html ? value : esc(value)}</span>`
     + (sub ? `<span class="sub fit"${attr(subShort)}>${esc(sub)}</span>` : '')
     + '</div>';
@@ -86,7 +86,10 @@ export function kvItem(label, m, tpl = null, { sub = '', itemCls = '' } = {}) {
   // as it did before and a warm drive is the only thing that lights up.
   const edge = (m.level === 'warn' || m.level === 'danger') ? cls : '';
   const itemClass = [edge, itemCls].filter(Boolean).join(' ');
-  const open = `<div class="item${itemClass ? ` ${itemClass}` : ''}"><span class="label fit">${esc(label)}</span>`;
+  // v2.30: the metric's `label_short` is the label's short form for a narrow cell (fit.js)
+  const ls = tpl ? cv(tpl, 'label_short') : null;
+  const lsAttr = ls && ls !== label ? ` data-short="${esc(ls)}"` : '';
+  const open = `<div class="item${itemClass ? ` ${itemClass}` : ''}"><span class="label fit"${lsAttr}>${esc(label)}</span>`;
   const subHtml = sub ? `<span class="sub fit">${esc(sub)}</span>` : '';
 
   // `parts_layout: table` (gateway By Model): the entries above zero, label left and number
