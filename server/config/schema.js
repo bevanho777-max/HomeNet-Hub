@@ -67,6 +67,10 @@ const sourceSchema = {
     type: { enum: ['http', 'http_push', 'sql', 'exec', 'demo', 'tcp', 'tls', 'prometheus', 'ssh', 'inference_nodes', 'usage', 'usage_projects', 'inference_live'] },
     // http
     url: { type: 'string' },
+    readiness: { enum: ['llamacpp_models'] },
+    fallback_urls: { type: 'array', minItems: 1, maxItems: 1, uniqueItems: true, items: { type: 'string', pattern: '^https?://' } },
+    key_env: { type: 'string', pattern: '^[A-Z][A-Z0-9_]{0,63}$' },
+    attempt_timeout_ms: { type: 'integer', minimum: 50, maximum: 2000 },
     interval: { type: 'string' },     // duration string e.g. "1.5s", "8s", "30s"
     proxy: { type: 'string' },
     timeout: { type: 'string' },
@@ -104,6 +108,8 @@ const sourceSchema = {
   },
   additionalProperties: true,
   allOf: [
+    { if: { anyOf: [{ required: ['readiness'] }, { required: ['fallback_urls'] }, { required: ['attempt_timeout_ms'] }] },
+      then: { required: ['readiness', 'key_env', 'attempt_timeout_ms'], properties: { type: { const: 'http' } } } },
     { if: { properties: { type: { const: 'http' } } }, then: { required: ['url'] } },
     { if: { properties: { type: { const: 'http_push' } } }, then: { required: ['token_env'] } },
     { if: { properties: { type: { const: 'sql' } } }, then: { required: ['query_file', 'dsn_env'] } },

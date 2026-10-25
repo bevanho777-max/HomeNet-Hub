@@ -1,7 +1,8 @@
 // http collector (§3) — actively pull a machine's report endpoint.
 // Returns parsed JSON or throws (scheduler marks the target offline/stale).
 
-export async function collectHttp(source, timeoutMs) {
+export async function collectHttp(source, timeoutMs, env = {}) {
+  if (source.readiness != null) return collectModels(source, timeoutMs, env);
   const url = source.url;
   if (!url) throw new Error('http source missing url');
   const ctrl = new AbortController();
@@ -31,4 +32,51 @@ export async function collectHttp(source, timeoutMs) {
 
 function tryJson(s) {
   try { return JSON.parse(s); } catch { return { status: 'online', raw_text: String(s).slice(0, 200) }; }
+}
+
+// Opt-in model readiness. Existing single-URL collectors retain the branch above.
+async function collectModels(source, timeoutMs, env) {
+  if (source.readiness !== 'llamacpp_models') throw new Error('unsupported HTTP readiness mode');
+  if (!Array.isArray(source.fallback_urls || [])) throw new Error('invalid HTTP readiness candidates');
+  const urls = [source.url, ...(source.fallback_urls || [])];
+  if (!source.url || urls.length > 2 || new Set(urls).size !== urls.length) throw new Error('invalid HTTP readiness candidates');
+  let parsed;
+  try { parsed = urls.map(value => new URL(value)); } catch { throw new Error('invalid HTTP readiness URL'); }
+  const first = parsed[0];
+  if (parsed.some(u => !['http:', 'https:'].includes(u.protocol) || u.hostname !== first.hostname || u.protocol !== first.protocol ||
+      u.username || u.password || u.search || u.hash || u.pathname !== '/v1/models')) {
+    throw new Error('HTTP readiness candidates must share a host/protocol and models path');
+  }
+  if (!/^[A-Z][A-Z0-9_]{0,63}$/.test(source.key_env || '')) throw new Error('invalid HTTP readiness credential reference');
+  const key = env[source.key_env];
+  if (typeof key !== 'string' || !key.trim()) throw new Error('HTTP readiness credential unavailable');
+  const attemptMs = source.attempt_timeout_ms;
+  if (!Number.isInteger(attemptMs) || attemptMs < 50 || attemptMs > 2000) throw new Error('invalid HTTP readiness attempt timeout');
+  const totalMs = Math.min(5000, Math.max(1, Number(timeoutMs) || 2500));
+  const started = performance.now(), deadline = started + totalMs, failures = [];
+  for (let index = 0; index < urls.length; index++) {
+    const remaining = deadline - performance.now();
+    if (remaining <= 0) break;
+    const ctrl = new AbortController();let timer;
+    try {
+      const operation = (async () => {
+        const r = await fetch(urls[index], { signal: ctrl.signal, redirect: 'error',
+          headers: { accept: 'application/json', Authorization: `Bearer ${key}` } });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const raw = await r.json();
+        const model = Array.isArray(raw?.data) && raw.data.find(m =>
+          m?.object === 'model' && m.owned_by === 'llamacpp' && typeof m.id === 'string' && m.id.trim() && m.id.length <= 200 &&
+          [m.meta?.n_ctx, m.meta?.n_params, m.meta?.size].every(n => typeof n === 'number' && Number.isFinite(n) && n > 0) &&
+          typeof m.meta?.ftype === 'string' && m.meta.ftype.trim());
+        if (!model) throw new Error('no real ready model');
+        return { status: 'online', model: model.id, latency_ms: Math.round(performance.now() - started), selected_endpoint: urls[index] };
+      })();
+      const timeout = new Promise((_, reject) => { timer = setTimeout(() => { ctrl.abort();reject(new Error('timeout')); }, Math.min(attemptMs, remaining)); });
+      return await Promise.race([operation, timeout]);
+    } catch (e) {
+      const message = String(e?.message || '');
+      failures.push(/^HTTP \d{3}$/.test(message) || message === 'timeout' || message === 'no real ready model' ? message : 'request failed');
+    } finally { clearTimeout(timer);ctrl.abort(); }
+  }
+  throw new Error('model readiness unavailable: ' + failures.join('; '));
 }

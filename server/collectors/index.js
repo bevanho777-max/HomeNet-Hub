@@ -249,7 +249,7 @@ export class Scheduler {
         snapshot.update(target.id, { online: true, metrics: norm.metrics, extra: { token: pivot } });
         return;
       }
-      const raw = type === 'http' ? await collectHttp(target.source, parseDuration(target.source.timeout, 3000))
+      const raw = type === 'http' ? await collectHttp(target.source, parseDuration(target.source.timeout, 3000), env)
         : type === 'exec' ? await collectExec(target.source)
         : type === 'tcp' ? await collectTcp(target.source, parseDuration(target.source.timeout, 3000))
         : type === 'tls' ? await collectTls(target.source, parseDuration(target.source.timeout, 4000))
