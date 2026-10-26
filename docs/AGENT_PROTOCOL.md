@@ -108,7 +108,7 @@ agent 对任何响应都不做分支处理,唯一职责是"采集→推送→睡
 |---|---|---|
 | `extra.claude.remaining_min` | m110 | Claude Max 窗口剩余分钟,沿用 `claude-window.json` 自记录算法 |
 | `extra.claude.block_id` | m110 | 当前计费窗口 id |
-| `extra.agent.file` / `extra.agent.sha256` | Linux agent(v2.18) | 脚本名与脚本自身的 sha256;hub 与仓库里同名文件比对,机器明细弹窗显示「agent 与 HEAD 一致 / 不一致」|
+| `extra.agent.file` / `extra.agent.sha256` | Linux agent(v2.18)、NAS agent(v2.18.2)、Windows agent(v2.30.1) | 脚本名与脚本自身的 sha256;hub 与仓库里同名文件比对,机器明细弹窗显示「agent 与 HEAD 一致 / 不一致」|
 
 新增机器特有数据只允许加进 `extra.<命名空间>.*`,不得污染顶层。顶层字段的增删必须升 `v` 并更新本文档。
 
@@ -153,8 +153,14 @@ agent 对任何响应都不做分支处理,唯一职责是"采集→推送→睡
 - 内存:`Get-CimInstance Win32_OperatingSystem`(TotalVisibleMemorySize / FreePhysicalMemory)。
 - 磁盘:`Get-PSDrive C`。
 - 网络:两个周期间 `Get-NetAdapterStatistics` 字节计数器差值。
-- GPU:`nvidia-smi --query-gpu=name,utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw --format=csv,noheader,nounits`,逐行解析为 `gpus[]` 数组元素。
+- GPU:`nvidia-smi --query-gpu=index,name,utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw --format=csv,noheader,nounits`,逐行解析为 `gpus[]` 数组元素。
+  非数字的读数(`[N/A]`)省略该字段;6xx 驱动的 `temperature.gpu` 带小数(`37.97`),四舍五入成整数。
+  没装 nvidia-smi(新系统驱动还没装好)时报 `gpus: []`,卡上 GPU 各项显示 `—`。
 - Claude 倒计时:读取现有 `claude-window.json`,算出 `remaining_min` 填入 `extra.claude`(吸收现 `claude-report.ps1` 职责,后者最终可退役)。
+- 配置(v2.30.1 起):脚本顶部只是默认值,每台机器的值写在同目录的 `agent.env.ps1`(启动时 dot-source,
+  内容就是 `$PushToken = "..."` 这类赋值)。这样部署的脚本与仓库**逐字节相同**,`extra.agent.sha256` 才能与
+  HEAD 比对。该文件含 token,目录 ACL 只留 Administrators + SYSTEM(F)与运行任务的帐号(RX)。
+- 试跑:`homenet-agent.ps1 -Once` 采集一个周期、把 payload 打到 stdout 后退出,不推送,可与在跑的 agent 并存。
 - 推送:`Invoke-RestMethod -TimeoutSec 1 -Method Post -ContentType 'application/json; charset=utf-8' -Headers @{ 'X-Push-Token' = $Token }`,失败 `try/catch` 静默。
 
 > 注:`agents/` 下脚本注释**允许 UTF-8 中文**(`homenet-agent.sh` 的现有风格就是中文,
@@ -281,7 +287,9 @@ embedding **没有被藏起来**:
 - 触发器:**系统启动时**(At startup),延迟 30 秒。
 - 操作:`powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\homenet-agent\homenet-agent.ps1`。
 - 设置:失败后每 1 分钟重启、不限重复次数;"不管用户是否登录都运行";不勾"如运行时间超过 X 则停止"。
-- 配置(HubUrl / AgentId / Token)写在脚本顶部 param 块或同目录 `agent.env.ps1`,由安装脚本生成。
+  "不管用户是否登录"用 S4U 登录类型(`New-ScheduledTaskPrincipal -LogonType S4U`),不存密码;agent 只发 HTTP,
+  用不到网络凭据。
+- 配置(HubUrl / AgentId / Token / StateFile)写在同目录 `agent.env.ps1`(见 §5.2),脚本本身不改。
 
 ### 6.3 一键安装脚本(后续交付)
 

@@ -49,6 +49,23 @@ on screen is the one from `package.json`, and this file is what needs fixing.
 
 ---
 
+## v2.30.1 — 2026-10-26
+
+**Windows agent:自报版本、`-Once` 试跑,配置移到 `agent.env.ps1`;GPU 温度取整。**
+
+*No rebuild — only `agents/` and `docs/` changed (plus the version string: `docker compose restart homenet-hub`).*
+
+- `agents/homenet-agent.ps1`:
+  - `extra.agent = { file, sha256 }`,机器弹窗显示与 HEAD 是否一致(与 Linux / NAS agent 同一套)。
+  - 每台机器的配置(`$PushToken` 等)改写在同目录 `agent.env.ps1`,启动时 dot-source;脚本本身不再改,
+    部署的文件与仓库逐字节相同,sha256 才对得上。
+  - `-Once`:采集一个周期、打印 payload、不推送。
+  - nvidia-smi 6xx 驱动的 `temperature.gpu` 带两位小数(`37.97`),`temp_c` 四舍五入成整数(协议要求整数);
+    利用率 / 温度 / 功耗读到非数字(`[N/A]`)时省略该字段,不再原样写进 JSON。
+- `docs/AGENT_PROTOCOL.md` §4.4 / §5.2 / §6.2 同步:配置文件、试跑、S4U 任务帐号、没装 nvidia-smi 时 `gpus: []`。
+
+---
+
 ## v2.30.0 — 2026-10-26
 
 **卡片顺序改为:六张机器卡 → 推理节点(整行)→ Token Usage、Per-Project → Dual Compare。整行卡是分隔,补位不会把

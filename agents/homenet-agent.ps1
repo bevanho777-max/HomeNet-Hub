@@ -1,9 +1,15 @@
 ﻿# homenet-agent.ps1 - HomeNet Hub push agent (Windows) - protocol v1, see docs/AGENT_PROTOCOL.md
-# Target: Windows Server 2022 (zh-CN) / PowerShell 5.1. Save as UTF-8 with BOM (file is ASCII-only on purpose).
+# Target: Windows 11 / Server 2022 (zh-CN) / PowerShell 5.1. Save as UTF-8 with BOM (file is ASCII-only on purpose).
 # Resident loop: host+GPU every ~2s; Claude window refreshed every ~30s (ccusage is slow), cached into extra.
 # Deploy: Task Scheduler at startup, restart on failure.
+# Trial mode: `homenet-agent.ps1 -Once` collects one interval, prints the payload and exits without
+# pushing -- for checking the output before (re)starting the task; safe to run next to the live agent.
+param([switch]$Once)
 
 # ---------------- config ----------------
+# Defaults only. Per-machine values go in agent.env.ps1 next to this script (dot-sourced, plain
+# assignments such as $PushToken = "..."), so the deployed script stays byte-identical to the repo
+# and extra.agent.sha256 matches HEAD. That file holds the token: keep its ACL to admins + SYSTEM.
 $HubUrl    = "http://192.168.1.24:3100"
 $AgentId   = "m110"
 $PushToken = "REPLACE_WITH_PUSH_TOKEN"
@@ -13,6 +19,17 @@ $ClaudeRefreshLoops = 15
 $NetIface  = ""         # pin the NIC by adapter name; empty = auto-detect default route
 $NetRetryLoops = 15     # while no NIC is available, re-probe every N loops (~30s at 2s)
 $DumpPayload = $false   # set $true to write each payload to last-payload.json for debugging
+
+$EnvFile = Join-Path $PSScriptRoot "agent.env.ps1"
+if (Test-Path -LiteralPath $EnvFile) { . $EnvFile }
+
+# Self-reported version: sha256 of this file, sent as extra.agent so the hub can compare it with
+# agents/homenet-agent.ps1 at HEAD (machine modal: "agent matches HEAD"). Computed once at start --
+# replacing the script means restarting the task anyway.
+$AgentSha = ""
+if ($PSCommandPath) { $AgentSha = (Get-FileHash -Algorithm SHA256 -LiteralPath $PSCommandPath).Hash.ToLowerInvariant() }
+$agentFrag = ""
+if ($AgentSha) { $agentFrag = '"agent":{"file":"homenet-agent.ps1","sha256":"' + $AgentSha + '"}' }
 
 $ErrorActionPreference = "SilentlyContinue"
 $Url = "$($HubUrl.TrimEnd('/'))/api/push/$AgentId"
@@ -70,7 +87,9 @@ $prevTs = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
 $hasNvidia  = [bool](Get-Command nvidia-smi -ErrorAction SilentlyContinue)
 $hasCcusage = [bool](Get-Command ccusage -ErrorAction SilentlyContinue)
 
-Write-Host "[homenet-agent] id=$AgentId hub=$Url iface=$netName nvidia=$hasNvidia ccusage=$hasCcusage"
+$banner = "[homenet-agent] id=$AgentId hub=$Url iface=$netName nvidia=$hasNvidia ccusage=$hasCcusage sha=$($AgentSha.Substring(0, [math]::Min(12, $AgentSha.Length)))"
+if ($Once) { $banner += " once" }
+Write-Host $banner
 $netLog = $true         # from here on, log every NIC state change
 
 # ---------------- collectors (return empty string on failure) ----------------
@@ -110,11 +129,19 @@ function Get-GpusJson {
   foreach ($r in @($rows)) {
     $f = $r -split ',\s*'
     if ($f.Count -lt 7) { continue }
-    $g = ('{{"idx":{0},"name":"{1}","util_pct":{2},"vram_used_gb":{3},"vram_total_gb":{4},"temp_c":{5}' -f `
-      $f[0].Trim(), $f[1].Trim(), $f[2].Trim(), (N1 ([double]$f[3]/1024)), (N1 ([double]$f[4]/1024)), $f[5].Trim())
-    $pw = 0.0
-    if ([double]::TryParse($f[6].Trim(), [System.Globalization.NumberStyles]::Float, $ci, [ref]$pw)) {
-      $g += (',"power_w":{0}' -f (N0 $pw))
+    $g = ('{{"idx":{0},"name":"{1}","vram_used_gb":{2},"vram_total_gb":{3}' -f `
+      $f[0].Trim(), $f[1].Trim(), (N1 ([double]$f[3]/1024)), (N1 ([double]$f[4]/1024)))
+    # Non-numeric readings ("[N/A]") are omitted, never written raw. Drivers 6xx report
+    # temperature.gpu with decimals (37.97); the protocol's temp_c is an integer.
+    $n = 0.0
+    if ([double]::TryParse($f[2].Trim(), [System.Globalization.NumberStyles]::Float, $ci, [ref]$n)) {
+      $g += (',"util_pct":{0}' -f (N0 $n))
+    }
+    if ([double]::TryParse($f[5].Trim(), [System.Globalization.NumberStyles]::Float, $ci, [ref]$n)) {
+      $g += (',"temp_c":{0}' -f (N0 $n))
+    }
+    if ([double]::TryParse($f[6].Trim(), [System.Globalization.NumberStyles]::Float, $ci, [ref]$n)) {
+      $g += (',"power_w":{0}' -f (N0 $n))
     }
     $frags += ($g + '}')
   }
@@ -123,11 +150,12 @@ function Get-GpusJson {
 
 # Claude Max window: same self-recorded start algorithm as claude-report.ps1
 # (blockId change -> record now as new start, +5h = reset). Shares the same state file.
+# Returns the "claude":{...} member of extra, or "" when ccusage is not installed.
 function Get-ClaudeExtra {
-  if (-not $script:hasCcusage) { return "{}" }
+  if (-not $script:hasCcusage) { return "" }
   $json = ccusage blocks --active --json 2>$null | ConvertFrom-Json
   $b = $json.blocks | Where-Object { $_.isActive } | Select-Object -First 1
-  if (-not $b) { return '{"claude":{"active":false}}' }
+  if (-not $b) { return '"claude":{"active":false}' }
   $blockId = $b.id
   $nowUtc = (Get-Date).ToUniversalTime()
   $state = $null
@@ -141,13 +169,13 @@ function Get-ClaudeExtra {
   }
   $remaining = [int][math]::Round(($startReal.AddHours(5) - $nowUtc).TotalMinutes)
   if ($remaining -lt 0) { $remaining = 0 }
-  return ('{{"claude":{{"active":true,"remaining_min":{0},"block_id":"{1}","total_tokens":{2},"cost_usd":{3}}}}}' -f `
+  return ('"claude":{{"active":true,"remaining_min":{0},"block_id":"{1}","total_tokens":{2},"cost_usd":{3}}}' -f `
     $remaining, $blockId, [int64]$b.totalTokens, ([math]::Round([double]$b.costUSD,2).ToString($ci)))
 }
 
 # ---------------- main loop ----------------
 if (-not $ClaudeRefreshLoops -or $ClaudeRefreshLoops -lt 1) { $ClaudeRefreshLoops = 15 }
-$extraJson = "{}"
+$claudeFrag = ""
 $loop = 0
 while ($true) {
   Start-Sleep -Seconds $Interval
@@ -176,12 +204,14 @@ while ($true) {
   }
   $prevTs = $now
 
-  if ($loop % $ClaudeRefreshLoops -eq 0) { $extraJson = Get-ClaudeExtra }
+  if ($loop % $ClaudeRefreshLoops -eq 0) { $claudeFrag = Get-ClaudeExtra }
   $loop++
+  $extraJson = '{' + ((@($claudeFrag, $agentFrag) | Where-Object { $_ }) -join ',') + '}'
 
   $payload = ('{{"v":1,"id":"{0}","ts":{1},"os":"windows",{2}{3}{4}{5}{6}{7},"extra":{8}}}' -f `
     $AgentId, $now, (Get-UptimeJson), (Get-CpuJson), (Get-MemJson), (Get-DiskJson), $netJson, (Get-GpusJson), $extraJson)
 
+  if ($Once) { Write-Output $payload; exit 0 }
   if ($DumpPayload) { Set-Content -Path "C:\homenet-agent\last-payload.json" -Value $payload -Encoding UTF8 }
 
   try {
