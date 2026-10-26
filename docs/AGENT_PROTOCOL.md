@@ -30,6 +30,7 @@
 | 400 | JSON 非法 / 超限 / 缺必填字段 | 静默,下周期重试(JSON 解析失败时响应体为 Fastify 默认错误形状,仅状态码保证为 400) |
 | 401 | token 错误 | 静默,下周期重试 |
 | 404 | `:id` 未在 `targets.yaml` 注册 | 静默,下周期重试 |
+| 409 | (v2.31)该 id 已绑定到另一台主机,本次上报未写入(见 §7.6) | 静默,下周期重试 |
 
 agent 对任何响应都不做分支处理,唯一职责是"采集→推送→睡 2 秒"。
 
@@ -108,6 +109,7 @@ agent 对任何响应都不做分支处理,唯一职责是"采集→推送→睡
 |---|---|---|
 | `extra.claude.remaining_min` | m110 | Claude Max 窗口剩余分钟,沿用 `claude-window.json` 自记录算法 |
 | `extra.claude.block_id` | m110 | 当前计费窗口 id |
+| `extra.host.machine_id` / `extra.host.hostname` | 全部 agent(v2.31) | 主机指纹:本机唯一 ID 的 sha256(64 位小写十六进制;Linux `/etc/machine-id`、Windows `MachineGuid`、群晖序列号 `/proc/sys/kernel/syno_serial`,没有时退回 `/etc/machine-id`)+ 主机名(只留 `[A-Za-z0-9._-]`,≤ 63)。原值不出本机。hub 用它绑定主机(§7.6),`machine_id` 不进快照 |
 | `extra.agent.file` / `extra.agent.sha256` | Linux agent(v2.18)、NAS agent(v2.18.2)、Windows agent(v2.30.1) | 脚本名与脚本自身的 sha256;hub 与仓库里同名文件比对,机器明细弹窗显示「agent 与 HEAD 一致 / 不一致」|
 
 新增机器特有数据只允许加进 `extra.<命名空间>.*`,不得污染顶层。顶层字段的增删必须升 `v` 并更新本文档。
@@ -317,6 +319,13 @@ embedding **没有被藏起来**:
 
 4. `gpus` 数组按 `idx` 映射到布局:`layout.yaml` 中卡片以 `metric: $.gpus[0].vram_used_gb` 这类 JSONPath 引用(需带 `$.` 前缀);单卡机器统一取 `$.gpus[0]`。
 5. 未知顶层字段与未知 `extra` 命名空间:忽略并原样存入快照(前端可选用),不报错。
+6. **主机绑定(v2.31)**:token 之后、写入之前。某 id **第一次**收到带 `extra.host` 的上报时,把它绑定到这台主机
+   (`machine_id` + 主机名,并记下来源 IP);之后同一 id 收到 `machine_id` 或主机名(不分大小写)不同的上报 →
+   **409、不写入**,该机卡片显示「收到来自其他主机的上报:<IP>(<主机名>)」(24 小时内有效),日志一行
+   `[push:HOST] …`(同一来源持续推送时每 10 分钟一行)。绑定后**不带** `extra.host` 的上报同样拒收;未绑定时照收
+   (旧 agent 过渡期)。来源 IP 取转发链最后一跳(`net_guard.js` `forwardedClientAddr`),不信 `req.ip`。
+   绑定存在 `data/homenet.db` 的 `push_bindings` 表;换机器 / 重装系统后用
+   `docker exec homenet-hub node server/push_bindings_cli.js reset <id>` 重设,下一次上报重新绑定。
 
 ## 8. 验收清单(Step 8 集成测试)
 

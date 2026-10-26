@@ -540,11 +540,13 @@ h2:empty { display: none; } /* 堆叠卡外框无标题时不留空行 */
   .mach > .kv[data-n="6"] { grid-template-columns: repeat(6, minmax(0, 1fr)); }
 }
 /* v2.18 多卡:环下/格子下逐卡小字,每张卡按自己的状态着色;单卡机器不输出这行 */
-.gpu-missing {
+.gpu-missing, .push-alert {
   margin-bottom: var(--s3); padding: 5px 10px; border-radius: 8px; font-size: 12px; font-weight: 600;
   color: var(--red); background: color-mix(in srgb, var(--red) 12%, transparent);
   border: 1px solid color-mix(in srgb, var(--red) 45%, transparent);
 }
+/* v2.31: names an address and a hostname -- wraps rather than run out of a narrow card */
+.push-alert { overflow-wrap: anywhere; }
 .gpu-panel-title { margin-top: 16px; font-size: 12px; color: var(--muted); letter-spacing: 0.5px;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #machineModalAgent.lv-ok, #machineModalAgent.lv-danger { text-shadow: none; }

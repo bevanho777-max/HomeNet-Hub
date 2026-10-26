@@ -50,6 +50,16 @@ URL="${HUB_URL%/}/api/push/${AGENT_ID}"
 AGENT_SELF="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "$0")"
 AGENT_SHA="$(sha256sum "$AGENT_SELF" 2>/dev/null | cut -d' ' -f1)"
 
+# 主机指纹(v2.31):/etc/machine-id 的 sha256 + 主机名,随 extra.host 上报。原值不出本机
+# (systemd 把 machine-id 当机密),hub 只需要能比对。hub 第一次收到时把这个 target 绑定到
+# 这台主机,之后别的主机拿同一个 token 推会被挡下。重装系统 machine-id 会变,要在 hub 上
+# 重设绑定(REBUILD §8.5)。
+HOST_MID=""
+[ -s /etc/machine-id ] && HOST_MID="$(tr -d ' \n' </etc/machine-id | sha256sum | cut -d' ' -f1)"
+HOST_NAME="$(hostname 2>/dev/null | tr -cd 'A-Za-z0-9._-' | cut -c1-63)"
+HOST_JSON=""
+[ -n "$HOST_MID" ] && HOST_JSON="\"host\":{\"machine_id\":\"$HOST_MID\",\"hostname\":\"$HOST_NAME\"}"
+
 # ---------- 网卡探测(启动 + 运行期自愈) ----------
 # 用户显式给了 NET_IFACE 就固定用它,运行期不再改写;否则每次探测都重新取默认路由
 # 网卡 —— 覆盖"agent 早于网络就绪启动"导致 net 字段永久缺失的情况。
@@ -491,6 +501,7 @@ while :; do
 
   extra_json=""
   [ -n "$AGENT_SHA" ] && extra_json="\"agent\":{\"file\":\"homenet-agent.sh\",\"sha256\":\"$AGENT_SHA\"}"
+  [ -n "$HOST_JSON" ] && extra_json="$extra_json${extra_json:+,}$HOST_JSON"
   [ -n "$llm_extra" ] && extra_json="$extra_json${extra_json:+,}$llm_extra"
 
   payload=$(printf '{"v":1,"id":"%s","ts":%d,"os":"linux",%s%s%s%s%s%s,"extra":{%s}}' \

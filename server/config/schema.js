@@ -111,8 +111,10 @@ const sourceSchema = {
   },
   additionalProperties: true,
   allOf: [
-    { if: { anyOf: [{ required: ['readiness'] }, { required: ['fallback_urls'] }, { required: ['attempt_timeout_ms'] }] },
+    { if: { anyOf: [{ required: ['readiness'] }, { required: ['attempt_timeout_ms'] }] },
       then: { required: ['readiness', 'key_env', 'attempt_timeout_ms'], properties: { type: { const: 'http' } } } },
+    // v2.31: a plain http probe may name one fallback URL too (tried after `url`)
+    { if: { required: ['fallback_urls'] }, then: { properties: { type: { const: 'http' } } } },
     { if: { properties: { type: { const: 'http' } } }, then: { required: ['url'] } },
     { if: { properties: { type: { const: 'http_push' } } }, then: { required: ['token_env'] } },
     { if: { properties: { type: { const: 'sql' } } }, then: { required: ['query_file', 'dsn_env'] } },

@@ -72,11 +72,12 @@ function statusSub(state, probeSnap, lv) {
 const LABEL_SHORT = { node_prefill: 'abbr_prefill', node_decode: 'abbr_decode', node_latency: 'abbr_latency' };
 const labelShortOf = (label) => { for (const [k, a] of Object.entries(LABEL_SHORT)) if (label === t(k)) return t(a); return null; };
 // v2.29: `subShort2` = a still shorter second line ("10-23 11:40" for "10-23 11:40 · 44.3": the
-// number goes to the title); `title` / `itemCls` on the cell itself.
-function cell(label, value, { cls = '', sub = '', short = null, subShort = null, subShort2 = null, labelShort = labelShortOf(label), title = '', itemCls = '' } = {}) {
+// number goes to the title); `title` / `itemCls` on the cell itself. v2.31: `short2` likewise
+// for the value ("推理 1/2" -> "推理": the 1000px two-column board cut even the short form).
+function cell(label, value, { cls = '', sub = '', short = null, short2 = null, subShort = null, subShort2 = null, labelShort = labelShortOf(label), title = '', itemCls = '' } = {}) {
   const ds = (x, n = '') => (x != null && x !== '' ? ` data-short${n}="${esc(x)}"` : '');
   return `<div class="item${itemCls ? ` ${itemCls}` : ''}"${title ? ` title="${esc(title)}"` : ''}><span class="label fit"${ds(labelShort)}>${esc(label)}</span>`
-    + `<span class="value fit${cls ? ` ${cls}` : ''}"${ds(short)}>${value}</span>`
+    + `<span class="value fit${cls ? ` ${cls}` : ''}"${ds(short)}${short2 && short2 !== short ? ds(short2, '2') : ''}>${value}</span>`
     + (sub ? `<span class="sub fit"${ds(subShort)}${subShort2 && subShort2 !== subShort ? ds(subShort2, '2') : ''}>${esc(sub)}</span>` : '') + '</div>';
 }
 
@@ -311,8 +312,9 @@ export function renderNodes(gc, resolve) {
     const statusCell = busy
       ? (multi
         // "推理中 N/M": streams running / streams the server can run (read from it); in a
-        // column too narrow for it, "推理 N/M" / "Gen N/M" (abbreviation table)
-        ? cell(t('node_status'), esc(`${t('node_busy')} ${lv.running}/${lv.max_streams}`), { cls: 'lv-cool', short: `${t('abbr_busy')} ${lv.running}/${lv.max_streams}`, sub: lv.queued ? t('node_queued', lv.queued) : t('node_no_queue') })
+        // column too narrow for it, "推理 N/M" / "Gen N/M" (abbreviation table), then just
+        // "推理" / "Gen" -- the concurrency bar under the column shows each stream anyway
+        ? cell(t('node_status'), esc(`${t('node_busy')} ${lv.running}/${lv.max_streams}`), { cls: 'lv-cool', short: `${t('abbr_busy')} ${lv.running}/${lv.max_streams}`, short2: t('abbr_busy'), sub: lv.queued ? t('node_queued', lv.queued) : t('node_no_queue') })
         : cell(t('node_status'), esc(t('node_busy')), { cls: 'lv-cool', short: t('abbr_busy'), sub: t('node_busy_n', lv.busy) + (lv.queued ? ` · ${t('node_queued', lv.queued)}` : '') }))
       : cell(t('node_status'), esc(statusText(state, probeT)), { cls: STATE_CLASS[state], short: statusShort(state, probeT), ...statusSub(state, probeS, lv) });
     // v2.28 latency's second line: how often the hub probes the node (the target's interval)

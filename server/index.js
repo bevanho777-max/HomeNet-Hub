@@ -18,6 +18,7 @@ import {
 } from './auth.js';
 import { checkPrivateClient, forwardedClientAddr } from './net_guard.js';
 import { AdminStore } from './store/admin_store.js';
+import { PushBindings, hostOf, normIp } from './store/push_bindings.js';
 import { Snapshot } from './store/snapshot.js';
 import { Tsdb, RANGE_SEC } from './store/sqlite.js';
 import { Scheduler } from './collectors/index.js';
@@ -69,6 +70,9 @@ const vault = openVault(process.env.VAULT_KEY, credStore);
 // bootstraps that row on an install that has none — see auth.js for the priority order
 // and the delete-the-row escape hatch.
 const adminStore = new AdminStore(join(DATA_DIR, 'homenet.db'));
+// v2.31: which host each push target is bound to (store/push_bindings.js). `app` is created
+// further down; the log callback only runs once requests arrive, by which time it exists.
+const pushBindings = new PushBindings(join(DATA_DIR, 'homenet.db'), { log: (m) => app.log.warn(m) });
 // `let`, not `const`: the first-run setup endpoint creates the admin_auth row at
 // RUNTIME, and this binding is how the whole process learns about it without a restart.
 // Every handler below reads through this name rather than capturing the object, so
@@ -553,7 +557,10 @@ app.get('/api/config', VIEW, async (req, reply) => {
 app.get('/api/snapshot', VIEW, async () => {
   const cfg = effective.get();
   const ids = (cfg.targets.targets || []).filter((t) => t.enabled !== false).map((t) => t.id);
-  return snapshot.toJSON(ids);
+  const out = snapshot.toJSON(ids);
+  // v2.31: a refused push from another host, shown on that target's card
+  for (const [id, a] of pushBindings.alerts()) if (out[id]) out[id].push_alert = a;
+  return out;
 });
 
 // v2.25: the live inference state on its own, for the nodes card and the Token Usage
@@ -979,6 +986,15 @@ app.post('/api/push/:targetId', async (req, reply) => {
   if (body.id !== id) {
     return reply.code(400).send({ ok: false, error: `id mismatch: body.id=${body.id} != :targetId=${id}` });
   }
+  // v2.31 host binding (store/push_bindings.js): a push from a host other than the one this
+  // target is bound to is refused before anything is written. The address is the forwarding
+  // chain's last hop (net_guard.js), not req.ip -- that one is whatever the caller wrote.
+  const host = hostOf(body);
+  const ip = normIp(forwardedClientAddr(req.headers['x-forwarded-for'], req.socket?.remoteAddress));
+  const hb = pushBindings.check(id, host, ip);
+  if (!hb.ok) return reply.code(409).send({ ok: false, error: hb.reason });
+  // machine_id stays in the binding table; the snapshot (readable by every viewer) keeps the name
+  if (body.extra?.host) body.extra.host = { hostname: host?.hostname || '' };
   scheduler.handlePush(target, body);
   return { ok: true, target: id, ts: Date.now() };
 });

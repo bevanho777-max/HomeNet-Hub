@@ -49,6 +49,35 @@ on screen is the one from `package.json`, and this file is what needs fixing.
 
 ---
 
+## v2.31.0 — 2026-10-26
+
+**主机绑定:每个 push target 绑定到第一台上报它的主机,别的主机拿同一个 token 推会被挡下,卡片上显示警告。
+m110 的推理候选端口加上 8080。**
+
+*Rebuild required — `server/` + `web/` changed; `agents/` 三个脚本都改了,要逐台重新部署。配置变更:
+`config/targets.yaml` 的 m110 节点 `engine.ports` / `endpoints` 加 8080,`inference110` 加 `fallback_urls`。*
+
+- **agent**(`homenet-agent.sh` / `nas75-agent.sh` / `homenet-agent.ps1`):`extra.host = { machine_id, hostname }`。
+  `machine_id` 是本机唯一 ID 的 sha256 —— Linux `/etc/machine-id`、Windows `MachineGuid`、群晖序列号
+  (`/proc/sys/kernel/syno_serial`,没有时退回 `/etc/machine-id`);原值不出本机。
+- **hub**(`server/store/push_bindings.js`):token 之后、写入之前检查。第一次收到带 `extra.host` 的上报 → 绑定
+  (`push_bindings` 表,记下来源 IP);之后 `machine_id` 或主机名不同 → **409、不写入**,日志
+  `[push:HOST] …`(同一来源每 10 分钟一行),快照里该 target 带 `push_alert`(24 小时)。绑定后不带 `extra.host`
+  的上报同样拒收;未绑定时照收(旧 agent 过渡期)。来源 IP 取转发链最后一跳,不信 `req.ip`。`machine_id`
+  只在绑定表里,快照里的 `extra.host` 只剩主机名。
+- **重设**:`docker exec homenet-hub node server/push_bindings_cli.js list | reset <id> | clear-alert <id>`
+  (换机器 / 重装系统后 `reset`,下一次上报重新绑定)。
+- **卡片**:机器卡顶部红条「收到来自其他主机的上报:<IP>(<主机名>)」/「Push from unexpected host: <IP>
+  (<hostname>)」,样式同「只检测到 n/m 张卡」;悬停显示次数与时间。离线的卡也显示。
+- **http 探测**:普通模式(非 `readiness`)也可写一个 `fallback_urls`,先试 `url`,不通再试它,各分一半超时。
+  m110 的 `inference110` 用它同时探 8082 / 8080。
+- `docs/AGENT_PROTOCOL.md`:§2 加 409,§4.4 加 `extra.host`,§7.6 主机绑定。
+- **顺带修的原有问题**:1000 宽(两栏)推理节点卡,m25 多路推理时状态格「推理 1/2」/「Gen 1/2」仍被省略号截断
+  (只在推理中出现,v2.30 检查时节点空闲没碰上)。节点格子的值加第二个短式 `short2`,这里退到「推理」/「Gen」——
+  每一路的状态在下面的并发条里。
+
+---
+
 ## v2.30.1 — 2026-10-26
 
 **Windows agent:自报版本、`-Once` 试跑,配置移到 `agent.env.ps1`;GPU 温度取整。**

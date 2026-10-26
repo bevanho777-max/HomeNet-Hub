@@ -54,6 +54,20 @@ URL="${HUB_URL%/}/api/push/${AGENT_ID}"
 AGENT_SELF="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "$0")"
 AGENT_SHA="$(sha256sum "$AGENT_SELF" 2>/dev/null | cut -d' ' -f1)"
 
+# Host fingerprint (v2.31): sha256 of the box's unique id + its hostname, sent as extra.host.
+# The hub binds the target to the first host it hears from and refuses pushes from any other
+# (REBUILD 8.5 resets it). The id is the Synology serial number -- hardware, so it survives a
+# DSM reinstall -- with /etc/machine-id as the fallback; only the hash leaves the box.
+HOST_MID=""
+if [ -s /proc/sys/kernel/syno_serial ]; then
+  HOST_MID="$(tr -d ' \n' </proc/sys/kernel/syno_serial | sha256sum | cut -d' ' -f1)"
+elif [ -s /etc/machine-id ]; then
+  HOST_MID="$(tr -d ' \n' </etc/machine-id | sha256sum | cut -d' ' -f1)"
+fi
+HOST_NAME="$(hostname 2>/dev/null | tr -cd 'A-Za-z0-9._-' | cut -c1-63)"
+HOST_JSON=""
+[ -n "$HOST_MID" ] && HOST_JSON="\"host\":{\"machine_id\":\"$HOST_MID\",\"hostname\":\"$HOST_NAME\"}"
+
 # ---------- self-daemon: exit if an instance is already running (cron keep-alive) ----------
 # (skipped in --once mode, which must be runnable next to the live agent)
 if [ "$ONCE" = "0" ] && [ -f "$PIDFILE" ]; then
@@ -344,6 +358,7 @@ while :; do
 
   # gpus is required by the protocol -> always [] on a NAS.
   [ -n "$AGENT_SHA" ] && extra="$extra${extra:+,}\"agent\":{\"file\":\"nas75-agent.sh\",\"sha256\":\"$AGENT_SHA\"}"
+  [ -n "$HOST_JSON" ] && extra="$extra${extra:+,}$HOST_JSON"
 
   payload=$(printf '{"v":1,"id":"%s","ts":%d,"os":"linux",%s%s%s%s%s"gpus":[],"extra":{%s}}' \
     "$AGENT_ID" "$now" \

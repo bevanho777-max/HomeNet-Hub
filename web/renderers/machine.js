@@ -2,6 +2,23 @@
 import { ring, kvItem, mget, card, esc, shownParts } from './common.js';
 import { cv, t } from '../i18n.js';
 
+function hm(ms) {
+  const d = new Date(ms), now = new Date();
+  const p2 = (x) => ('0' + x).slice(-2);
+  const s = `${p2(d.getHours())}:${p2(d.getMinutes())}`;
+  return d.toDateString() === now.toDateString() ? s : `${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${s}`;
+}
+
+// v2.31: the hub refused a push for this target from a host other than the one it is bound
+// to (server/store/push_bindings.js). Said on the card face, online or not: the card's own
+// numbers still come from the bound host, so nothing else on it would look wrong.
+function pushAlert(snap) {
+  const a = snap?.push_alert;
+  if (!a?.ip) return '';
+  const tip = t('push_unexpected_title', hm(a.first || a.at), hm(a.at), a.count || 1);
+  return `<div class="push-alert" title="${esc(tip)}">${esc(t('push_unexpected', a.ip, a.hostname))}</div>`;
+}
+
 export function renderMachine(gridCard, target, snap, metrics) {
   const title = target.name || target.id;
   const accent = target.color || '';
@@ -12,7 +29,7 @@ export function renderMachine(gridCard, target, snap, metrics) {
     return card({
       key: target.id, title, tag: target.badge || '', accent,
       stale: true, kind: 'machine', clickable: gridCard.clickable === 'detail',
-      body: `<div class="note">Host offline / no data${snap?.error ? ` (${esc(snap.error)})` : ''}</div>`,
+      body: `${pushAlert(snap)}<div class="note">Host offline / no data${snap?.error ? ` (${esc(snap.error)})` : ''}</div>`,
     });
   }
 
@@ -65,7 +82,7 @@ export function renderMachine(gridCard, target, snap, metrics) {
   // them side by side (tokens.css); data-n (cell slots, a two-wide cell counting two) lets
   // the cell grid pick a column count that divides it, so no row is left half empty.
   const n = keys.length + keys.filter(isTable).length;
-  const body = `${warn}<div class="mach"><div class="rings">${rings}</div>${items ? `<div class="kv" data-n="${n}">${items}</div>` : ''}</div>`;
+  const body = `${pushAlert(snap)}${warn}<div class="mach"><div class="rings">${rings}</div>${items ? `<div class="kv" data-n="${n}">${items}</div>` : ''}</div>`;
   return card({
     key: target.id, title, tag, body, accent, stale: snap.stale,
     kind: 'machine', clickable: gridCard.clickable === 'detail',

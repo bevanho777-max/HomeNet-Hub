@@ -5,6 +5,25 @@ export async function collectHttp(source, timeoutMs, env = {}) {
   if (source.readiness != null) return collectModels(source, timeoutMs, env);
   const url = source.url;
   if (!url) throw new Error('http source missing url');
+  // v2.31: `fallback_urls` (one) is tried after `url`, each attempt with its share of the
+  // timeout -- a node that may serve on either of two ports (m110: 8082 or 8080) is up when
+  // either answers. The first that answers wins and is named in `selected_endpoint`.
+  const fb = Array.isArray(source.fallback_urls) ? source.fallback_urls : [];
+  if (!fb.length) return fetchOne(url, timeoutMs);
+  const urls = [url, ...fb];
+  const share = Math.max(500, Math.floor(timeoutMs / urls.length));
+  const errs = [];
+  for (const u of urls) {
+    try {
+      const raw = await fetchOne(u, share);
+      if (raw && typeof raw === 'object') raw.selected_endpoint = u;
+      return raw;
+    } catch (e) { errs.push(String(e?.message || e)); }
+  }
+  throw new Error(errs.join('; '));
+}
+
+async function fetchOne(url, timeoutMs) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   const started = Date.now();

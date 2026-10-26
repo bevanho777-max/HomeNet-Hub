@@ -31,6 +31,18 @@ if ($PSCommandPath) { $AgentSha = (Get-FileHash -Algorithm SHA256 -LiteralPath $
 $agentFrag = ""
 if ($AgentSha) { $agentFrag = '"agent":{"file":"homenet-agent.ps1","sha256":"' + $AgentSha + '"}' }
 
+# Host fingerprint (v2.31): sha256 of MachineGuid + the computer name, sent as extra.host. The hub
+# binds the target to the first host it hears from and refuses pushes from any other; a reinstall
+# makes a new MachineGuid, so the binding is then reset on the hub (REBUILD 8.5). Only the hash leaves.
+$hostFrag = ""
+$mguid = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Cryptography' -Name MachineGuid -ErrorAction SilentlyContinue).MachineGuid
+if ($mguid) {
+  $mid = [BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes($mguid.Trim()))).Replace('-', '').ToLowerInvariant()
+  $hn = $env:COMPUTERNAME -replace '[^A-Za-z0-9._-]', ''
+  if ($hn.Length -gt 63) { $hn = $hn.Substring(0, 63) }
+  $hostFrag = '"host":{"machine_id":"' + $mid + '","hostname":"' + $hn + '"}'
+}
+
 $ErrorActionPreference = "SilentlyContinue"
 $Url = "$($HubUrl.TrimEnd('/'))/api/push/$AgentId"
 $ci  = [System.Globalization.CultureInfo]::InvariantCulture
@@ -206,7 +218,7 @@ while ($true) {
 
   if ($loop % $ClaudeRefreshLoops -eq 0) { $claudeFrag = Get-ClaudeExtra }
   $loop++
-  $extraJson = '{' + ((@($claudeFrag, $agentFrag) | Where-Object { $_ }) -join ',') + '}'
+  $extraJson = '{' + ((@($claudeFrag, $agentFrag, $hostFrag) | Where-Object { $_ }) -join ',') + '}'
 
   $payload = ('{{"v":1,"id":"{0}","ts":{1},"os":"windows",{2}{3}{4}{5}{6}{7},"extra":{8}}}' -f `
     $AgentId, $now, (Get-UptimeJson), (Get-CpuJson), (Get-MemJson), (Get-DiskJson), $netJson, (Get-GpusJson), $extraJson)

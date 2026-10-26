@@ -315,6 +315,9 @@ const ZH = {
 
   // v2.18 multi-GPU card + machine modal
   gpu_cards_missing: (n, m) => `只检测到 ${n}/${m} 张卡`,
+  // v2.31 host binding: a push from a host other than the one this target is bound to
+  push_unexpected: (ip, h) => `收到来自其他主机的上报：${ip}（${h || '未上报主机名'}）`,
+  push_unexpected_title: (first, last, n) => `这些上报没有写入。${first === last ? `时间 ${last}` : `${first} 起，最近 ${last}`}，共 ${n} 次。\n换机器或重装系统后要重设主机绑定（REBUILD §8.5）。`,
   gpu_panel_util: '使用率',
   gpu_panel_vram: '显存',
   gpu_panel_temp: '温度（edge / junction / mem）',
@@ -690,6 +693,9 @@ const EN = {
 
   // v2.18 multi-GPU card + machine modal
   gpu_cards_missing: (n, m) => `Only ${n}/${m} GPUs detected`,
+  // v2.31 host binding: a push from a host other than the one this target is bound to
+  push_unexpected: (ip, h) => `Push from unexpected host: ${ip} (${h || 'no hostname'})`,
+  push_unexpected_title: (first, last, n) => `Not recorded. ${first === last ? `At ${last}` : `${first} to ${last}`}, ${n} push${n === 1 ? '' : 'es'}.\nAfter a machine change or OS reinstall, reset the host binding (REBUILD 8.5).`,
   gpu_panel_util: 'Utilization',
   gpu_panel_vram: 'VRAM',
   gpu_panel_temp: 'Temperature (edge / junction / mem)',
