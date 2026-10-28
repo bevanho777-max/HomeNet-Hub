@@ -47,12 +47,12 @@ export const MAX_PASSWORD = 256;
 
 // ── rate limiting ───────────────────────────────────────────────────
 // Two tiers, because with a reverse proxy in front the two answer different questions.
-//   client tier: keyed on the real client IP (X-Forwarded-For via trustProxy). This is
-//     the one that stops someone guessing at one browser.
+//   client tier: keyed on the real client IP (client_ip.js: forwarding headers only from
+//     the trusted proxy, CF-Connecting-IP for internet visitors). This is the one that
+//     stops someone guessing at one browser.
 //   peer tier:   keyed on the actual socket peer. Everything arriving through Lucky
-//     shares one peer, so this is what bounds an attacker who rotates X-Forwarded-For
-//     — trustProxy means we believe that header, and a header we believe is a header
-//     that can be forged by anything that can reach the port directly.
+//     shares one peer, so this bounds the whole proxied side together -- including many
+//     internet addresses guessing in concert.
 const CLIENT_MAX = 5;                 // failures per window before backoff starts
 const CLIENT_WINDOW_MS = 60 * 1000;
 const CLIENT_MAX_LOCK_MS = 15 * 60 * 1000;

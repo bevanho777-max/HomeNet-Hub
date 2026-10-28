@@ -77,35 +77,7 @@ export function checkPrivateClient(addr) {
   return checkPrivateIp(s);
 }
 
-/**
- * Pick the address to make a trust decision about, from a request's forwarding chain.
- *
- * NOT the same thing as Fastify's `req.ip`. With `trustProxy: true` Fastify believes the
- * WHOLE X-Forwarded-For chain and hands back its LEFTMOST entry — which is the entry the
- * ORIGINAL CALLER supplied. That is the right default for logging and for spreading a
- * rate limit across real clients, and it is exactly wrong here: anyone on the internet
- * could send `X-Forwarded-For: 10.0.0.1`, have the reverse proxy append their real
- * address after it, and be read as a LAN client.
- *
- * The RIGHTMOST entry is the one the nearest proxy wrote itself, so it is the last hop
- * the caller could not forge. With one reverse proxy in front — this project's
- * deployment — that entry is the real client. With no header at all the socket peer is
- * already the real client.
- *
- * This is deliberately strict rather than clever: a longer chain of proxies would make
- * the rightmost entry the outermost proxy instead of the client, which fails CLOSED
- * (a public caller is not admitted; a LAN caller behind an unusual chain may be refused
- * and has to fall back to editing .env).
- *
- * @param {string|string[]|undefined} xff  the X-Forwarded-For header, raw
- * @param {string|undefined} peer          req.socket.remoteAddress
- * @returns {string} the address to judge, or '' when there is nothing to judge
- */
-export function forwardedClientAddr(xff, peer) {
-  const raw = Array.isArray(xff) ? xff.join(',') : xff;
-  if (typeof raw === 'string' && raw.trim()) {
-    const parts = raw.split(',').map((p) => p.trim()).filter(Boolean);
-    if (parts.length) return parts[parts.length - 1];
-  }
-  return typeof peer === 'string' ? peer : '';
-}
+// The client address for these checks comes from client_ip.js (v2.31.1): forwarding
+// headers only from a trusted proxy, CF-Connecting-IP for the cloudflared hop. The old
+// "rightmost X-Forwarded-For entry" rule read every internet visitor as 127.0.0.1, because
+// Lucky overwrites the header with its own peer and cloudflared reaches it over loopback.

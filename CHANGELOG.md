@@ -49,6 +49,25 @@ on screen is the one from `package.json`, and this file is what needs fixing.
 
 ---
 
+## v2.31.1 — 2026-10-29
+
+**真实客户端 IP:只信任来自 Lucky 的转发头,经 Cloudflare 的公网访客取 `CF-Connecting-IP`。**
+
+*Rebuild required — `server/` changed. 无配置变更(可选环境变量 `TRUSTED_PROXIES`,默认 `192.168.1.5`)。*
+
+- **问题**:Lucky(192.168.1.5)会**覆写** `X-Forwarded-For` 为它自己看到的对端 —— 局域网客户端是客户端本身,
+  经 Cloudflare 来的公网访客则是 `127.0.0.1`(cloudflared 在 Lucky 那台机器上走环回连 Lucky),访客地址只在
+  `CF-Connecting-IP` 里。原来的 `trustProxy: true` + 「转发链最后一跳」于是把所有公网访客都当成 `127.0.0.1`:
+  登录限流的客户端一档全挤在一个桶里,首次设置的「仅限局域网」判断也会把公网访客看成私网地址。
+- **新 `server/client_ip.js`**:socket 对端是可信反代(`TRUSTED_PROXIES`)才看转发头,直连端口的一律用 socket
+  地址;`X-Forwarded-For`(没有就 `X-Real-IP`)从右往左跳过可信反代;遇到环回跳 = cloudflared,取
+  `CF-Connecting-IP`(没有就当未知、失败关闭);全是反代就记反代本身。
+- 登录 / 改密码的限流、首次设置的局域网判断、push 主机绑定的来源 IP 都改用它;Fastify 的 `trustProxy` 改成只信
+  `TRUSTED_PROXIES`(`req.protocol` 仍认 Lucky 的 `X-Forwarded-Proto`)。删掉 `net_guard.js` 的 `forwardedClientAddr`。
+- 排查用:`HOMENET_DEBUG_CLIENT_IP=1` 时每个请求记一行 `[client-ip] … -> <IP> (<来源>)`,默认关。
+
+---
+
 ## v2.31.0 — 2026-10-26
 
 **主机绑定:每个 push target 绑定到第一台上报它的主机,别的主机拿同一个 token 推会被挡下,卡片上显示警告。

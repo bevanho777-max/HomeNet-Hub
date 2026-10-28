@@ -16,7 +16,8 @@ import {
   createAuth, setupAdminPassword, LoginLimiter, parseCookies, serializeCookie, clearCookie,
   checkOrigin, COOKIE_NAME,
 } from './auth.js';
-import { checkPrivateClient, forwardedClientAddr } from './net_guard.js';
+import { checkPrivateClient } from './net_guard.js';
+import { clientIpOf, resolveClientIp, TRUST_PROXY_LIST } from './client_ip.js';
 import { AdminStore } from './store/admin_store.js';
 import { PushBindings, hostOf, normIp } from './store/push_bindings.js';
 import { Snapshot } from './store/snapshot.js';
@@ -205,15 +206,24 @@ function tokenTarget() {
 
 // ── server ──────────────────────────────────────────────────────────
 // trustProxy: this service sits behind Lucky, which terminates TLS and forwards plain
-// HTTP to :3100. Without it every request looks like it came from the proxy over http —
-// which would put a Secure cookie on nothing and collapse the login rate limit onto one
-// IP. With it, req.protocol reflects X-Forwarded-Proto and req.ip the real client.
-// The header is only as trustworthy as who can reach the port directly, which is why
-// the login limiter also bounds attempts per socket peer (see auth.js).
+// HTTP to :3100, so req.protocol must come from X-Forwarded-Proto -- but only when the
+// socket peer IS Lucky (TRUSTED_PROXIES, client_ip.js); a direct hit's headers are ignored.
+// The client address is NOT req.ip: Lucky overwrites X-Forwarded-For with its own peer, which
+// is 127.0.0.1 for everything from the internet (cloudflared), so the real client is resolved
+// by clientIpOf() (client_ip.js) -- including CF-Connecting-IP on that loopback path.
 const app = Fastify({
-  trustProxy: true,
+  trustProxy: TRUST_PROXY_LIST,
   logger: { level: process.env.LOG_LEVEL || 'warn' },
 });
+
+// HOMENET_DEBUG_CLIENT_IP=1: log every request's resolved client address, for checking the
+// proxy chain after a network change. Off by default -- agent pushes alone are several a second.
+if (process.env.HOMENET_DEBUG_CLIENT_IP === '1') {
+  app.addHook('onRequest', async (req) => {
+    const r = resolveClientIp(req.socket?.remoteAddress, req.headers);
+    app.log.warn(`[client-ip] ${req.method} ${req.url.split('?')[0]} -> ${r.ip || '?'} (${r.via}; peer ${req.socket?.remoteAddress})`);
+  });
+}
 
 // ── admin gate ──────────────────────────────────────────────────────
 // Secure follows the request's own protocol rather than a build-time guess: through
@@ -236,22 +246,17 @@ async function requireAdmin(req, reply) {
 /**
  * Is this request coming from the local network?
  *
- * Only the first-run setup endpoint asks. It deliberately does NOT use `req.ip`:
- * `trustProxy: true` makes that the LEFTMOST X-Forwarded-For entry, which is whatever
- * the original caller typed. See forwardedClientAddr in net_guard.js for why the
- * rightmost entry is the one that cannot be forged.
- *
- * Both halves must be private: the forwarding chain's last unforgeable hop AND the
- * actual socket peer. Behind a reverse proxy the peer is the proxy (private), and the
- * chain supplies the client; on a direct LAN hit the two are the same address. A public
- * caller fails the first, and a request that somehow reaches the port from outside the
- * LAN fails the second.
+ * Only the first-run setup endpoint asks. Both halves must be private: the resolved
+ * client (client_ip.js: forwarding headers only from a trusted proxy, CF-Connecting-IP
+ * for the cloudflared hop) AND the actual socket peer. An internet visitor resolves to
+ * its public address -- not to cloudflared's 127.0.0.1 -- and is refused; an unknown
+ * client ('') is refused too.
  */
 function clientIsPrivate(req) {
   const peer = req.socket?.remoteAddress;
   const p = checkPrivateClient(peer);
   if (!p.ok) return { ok: false, reason: p.reason };
-  const c = checkPrivateClient(forwardedClientAddr(req.headers?.['x-forwarded-for'], peer));
+  const c = checkPrivateClient(resolveClientIp(peer, req.headers).ip);
   if (!c.ok) return { ok: false, reason: c.reason };
   return { ok: true, ip: c.ip };
 }
@@ -273,11 +278,10 @@ async function requireSameOrigin(req, reply) {
 /**
  * A direct LAN hit on the port: private socket peer and NO forwarding headers at all.
  *
- * Deliberately not clientIsPrivate(): Lucky rewrites X-Forwarded-For to its own LAN
- * address (measured: every proxied request arrived as "192.168.1.5, 192.168.1.5"), so
- * through the proxy an internet visitor is indistinguishable from a LAN one by address.
- * What the proxy cannot help doing is ADD these headers — so their presence means "came
- * through the proxy", and an internet caller has no way to arrive without them.
+ * Deliberately not clientIsPrivate(): anything that came through the proxy -- the domain,
+ * even from home -- carries these headers, and an internet caller has no way to arrive
+ * without them. "No forwarding headers + private socket peer" is therefore exactly "a
+ * direct LAN hit on the port".
  */
 function directLanHit(req) {
   const h = req.headers || {};
@@ -418,9 +422,9 @@ app.post('/api/login', async (req, reply) => {
   const o = checkOrigin(req);
   if (!o.ok) return reply.code(403).send({ error: 'forbidden', reason: o.reason });
 
-  // req.ip is the real client under trustProxy; the socket peer is the second tier,
-  // which is what bounds someone rotating X-Forwarded-For (see auth.js).
-  const clientKey = req.ip || 'unknown';
+  // The resolved client (client_ip.js) is the first tier; the socket peer is the second,
+  // which bounds everything arriving through the proxy together (see auth.js).
+  const clientKey = clientIpOf(req) || 'unknown';
   const peerKey = req.socket?.remoteAddress || 'unknown';
 
   const gate = loginLimiter.check(clientKey, peerKey);
@@ -469,7 +473,7 @@ app.post('/api/logout', async (req, reply) => {
 // Neither password appears in the response, the log line, or an error. The failure
 // codes are about WHICH rule was broken, never about what was submitted.
 app.post('/api/admin/password', ADMIN_WRITE, async (req, reply) => {
-  const clientKey = req.ip || 'unknown';
+  const clientKey = clientIpOf(req) || 'unknown';
   const peerKey = req.socket?.remoteAddress || 'unknown';
 
   const gate = loginLimiter.check(clientKey, peerKey);
@@ -987,10 +991,10 @@ app.post('/api/push/:targetId', async (req, reply) => {
     return reply.code(400).send({ ok: false, error: `id mismatch: body.id=${body.id} != :targetId=${id}` });
   }
   // v2.31 host binding (store/push_bindings.js): a push from a host other than the one this
-  // target is bound to is refused before anything is written. The address is the forwarding
-  // chain's last hop (net_guard.js), not req.ip -- that one is whatever the caller wrote.
+  // target is bound to is refused before anything is written. The address is the resolved
+  // client (client_ip.js): the socket peer for a direct push, the proxy's hop otherwise.
   const host = hostOf(body);
-  const ip = normIp(forwardedClientAddr(req.headers['x-forwarded-for'], req.socket?.remoteAddress));
+  const ip = normIp(clientIpOf(req));
   const hb = pushBindings.check(id, host, ip);
   if (!hb.ok) return reply.code(409).send({ ok: false, error: hb.reason });
   // machine_id stays in the binding table; the snapshot (readable by every viewer) keeps the name

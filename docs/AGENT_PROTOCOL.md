@@ -323,7 +323,7 @@ embedding **没有被藏起来**:
    (`machine_id` + 主机名,并记下来源 IP);之后同一 id 收到 `machine_id` 或主机名(不分大小写)不同的上报 →
    **409、不写入**,该机卡片显示「收到来自其他主机的上报:<IP>(<主机名>)」(24 小时内有效),日志一行
    `[push:HOST] …`(同一来源持续推送时每 10 分钟一行)。绑定后**不带** `extra.host` 的上报同样拒收;未绑定时照收
-   (旧 agent 过渡期)。来源 IP 取转发链最后一跳(`net_guard.js` `forwardedClientAddr`),不信 `req.ip`。
+   (旧 agent 过渡期)。来源 IP 取解析出的真实客户端(`client_ip.js`:只信任来自可信代理的转发头,经 Cloudflare 的取 `CF-Connecting-IP`),不信 `req.ip`。
    绑定存在 `data/homenet.db` 的 `push_bindings` 表;换机器 / 重装系统后用
    `docker exec homenet-hub node server/push_bindings_cli.js reset <id>` 重设,下一次上报重新绑定。
 
