@@ -35,6 +35,8 @@ services:
       # litellm_default network below, NOT 127.0.0.1: inside this container localhost is
       # the hub itself. Only set this if the proxy lives somewhere else.
       - LITELLM_BASE_URL=${LITELLM_BASE_URL:-}
+      - TRUSTED_PROXIES=${TRUSTED_PROXIES:-}                  # reverse proxies whose forwarding headers count (server/client_ip.js; default 192.168.1.5)
+      - HOMENET_DEBUG_CLIENT_IP=${HOMENET_DEBUG_CLIENT_IP:-}  # 1 = log each request's resolved client address
     volumes:
       - ./config:/app/config:ro          # YAML config, read-only mount (edit on host → chokidar hot-reload)
       - ./data:/app/data                 # SQLite timeseries volume (persisted)
