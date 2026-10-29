@@ -305,6 +305,28 @@ targets:
     enabled: false
     source: { type: inference_live, nodes_target: nodes_example, interval: "2s", timeout: "1s", last_max_age: "10m" }
 
+  # v2.32: ComfyUI nodes, for a `type: comfy` card (layout.yaml). Strictly read-only: every
+  # `interval` one tiny GET /api/jobs per state (running / waiting) per node; when a job ends,
+  # GET /api/jobs?status=completed,failed into the hub's own table (today's images and the
+  # average time per image survive a ComfyUI restart); /system_stats once a minute; and a
+  # WebSocket on /ws that only listens, for the running job's step count. It never queues,
+  # cancels or reads /queue or /history (those carry whole workflows). ComfyUI sends step
+  # progress only to the client that queued the job, so a job queued from a browser shows its
+  # elapsed time and no step count. A node that does not answer is grey "Off", never red.
+  # Open the ComfyUI port to the hub's address only (Windows: an inbound rule for TCP 8188
+  # with RemoteAddress = the hub); the hub needs nothing else on the machine.
+  - id: comfy_example
+    name: "ComfyUI 节点"
+    name_en: "ComfyUI Nodes"
+    enabled: false
+    source:
+      type: comfyui
+      interval: "2s"
+      timeout: "1500ms"
+    nodes:
+      - { id: gpu_a, url: "http://gpu-node-1.example.local:8188" }
+      - { id: laptop, url: "http://laptop.example.local:8188" }
+
   # v2.24: ALL usage for the Token Usage card (point the layout's token card at this
   # target instead of a `type: sql` one). The inference servers' own counters (from the
   # inference_nodes target named in `nodes_target`) are the truth; LiteLLM fills the days
@@ -389,6 +411,35 @@ targets:
     source:
       type: http_push
       token_env: PUSH_TOKEN_GPU2
+      stale_after_s: 10
+    map:
+      gpu:        "$.gpus[0].util_pct"
+      gpu_temp:   "$.gpus[0].temp_c"
+      gpu_power:  "$.gpus[0].power_w"
+      vram_bytes: { v: "$.gpus[0].vram_used_gb", max: "$.gpus[0].vram_total_gb" }
+      cpu:        "$.cpu.pct"
+      uptime:     { s: "$.uptime_s" }
+      mem_bytes:  { v: "$.mem.used_gb",  max: "$.mem.total_gb" }
+      disk_bytes: { v: "$.disk.used_gb", max: "$.disk.total_gb" }
+      net:        { rx: "$.net.rx_bps",  tx: "$.net.tx_bps" }
+
+  # v2.32: a Windows laptop (agents/homenet-agent.ps1 as a scheduled task -- docs/AGENT_PROTOCOL.md).
+  # A laptop sleeps and gets switched off: `always_on: false` turns its card grey with "Off"
+  # (and when it last reported) in the header instead of an offline fault, every live reading
+  # "—" and only what does not change while it is off (memory / VRAM size, the disk as last
+  # reported) kept. `role` is a small pill after the title saying what the machine is for.
+  # A reading the GPU does not report (laptop power limits, "[N/A]") is left out by the agent
+  # and shows "—". Turn off Windows fast startup on the machine, or its uptime never resets.
+  - id: laptop_example
+    name: "GPU · Laptop"
+    color: auto
+    badge: "RTX 4070 Laptop"        # nvidia-smi's name without "NVIDIA GeForce" / "GPU"
+    role: "LLM"                     # or "ComfyUI" -- free text, a few characters
+    always_on: false
+    enabled: false
+    source:
+      type: http_push
+      token_env: PUSH_TOKEN_LAPTOP
       stale_after_s: 10
     map:
       gpu:        "$.gpus[0].util_pct"

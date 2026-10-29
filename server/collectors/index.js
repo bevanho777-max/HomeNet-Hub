@@ -67,6 +67,9 @@ export class Scheduler {
         timeoutMs: parseDuration(liveT.source.timeout, 1000), maxAgeMs: parseDuration(liveT.source.last_max_age, 600000),
       });
     }
+    // v2.32 ComfyUI nodes (2 s, read-only; see comfyui.js)
+    const comfyT = enabled.find((t) => t.source?.type === 'comfyui');
+    if (this.ctx.comfy) this.ctx.comfy.configure(comfyT || null, { timeoutMs: parseDuration(comfyT?.source?.timeout, 1500) });
     this.ctx.snapshot.prune(enabled.map((t) => t.id));
 
     for (const target of enabled) {
@@ -79,7 +82,7 @@ export class Scheduler {
       // generic 8s fallback would mean a handshake every 8 seconds forever if a
       // hand-written target omitted `interval`.
       const interval = parseDuration(target.source?.interval,
-        type === 'inference_live' ? 2000
+        type === 'inference_live' || type === 'comfyui' ? 2000
           : type === 'usage' || type === 'usage_projects' || type === 'node_speed' ? 30000
           : type === 'http' ? 1500 : type === 'demo' ? 2000
           : type === 'tls' ? 3600000 : type === 'tcp' ? 10000
@@ -161,6 +164,15 @@ export class Scheduler {
         // the timeseries (the node modal's concurrency chart); the store keeps one sample
         // per 5 s per series, so a 2 s poll does not triple the writes.
         const rows = this.ctx.live.historyRows(target.id, view);
+        if (rows.length) tsdb.record(rows);
+        return;
+      }
+      // v2.32: ComfyUI nodes -- what each one is doing now and today's images (comfyui.js);
+      // the queue goes into the timeseries for the column modal
+      if (type === 'comfyui') {
+        const view = await this.ctx.comfy.poll();
+        snapshot.update(target.id, { online: true, metrics: {}, extra: { comfy: view } });
+        const rows = this.ctx.comfy.historyRows(target.id, view);
         if (rows.length) tsdb.record(rows);
         return;
       }
@@ -339,5 +351,5 @@ export class Scheduler {
     this._totals.clear();
   }
 
-  stop() { this._clear(); }
+  stop() { this._clear(); this.ctx.comfy?.stop(); }
 }

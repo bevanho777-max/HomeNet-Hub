@@ -166,8 +166,8 @@ grid:
       - { label: "Nodes", value: "3 GPU + gateway" }
       - { label: "Source", value: "config-driven YAML" }
 
-  # v2.30 order: host cards -> the inference nodes card (a whole row) -> Token Usage,
-  # Per-Project -> Dual Compare (below the grid). A full-width card is a section break:
+  # v2.30 order: host cards -> the inference nodes card (a whole row) -> (v2.32) the ComfyUI
+  # nodes card (a whole row) -> Token Usage, Per-Project -> Dual Compare (below the grid). A full-width card is a section break:
   # filling a short row never pulls a card up across it.
   # v2.20 inference nodes — one full-width card, one column per inference machine:
   # instance port(s) (discovered from litellm), live model ID, status / latency,
@@ -185,6 +185,33 @@ grid:
   #   nodes:
   #     - { node: gpu_a, name: "gpu-a", probe: inference, speed_note: "no /metrics yet", speed_note_en: "no /metrics yet" }
   #     - { node: gpu_b, name: "gpu-b", probe: inference2 }      # speed: <prometheus speed target>
+
+  # v2.32 ComfyUI nodes — one full-width card, one column per ComfyUI server, below the
+  # inference nodes card: status (Generating / Idle / Off), queue (Run N · Queued K), current
+  # progress (Step x / y, elapsed), last finished, images today, average time per image. An
+  # unreachable node's column goes grey. Click a column -> its queue length and images per
+  # hour. Pairs with comfy_example in targets.yaml (disabled there) — uncomment both together.
+  #
+  # - type: comfy
+  #   target: comfy_example
+  #   span: full
+  #   title: "ComfyUI 节点"
+  #   title_en: "ComfyUI Nodes"
+  #   clickable: detail
+  #   detail_ranges: [1d, 3d, 7d]
+  #   nodes:
+  #     - { node: gpu_a, name: "gpu-a" }
+  #     - { node: laptop, name: "laptop" }
+  #
+  # v2.32 a Windows laptop's machine card (laptop_example in targets.yaml): the same card as
+  # any GPU box; the target's `always_on: false` and `role` do the rest.
+  # - target: laptop_example
+  #   type: machine
+  #   stretch: true
+  #   clickable: detail
+  #   rings: [cpu, gpu, vram_bytes]
+  #   items: [vram_bytes, mem_bytes, gpu_temp, gpu_power, disk_bytes, net]
+  #   header_right: [badge, uptime]
 
   # token usage — span 2 + stretch: on a 4-column screen it is widened to the whole row
   - target: token

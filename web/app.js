@@ -9,8 +9,9 @@ import { renderStack } from './renderers/stack.js';
 import { renderInfo } from './renderers/info.js';
 import { renderTable } from './renderers/table.js';
 import { renderNodes } from './renderers/nodes.js';
+import { renderComfy } from './renderers/comfy.js';
 import { initHistory, historyRefresh, relocalizeHistory } from './renderers/history.js';
-import { initMachineDetail, openMachineModal, openNodeModal, closeMachineModal, bindMachineModal, relocalizeMachineModal } from './renderers/machine_detail.js';
+import { initMachineDetail, openMachineModal, openNodeModal, openComfyModal, closeMachineModal, bindMachineModal, relocalizeMachineModal } from './renderers/machine_detail.js';
 import { openTableModal, closeTableModal, bindTableModal, relocalizeTableModal } from './renderers/table_detail.js';
 import { bindAddTarget, closeAddPanel, openAddPanel, relocalizeAddPanel } from './renderers/add_target.js';
 import { bindCredentials, closeCredPanel, relocalizeCredPanel } from './renderers/credentials.js';
@@ -44,8 +45,9 @@ function mountCards(containerId, cards) {
       el.className = 'card';
       el.dataset.key = c.key;
       if (c.accent) el.style.setProperty('--accent', c.accent);
-      el.innerHTML = `<h2>${esc(c.title)}${c.tag ? `<span class="tag fit">${c.tag}</span>` : ''}</h2><div class="card-body">${c.body}</div>`;
+      el.innerHTML = `<h2>${esc(c.title)}${c.role ? `<span class="role">${esc(c.role)}</span>` : ''}${c.tag ? `<span class="tag fit">${c.tag}</span>` : ''}</h2><div class="card-body">${c.body}</div>`;
       el._body = c.body;
+      syncTagShort(el.querySelector('h2 .tag'), c);
       container.appendChild(el);
     } else {
       if (c.accent) el.style.setProperty('--accent', c.accent);
@@ -69,13 +71,20 @@ function mountCards(containerId, cards) {
           h2.insertBefore(document.createTextNode(c.title), h2.firstChild);
         }
       }
+      // v2.32 the purpose pill after the title (LLM / ComfyUI), kept in sync the same way
+      let roleEl = h2 && h2.querySelector('.role');
+      if (c.role) {
+        if (!roleEl && h2) { roleEl = document.createElement('span'); roleEl.className = 'role'; h2.insertBefore(roleEl, h2.querySelector('.tag')); }
+        if (roleEl && roleEl.textContent !== c.role) roleEl.textContent = c.role;
+      } else if (roleEl) roleEl.remove();
       // create the .tag span if it wasn't there at first mount (a card that mounted
       // tagless while offline can later gain a header_right, e.g. uptime), update it when
       // present, remove it when the tag goes empty.
       let tagEl = h2 && h2.querySelector('.tag');
       if (c.tag) {
         if (!tagEl && h2) { tagEl = document.createElement('span'); tagEl.className = 'tag fit'; h2.appendChild(tagEl); }
-        if (tagEl && tagEl.innerHTML !== c.tag) tagEl.innerHTML = c.tag;
+        if (tagEl && (tagEl._fitFull ?? tagEl.innerHTML) !== c.tag) { tagEl.innerHTML = c.tag; tagEl._fitFull = null; }
+        syncTagShort(tagEl, c);
       } else if (tagEl) {
         tagEl.remove();
       }
@@ -99,6 +108,14 @@ function mountCards(containerId, cards) {
   container.querySelectorAll('.card').forEach((el) => { if (!seen.has(el.dataset.key)) el.remove(); });
 }
 
+// v2.32 the tag's short forms (fit.js swaps them in when the header is too narrow)
+function syncTagShort(tagEl, c) {
+  if (!tagEl) return;
+  for (const [k, v] of [['short', c.tagShort], ['short2', c.tagShort2]]) {
+    if (v) { if (tagEl.dataset[k] !== v) tagEl.dataset[k] = v; } else if (k in tagEl.dataset) delete tagEl.dataset[k];
+  }
+}
+
 // B23: which modal a card opens. `kind` comes from the renderer via card(), so the
 // routing lives with the card definition rather than being re-derived from the layout.
 function openCardModal(c, e) {
@@ -114,6 +131,13 @@ function openCardModal(c, e) {
     const idx = Number(e?.target?.closest?.('.node-col')?.dataset.col);
     const col = c.detail?.gc?.nodes?.[idx];
     if (col) openNodeModal({ col, usageTarget: c.detail.gc.target, liveTarget: c.detail.gc.live || null, ranges: c.detail.ranges });
+    return;
+  }
+  // v2.32 ComfyUI nodes card: likewise, the clicked column
+  if (c.kind === 'comfy') {
+    const idx = Number(e?.target?.closest?.('.node-col')?.dataset.col);
+    const col = c.detail?.gc?.nodes?.[idx];
+    if (col) openComfyModal({ col, target: c.detail.gc.target, ranges: c.detail.ranges });
     return;
   }
   // The machine modal titles itself from config (target name + " Detail") so a language
@@ -341,6 +365,7 @@ function render() {
     else if (gc.type === 'info') cards.push(renderInfo(gc, target, snap));
     else if (gc.type === 'table') cards.push(renderTable(gc, target, snap));
     else if (gc.type === 'nodes') cards.push(renderNodes(gc, resolveWithLive));
+    else if (gc.type === 'comfy') cards.push(renderComfy(gc, resolveWithLive));
     if (cards.length > before) {
       if (gc.span != null) cards[cards.length - 1].span = gc.span;
       if (gc.stretch) cards[cards.length - 1].stretch = true;

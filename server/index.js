@@ -29,6 +29,7 @@ import { pivotTokens, TOKEN_RANGE_DAYS } from './token_detail.js';
 import { UsageEngine } from './usage.js';
 import { LiveCollector } from './collectors/live.js';
 import { EngineDetector, PROM_JOBS } from './engine.js';
+import { ComfyCollector } from './collectors/comfyui.js';
 import { discoverTarget } from './collectors/discovery.js';
 import { UserStore } from './store/user_store.js';
 import { EffectiveStore } from './config/effective.js';
@@ -121,7 +122,9 @@ const liveBus = {
     for (const res of liveClients) { try { res.write(msg); } catch { liveClients.delete(res); } }
   },
 };
-const scheduler = new Scheduler({ snapshot, tsdb, env: process.env, vault, credStore, litellmKeys, usage, live, liveBus, engine });
+// v2.32: ComfyUI nodes (read-only); its finished-job table lives in the same database file
+const comfy = new ComfyCollector(join(DATA_DIR, 'homenet.db'));
+const scheduler = new Scheduler({ snapshot, tsdb, env: process.env, vault, credStore, litellmKeys, usage, live, liveBus, engine, comfy });
 console.log(`[litellm] key API ${litellmKeys.configured ? `enabled (${litellmKeys.status().base_url})` : `off — ${litellmKeys.reason}`}`);
 console.log(`[vault] ${vault.locked ? `locked — ${vault.reason}` : 'unlocked'}`
   + ` (${credStore.count()} credential(s) stored)`);
@@ -609,6 +612,15 @@ app.get('/api/history', VIEW, async (req) => {
   if (!target) return { target: null, range, series: {} };
   if (metric) return { target, metric, range, points: tsdb.history(target, metric, since) };
   return { target, range, series: tsdb.historyTarget(target, since) };
+});
+
+// v2.32 ComfyUI nodes: completed jobs and images per hour, for the column modal (from the
+// hub's own job table; the queue history itself comes from /api/history)
+app.get('/api/comfy/hourly', VIEW, async (req, reply) => {
+  const { node, range = '1d' } = req.query || {};
+  if (!node || !comfy.has(String(node))) return reply.code(404).send({ error: 'unknown ComfyUI node' });
+  const sinceMs = Date.now() - (RANGE_SEC[range] || RANGE_SEC['1d'] || 86400) * 1000;
+  return { node, range, series: comfy.hourly(String(node), sinceMs) };
 });
 
 // v2.18: sha256 of each agent script in this checkout, for the machine modal's

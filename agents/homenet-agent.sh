@@ -27,7 +27,7 @@ GPU_NAMES="${GPU_NAMES:-}"         # 可选:逗号分隔卡名,按 idx 对应(AM
 # litellm 采集(仅网关机启用):不设 LITELLM_PG_DSN 就整段跳过,其余机器行为完全不变。
 # DSN 走 homenet_ro 只读账号;psql 在 litellm-db 容器内执行,故主机名用 localhost。
 LITELLM_PG_DSN="${LITELLM_PG_DSN:-}"
-# 入站请求量按容器读访问日志,而每个 litellm 实例各收各的(v2.21 起一机一实例:4000=m110、
+# 入站请求量按容器读访问日志,而每个 litellm 实例各收各的(v2.21 起一机一实例:4000=m110(v2.32 起 m133)、
 # 4001=m25 flashnext、4002=m26 27b+embedding,容器 litellm / litellm-agent / litellm-m26),
 # 只读一个容器就只统计一半流量。这里收一份空格分隔的容器名列表并全部累加。旧的单容器
 # LITELLM_CONTAINER 仍然生效,作为未设新变量时的默认值,老机器的 env 不用改。
@@ -35,13 +35,15 @@ LITELLM_CONTAINERS="${LITELLM_CONTAINERS:-${LITELLM_CONTAINER:-litellm}}"
 LITELLM_DB_CONTAINER="${LITELLM_DB_CONTAINER:-litellm-db}"
 LITELLM_TTL="${LITELLM_TTL:-45}"        # 真正采集的间隔秒(远大于 INTERVAL,不拖慢推送)
 LITELLM_STALE="${LITELLM_STALE:-180}"   # 缓存超过此秒数即丢弃,字段整体省略
-# by_model 第三槽(v2.21):m110 的模型。部署名还会变,所以匹配模式放在 env 里而不是写死:
-#   LITELLM_M110_LIKE   SQL LIKE 模式,如 %orcarouter%;为空则该槽恒为 0
-#   LITELLM_M110_LABEL  卡上的上标,默认 m110
+# by_model 第三槽(v2.21):litellm 4000 那个实例的模型。部署名和后端机器都会变,所以匹配模式放在
+# env 里而不是写死,变量也按实例命名(v2.32 起;4000 的后端 2026-10-29 从 m110 换成 m133):
+#   LITELLM_4000_LIKE   SQL LIKE 模式,如 %flash-next-iq3%;为空则该槽恒为 0
+#   LITELLM_4000_LABEL  卡上的上标,默认 4000
 # 只接受 [A-Za-z0-9._%-],其余字符一律剔除 —— 这个值要拼进 SQL。
-LITELLM_M110_LIKE="$(printf '%s' "${LITELLM_M110_LIKE:-}" | tr -cd 'A-Za-z0-9._%-')"
-LITELLM_M110_LABEL="$(printf '%s' "${LITELLM_M110_LABEL:-m110}" | tr -cd 'A-Za-z0-9._-')"
-[ -n "$LITELLM_M110_LABEL" ] || LITELLM_M110_LABEL=m110
+# 旧名 LITELLM_M110_LIKE / LITELLM_M110_LABEL(v2.21-v2.31)在新名未设时仍然生效,老机器的 env 不用马上改。
+LITELLM_4000_LIKE="$(printf '%s' "${LITELLM_4000_LIKE:-${LITELLM_M110_LIKE:-}}" | tr -cd 'A-Za-z0-9._%-')"
+LITELLM_4000_LABEL="$(printf '%s' "${LITELLM_4000_LABEL:-${LITELLM_M110_LABEL:-4000}}" | tr -cd 'A-Za-z0-9._-')"
+[ -n "$LITELLM_4000_LABEL" ] || LITELLM_4000_LABEL=4000
 
 URL="${HUB_URL%/}/api/push/${AGENT_ID}"
 
@@ -287,7 +289,7 @@ FROM chat
 UNION ALL
 SELECT 'M|'||tag||'|'||reqs::text FROM (
   SELECT CASE WHEN is_emb              THEN 'emb'
-              WHEN model LIKE '__M110_LIKE__' THEN 'm110'
+              WHEN model LIKE '__4000_LIKE__' THEN 'i4000'
               WHEN model LIKE '%27b%'  THEN '27b'
               WHEN model LIKE '%flashnext%' THEN 'flashnext'
               ELSE 'other' END AS tag,
@@ -304,8 +306,8 @@ llm_collect() {
   local raw stats logs ch sp rt ra r5 r5e n ne c m1 m2 m3 m4 m5 out=""
   [ -n "$LITELLM_PG_DSN" ] || return 0      # 未启用则整段跳过(主循环也有守卫,这里保证函数自洽)
   # 模式为空时换成一个不可能匹配的值,该槽恒为 0
-  local m110_like="${LITELLM_M110_LIKE:-__no_m110_model__}"
-  raw=$(llm_sql | sed "s/__M110_LIKE__/${m110_like}/" | timeout 6 docker exec -i "$LITELLM_DB_CONTAINER" \
+  local i4000_like="${LITELLM_4000_LIKE:-__no_4000_model__}"
+  raw=$(llm_sql | sed "s/__4000_LIKE__/${i4000_like}/" | timeout 6 docker exec -i "$LITELLM_DB_CONTAINER" \
           psql "$LITELLM_PG_DSN" -tAq 2>/dev/null) || raw=""
   stats=$(printf '%s\n' "$raw" | grep '^S|' | head -1)
   if [ -n "$stats" ]; then
@@ -319,15 +321,15 @@ llm_collect() {
     if llm_isnum "$ra"; then
       llm_isnum "$rt" || rt=0
       out="$out\"reqs_today\":$rt,"
-      # 五个槽位固定顺序 27b/flashnext/m110/emb/other。桶内没有该类的请求记 0(而非缺失),避免小格错位。
+      # 五个槽位固定顺序 27b/flashnext/4000(v2.32 前叫 m110)/emb/other。桶内没有该类的请求记 0(而非缺失),避免小格错位。
       m1=$(printf '%s\n' "$raw" | awk -F'|' '$1=="M" && $2=="27b"{print $3; exit}')
       m2=$(printf '%s\n' "$raw" | awk -F'|' '$1=="M" && $2=="flashnext"{print $3; exit}')
-      m3=$(printf '%s\n' "$raw" | awk -F'|' '$1=="M" && $2=="m110"{print $3; exit}')
+      m3=$(printf '%s\n' "$raw" | awk -F'|' '$1=="M" && $2=="i4000"{print $3; exit}')
       m4=$(printf '%s\n' "$raw" | awk -F'|' '$1=="M" && $2=="emb"{print $3; exit}')
       m5=$(printf '%s\n' "$raw" | awk -F'|' '$1=="M" && $2=="other"{print $3; exit}')
       llm_isnum "$m1" || m1=0; llm_isnum "$m2" || m2=0; llm_isnum "$m3" || m3=0
       llm_isnum "$m4" || m4=0; llm_isnum "$m5" || m5=0
-      out="$out\"by_model\":{\"m1\":$m1,\"m1_label\":\"27b\",\"m2\":$m2,\"m2_label\":\"flashnext\",\"m3\":$m3,\"m3_label\":\"$LITELLM_M110_LABEL\",\"m4\":$m4,\"m4_label\":\"emb\",\"m5\":$m5,\"m5_label\":\"other\"},"
+      out="$out\"by_model\":{\"m1\":$m1,\"m1_label\":\"27b\",\"m2\":$m2,\"m2_label\":\"flashnext\",\"m3\":$m3,\"m3_label\":\"$LITELLM_4000_LABEL\",\"m4\":$m4,\"m4_label\":\"emb\",\"m5\":$m5,\"m5_label\":\"other\"},"
     fi
   fi
   # 近 5 分钟入站 LLM 请求:走访问日志,天然不含 litellm→后端的健康探测(那些不是入站 HTTP)。

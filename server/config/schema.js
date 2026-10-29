@@ -67,7 +67,7 @@ const sourceSchema = {
   type: 'object',
   required: ['type'],
   properties: {
-    type: { enum: ['http', 'http_push', 'sql', 'exec', 'demo', 'tcp', 'tls', 'prometheus', 'ssh', 'inference_nodes', 'usage', 'usage_projects', 'inference_live', 'node_speed'] },
+    type: { enum: ['http', 'http_push', 'sql', 'exec', 'demo', 'tcp', 'tls', 'prometheus', 'ssh', 'inference_nodes', 'usage', 'usage_projects', 'inference_live', 'node_speed', 'comfyui'] },
     // http
     url: { type: 'string' },
     readiness: { enum: ['llamacpp_models'] },
@@ -205,6 +205,8 @@ const targetsSchema = {
           // v2.20: false = this service is often off on purpose (m110). Unreachable then
           // reads as grey "no service", never red. true/omitted = unreachable is a fault.
           always_on: { type: 'boolean' },
+          // v2.32: what the machine is for, a pill after the machine card's title (LLM / ComfyUI)
+          role: { type: 'string', maxLength: 24 },
           // v2.20 inference_nodes: which rows of today's usage belong to which node, and
           // the host:port endpoints used to find the litellm instances routing to it.
           nodes: {
@@ -214,6 +216,8 @@ const targetsSchema = {
               required: ['id'],
               properties: {
                 id: { type: 'string', pattern: '^[a-zA-Z0-9_]+$' },
+                // v2.32 comfyui: the ComfyUI server's base URL (read-only GETs + a listening /ws)
+                url: { type: 'string', pattern: '^https?://[^\\s]+$' },
                 endpoints: { type: 'array', items: { type: 'string' } },         // chat host:port
                 // v2.25: where the live state is read (inference_live target): llama.cpp
                 // /slots or Strata /status; key_env names the .env variable with Strata's key
@@ -297,7 +301,7 @@ const gridCard = {
   required: ['type'],
   properties: {
     target: { type: 'string' },
-    type: { enum: ['machine', 'token', 'service', 'history', 'info', 'stack', 'table', 'nodes'] },
+    type: { enum: ['machine', 'token', 'service', 'history', 'info', 'stack', 'table', 'nodes', 'comfy'] },
     children: { type: 'array', items: { type: 'string' } }, // B12: stack child target ids
     // v2.22: columns the card takes in the grid (default 1). 2 falls back to the whole row
     // when the screen only has one column; 'full' is always the whole row.
@@ -305,11 +309,12 @@ const gridCard = {
     // v2.23: the grid packer may widen this card to close a gap at the end of its row.
     stretch: { type: 'boolean' },
     // v2.20 nodes card: one column per inference node, in instance-port order.
+    // v2.32 comfy card: one column per ComfyUI node (`node` = id in the comfyui target; no probe).
     nodes: {
       type: 'array',
       items: {
         type: 'object',
-        required: ['node', 'probe'],
+        required: ['node'],
         properties: {
           node: { type: 'string' },           // id inside the inference_nodes target
           name: { type: 'string' }, name_en: enString,
@@ -447,6 +452,9 @@ const gridCard = {
     // A table card is nothing without its target's rows and a column map to name them.
     { if: { properties: { type: { const: 'table' } } }, then: { required: ['target', 'columns'] } },
     { if: { properties: { type: { const: 'stack' } } }, then: { required: ['children', 'items'] } }, // B12; items required (B12-addendum)
+    // a nodes card column is nothing without its probe target; a comfy card reads one comfyui target
+    { if: { properties: { type: { const: 'nodes' } } }, then: { required: ['target'], properties: { nodes: { items: { required: ['node', 'probe'] } } } } },
+    { if: { properties: { type: { const: 'comfy' } } }, then: { required: ['target', 'nodes'] } },
   ],
   additionalProperties: true,
 };

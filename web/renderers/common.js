@@ -134,10 +134,12 @@ export function kvItem(label, m, tpl = null, { sub = '', itemCls = '' } = {}) {
 // Card model consumed by mountCards (matches the .24 shell-persist contract).
 // B23: `kind` lets mountCards route a click to the right modal without re-deriving
 // the card's type from the layout — the renderer already knows what it built.
-export function card({ key, title, tag = '', body, accent = '', clickable = false, stale = false, kind = '', detail = null }) {
+// v2.32: `role` = the purpose pill after the title (LLM / ComfyUI); `tagShort` / `tagShort2` =
+// the header tag's shorter forms for a narrow card (fit.js data-short / data-short2).
+export function card({ key, title, tag = '', body, accent = '', clickable = false, stale = false, kind = '', detail = null, role = '', tagShort = null, tagShort2 = null }) {
   // `detail` is whatever a card's modal needs, handed over by the renderer that already
   // had it. mountCards ignores it; openCardModal passes the whole card object through,
   // and the onclick handler is reassigned on every render, so this is always the data
   // from the latest snapshot rather than a stale closure.
-  return { key, title, tag, body, accent, clickable, stale, kind, detail };
+  return { key, title, tag, body, accent, clickable, stale, kind, detail, role, tagShort, tagShort2 };
 }

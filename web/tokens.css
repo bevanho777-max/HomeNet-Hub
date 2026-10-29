@@ -252,6 +252,12 @@ html, body {
 .card h2 .tag .tag-sep { margin: 0 var(--s2); vertical-align: middle; }
 /* B13: vertical hairline between combined header_right parts (e.g. badge │ uptime) */
 .tag-sep { width: 1px; height: 12px; display: inline-block; vertical-align: middle; background: linear-gradient(180deg, transparent, var(--hair2), transparent); }
+/* v2.32 the purpose pill after a machine card's title (target `role`: LLM / ComfyUI) */
+.card h2 .role { flex: none; font-size: 10.5px; font-weight: 600; letter-spacing: 0.5px; line-height: 14px; padding: 1px 7px; border-radius: 9px;
+  color: var(--accent, var(--muted)); border: 1px solid color-mix(in srgb, var(--accent, var(--muted)) 45%, transparent); }
+/* v2.32 an always_on:false machine that is off: 未开机 where the uptime was, grey, never red */
+.card h2 .tag .off-word { color: var(--muted); }
+.mach.mach-off { filter: grayscale(0.85); }
 /* ===== 身份识别色:染 h2 + 实体 border(辉光由 .card 基规则第三层 var(--accent) 承载,v1 同构)===== */
 .card[style*="--accent"] h2 { color: var(--accent); }
 .card[style*="--accent"] {
@@ -363,6 +369,12 @@ h2:empty { display: none; } /* 堆叠卡外框无标题时不留空行 */
   .node-col:last-child { padding-bottom: 0; }
 }
 @container card (min-width: 560px) and (max-width: 900px) { .nodes-grid { --r: 1; --r1: 2; --kcols: repeat(6, minmax(0, 1fr)); } }
+
+/* v2.32 ComfyUI 节点: the same column layout with --ncols columns (two: m110 / m136) side by
+   side once the card is wider than 900px; six cells to a row once a column has ~550px. Below
+   900px the columns stack, as the nodes card's do (the rules above). */
+@container card (min-width: 901px) { .nodes-grid.comfy-grid { grid-template-columns: repeat(var(--ncols, 2), minmax(0, 1fr)); --kcols: repeat(3, minmax(0, 1fr)); } }
+@container card (min-width: 1140px) { .nodes-grid.comfy-grid { --r: 1; --r1: 2; --kcols: repeat(6, minmax(0, 1fr)); } }
 
 /* v2.26 concurrency bar (a node that runs several requests at once): one cell per stream,
    in the last row of the node's cell grid. When the stream count fits the cell columns

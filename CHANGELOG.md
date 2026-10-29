@@ -49,6 +49,44 @@ on screen is the one from `package.json`, and this file is what needs fixing.
 
 ---
 
+## v2.32.0 — 2026-10-29
+
+**两台 Windows 笔电上板(m133、m136);「ComfyUI 节点」卡;litellm 4000 改接 m133;常关机的机器卡变灰写「未开机」。**
+
+*Rebuild required — `server/` 和 `web/` changed. 配置:`config/targets.yaml`、`config/layout.yaml`(见下);
+`.env` 新增 `PUSH_TOKEN_M133` / `PUSH_TOKEN_M136`(docker-compose.yml 已透传)。m24 的 agent 改了变量名(兼容旧名)。*
+
+- **机器卡**:m133(RTX 4070 Laptop,LLM)与 m136(RTX 5090 Laptop,ComfyUI)排在 m26 之后,同 m110 的
+  Windows agent(`agents/homenet-agent.ps1`,任务计划 + 每分钟保活,REBUILD §8.6)。标签取自 nvidia-smi 的型号。
+  - 目标新字段 `role`:标题旁的用途小标签(m110、m136 = ComfyUI;m25、m26、m133 = LLM)。
+  - `always_on: false` 的机器(m110、m133、m136)离线时**不再显示「Host offline」**:卡片保持原样变灰,
+    环和格子是「—」,只留关机也不变的(显存 / 内存总量「—/8G」、最后一次上报的磁盘用量),标题右侧写
+    「未开机」(悬停看最后上报时间)。不着红。读不到的值(笔电功耗上限等)照旧是「—」。
+  - 标题右侧的标签加了短格式(只留型号 → 去掉 RTX/RX 前缀),窄卡不再被截断。
+- **ComfyUI 节点卡**(全宽,推理节点下面;m110、m136 各一栏):状态(生图中 / 空闲 / 未开机)、队列(跑 N · 排队 K)、
+  当前进度(第 x / y 步、已耗时)、最近完成、今日张数、平均每张。点一栏 → 队列长度与每小时完成数(张 / 任务)。
+  - 新采集器 `server/collectors/comfyui.js`(`type: comfyui`),**只读**:每 2 秒两个极小的 `GET /api/jobs`
+    (运行中 / 排队),任务结束时读一次已完成列表存进 hub 自己的表 `comfy_jobs`(今日张数、平均每张不随
+    ComfyUI 重启清零),每分钟 `/system_stats`(版本、GPU、显存);外加一条只听不发的 `/ws`(Node 20 没有
+    WebSocket,内置一个最小的只收客户端)取步数。从不提交 / 取消任务,不读 `/queue`、`/history`。
+  - **步数只对不带 client_id 提交的任务可见**:ComfyUI 只把 `progress` 发给提交任务的客户端,浏览器里提交的
+    任务显示「已 x:xx · 步数不可见」(悬停有说明)。运行中任务的开始时间 ComfyUI 不报,从 hub 第一次看到它
+    在跑算起;hub 启动时任务已在跑则标「≥」。
+  - 连不上退避到 30 秒一次;离线整栏变灰,今日数字照旧(来自 hub 的表)。新接口 `/api/comfy/hourly`。
+  - 顶部「ComfyUI · 110」胶囊并进这张卡,`svc_imagegen` 目标删除。
+- **推理节点卡第一栏 m110 → 「m133 · litellm 4000」**(`always_on: false`):m133 的 Strata(8080,`--parallel 1`,
+  不带 API key)经引擎自动识别、实时状态、并发条、计数器与 Prometheus(http_sd 自动加入 133:8080)。
+  `inference110` / `speed110` 换成 `inference133` / `speed133`。
+- **网关卡 By Model**:第三槽从「m110 的模型」改成「litellm 4000 的模型」(现在是 m133 的
+  `qwen3.8-flash-next-iq3_xxs`,上标 `flash-iq3`,窄格缩写 `iq3`)。agent 变量按实例命名:
+  `LITELLM_4000_LIKE` / `LITELLM_4000_LABEL`;旧名 `LITELLM_M110_*` 在新名未设时仍生效。
+- **版面**:八张机器卡在 1 / 2 / 3 / 4 栏都无空洞(三栏 3 + 3 + 2,最后一行由 stretch 补满);顺序
+  机器卡 → 推理节点 → ComfyUI 节点 → Token Usage、Per-Project → Dual Compare(下拉加 m133、m136)。
+- schema:`source.type` 加 `comfyui`;目标加 `role`、节点项加 `url`;卡片类型加 `comfy`(nodes 卡的 `probe`
+  改为只对 nodes 卡必填)。`config.example/` 加 ComfyUI 节点与 Windows 笔电的示例。
+
+---
+
 ## v2.31.1 — 2026-10-29
 
 **真实客户端 IP:只信任来自 Lucky 的转发头,经 Cloudflare 的公网访客取 `CF-Connecting-IP`。**

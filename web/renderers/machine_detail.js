@@ -276,7 +276,7 @@ async function load() {
   const canvas = $('#machineModalCanvas');
   const legend = $('#machineModalLegend');
   if (!canvas || !targetId) return;
-  if (nodeCtx) return loadNode(canvas, legend);
+  if (nodeCtx) return nodeCtx.kind === 'comfy' ? loadComfy(canvas, legend) : loadNode(canvas, legend);
   if (inflight) inflight.abort();
   const ctrl = new AbortController();
   inflight = ctrl;
@@ -354,6 +354,7 @@ async function load() {
 // language change can re-derive it without app.js having to remember which card was
 // clicked. Same string as before: the target's display name plus " Detail".
 function modalTitle(id) {
+  if (nodeCtx?.kind === 'comfy') return t('comfy_modal_title', cv(nodeCtx.col, 'name') || nodeCtx.col.node);
   if (nodeCtx) return t('node_modal_title', cv(nodeCtx.col, 'name') || nodeCtx.col.node);
   const target = (CONFIG?.targets || []).find((x) => x.id === id);
   return `${cv(target, 'name') || id} Detail`;
@@ -471,6 +472,67 @@ async function loadNode(canvas, legend) {
       setLine(extra[2].title, t('node_panel_streams'));
       drawMulti(extra[2].canvas, lvh, extra[2].legend, { metrics: lm, subs, height: 170, emptyText: t('chart_no_data_range', range), maxGapSec, leftMax: Math.max(4, 4 * Math.ceil(nStreams / 4)) });
     }
+    clearError();
+  } catch (e) {
+    if (inflight !== ctrl) return;
+    showError(timedOut ? t('chart_timeout', range) : t('chart_load_failed', e?.message || e), true);
+  } finally {
+    clearTimeout(timer);
+    if (inflight === ctrl) inflight = null;
+  }
+}
+
+// ── v2.32 ComfyUI 节点 modal ──────────────────────────────────────────────
+// Same shell again. Two panels: the queue (running / waiting, sampled by the hub every poll,
+// one point per 5 s in the store) and what finished per hour (images and jobs, from the hub's
+// own job table via /api/comfy/hourly -- zero-filled only from when the hub first read the node).
+export function openComfyModal({ col, target, ranges: customRanges }) {
+  nodeCtx = { kind: 'comfy', col, target };
+  targetId = target;
+  ranges = Array.isArray(customRanges) && customRanges.length ? customRanges : ['1d', '3d', '7d'];
+  if (!ranges.includes(range)) range = ranges[0];
+  setLine($('#machineModalTitle'), modalTitle(targetId));
+  $('#machineModal').classList.add('open');
+  fitLines($('#machineModal'));
+  clearError();
+  const note = $('#machineModalNote'); if (note) { note.hidden = true; note.textContent = ''; }
+  const ag = $('#machineModalAgent'); if (ag) ag.hidden = true;
+  showParts(null);
+  $('#machineModalRanges').innerHTML = ranges.map((r) =>
+    `<button data-r="${esc(r)}" class="${r === range ? 'active' : ''}">${esc(r)}</button>`).join('');
+  load();
+}
+
+async function loadComfy(canvas, legend) {
+  const { col, target } = nodeCtx;
+  if (inflight) inflight.abort();
+  const ctrl = new AbortController();
+  inflight = ctrl;
+  let timedOut = false;
+  const timer = setTimeout(() => { timedOut = true; ctrl.abort(); }, 15000);
+  const get = async (url) => {
+    const r = await fetch(url, { cache: 'no-store', signal: ctrl.signal });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    return (await r.json()).series || {};
+  };
+  try {
+    const p = col.node;
+    const [q, h] = await Promise.all([
+      get(`/api/history?target=${encodeURIComponent(target)}&range=${range}`),
+      get(`/api/comfy/hourly?node=${encodeURIComponent(p)}&range=${range}`),
+    ]);
+    if (inflight !== ctrl) return;
+    secondPanel(false);
+    const extra = extraGpuPanels(1);
+    mainTitle(t('comfy_panel_queue'));
+    const maxGapSec = Math.max(900, 3 * Math.ceil((SPAN_SEC[range] || 86400) / 250));
+    const qm = { [`${p}_running`]: { label: t('comfy_series_running') }, [`${p}_pending`]: { label: t('comfy_series_pending') } };
+    drawMulti(canvas, q, legend, { metrics: qm, height: 190, emptyText: t('chart_no_data_range', range), maxGapSec, subs: [
+      { k: `${p}_running`, color: '#5eead4', axis: 'R', unit: '' }, { k: `${p}_pending`, color: '#f7c948', axis: 'R', unit: '' }] });
+    const hm2 = { [`${p}_images_h`]: { label: t('comfy_series_images') }, [`${p}_jobs_h`]: { label: t('comfy_series_jobs') } };
+    setLine(extra[0].title, t('comfy_panel_hourly'));
+    drawMulti(extra[0].canvas, h, extra[0].legend, { metrics: hm2, height: 190, emptyText: t('chart_no_data_range', range), subs: [
+      { k: `${p}_images_h`, color: '#ff9d5c', axis: 'R', unit: '' }, { k: `${p}_jobs_h`, color: '#6aa9ff', axis: 'R', unit: '' }] });
     clearError();
   } catch (e) {
     if (inflight !== ctrl) return;
