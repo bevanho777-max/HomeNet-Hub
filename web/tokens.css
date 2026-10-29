@@ -68,10 +68,20 @@ button, input, select, textarea { font-variant-numeric: tabular-nums; }
    reintroduce the bug and no one has to remember the workaround. */
 [hidden] { display: none !important; }
 
-/* v2.22 page width: everything at page level sits in one centred column, at most 2400px
-   wide. --gutter is the side margin: the usual 24px (16px on phones), or whatever centres
-   the 2400px column on a wider screen. % here is of the body width, which is the viewport. */
-:root { --page-max: 2400px; --gutter-min: var(--s6); }
+/* v2.22 page width: everything at page level sits in one centred column. --gutter is the side
+   margin: the usual 30px (16px on phones), or whatever centres the column on a wider screen.
+   % here is of the body width, which is the viewport.
+   v2.33: the column is exactly as wide as the machine cards' columns. A machine card is a fixed
+   --card-w (420px) and never widened or stretched; the board has 1, 2 or 4 such columns -- the
+   counts that divide 8, so the eight machine cards fill every row with no hole -- never 3.
+   Header, chips, grid, Dual Compare and footer all use this width, centred: a window between two
+   tiers keeps the narrower one and the difference becomes side margin, not wider cards.
+   Tiers by viewport width (gap --s4 16px, gutters 2 x 30px):
+     4 columns from 4 x 420 + 3 x 16 + 60 = 1788px,  2 columns from 2 x 420 + 16 + 60 = 916px,
+     1 column below (a phone narrower than 420 + 2 x 16 shrinks that one column to fit). */
+:root { --card-w: 420px; --cols: 1; --page-max: var(--card-w); --gutter-min: var(--s6); }
+@media (min-width: 916px)  { :root { --cols: 2; --page-max: calc(2 * var(--card-w) + var(--s4)); } }
+@media (min-width: 1788px) { :root { --cols: 4; --page-max: calc(4 * var(--card-w) + 3 * var(--s4)); } }
 @media (max-width: 560px) { :root { --gutter-min: var(--s4); } }
 
 html, body {
@@ -191,23 +201,20 @@ html, body {
 .chip .lat { color: var(--muted2); font-size: 11px; }
 
 /* ---------- 卡片网格 ---------- */
-/* v2.22 grid. Column count is fixed per viewport band (1 / 2 / 3 / 4, never more), not
-   auto-fit: auto-fit kept adding columns on wide screens until a card was ~310px, which
-   is what squeezed the token boxes and the gateway's By Model. A card takes 1 column by
-   default; layout `span: 2` / `span: full` widens it (span-2 falls back to the whole row
-   when there is only one column). Stretch makes every card in a row as tall as the tallest.
+/* v2.22 grid. A card takes 1 column by default; layout `span: 2` / `span: full` widens it
+   (span-2 falls back to the whole row when there is only one column). Stretch makes every card
+   in a row as tall as the tallest.
    v2.23: WHERE each card goes is decided by packGrid() in app.js (explicit grid-row /
    grid-column, rows closed by widening `stretch` cards, never a hole); the span classes
-   below are only the no-JS fallback. --cols is read back by packGrid(). */
+   below are only the no-JS fallback. --cols is read back by packGrid().
+   v2.33: --cols (1 / 2 / 4) and the column width come from :root above; the grid's content box
+   is exactly --cols fixed-width columns, so a column is --card-w wide at every window width. */
 .grid { display: grid; gap: var(--s4);
   padding: var(--s4) max(var(--gutter-min), calc((100% - var(--page-max)) / 2)) var(--s5);
-  --cols: 1; grid-template-columns: repeat(var(--cols), minmax(0, 1fr));
+  grid-template-columns: repeat(var(--cols), minmax(0, 1fr));
   align-items: stretch; }
-@media (min-width: 700px)  { .grid { --cols: 2; } }
-@media (min-width: 1200px) { .grid { --cols: 3; } }
-@media (min-width: 1800px) { .grid { --cols: 4; } }
 .grid > .card.span-2 { grid-column: span 2; }
-@media (max-width: 699px) { .grid > .card.span-2 { grid-column: 1 / -1; } }
+@media (max-width: 915px) { .grid > .card.span-2 { grid-column: 1 / -1; } }
 .grid > .card.span-full, .grid > .card.card-wide { grid-column: 1 / -1; }
 .card {
   position: relative; border-radius: var(--radius); padding: var(--s4) var(--s4) var(--s5);
@@ -352,7 +359,9 @@ h2:empty { display: none; } /* 堆叠卡外框无标题时不留空行 */
 /* v2.27: from a ~550px column on, the six cells sit in one row (status and latency a little
    narrower, usage a little wider) -- three to a row there would leave wide cells around a
    two-character status */
-@container card (min-width: 1700px) {
+/* (v2.33: from 1690px, was 1700px -- in the four-column tier the card is a fixed 1728px, 1696px
+   inside, and three cells to a row there left a small count alone in a 187px cell) */
+@container card (min-width: 1690px) {
   .nodes-grid { --r: 1; --r1: 2;
     --kcols: minmax(0, 0.8fr) minmax(0, 0.8fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.2fr) minmax(0, 1.2fr); }
   /* six to a row: a little less gap and side padding, so each cell keeps ~56px of text room */
@@ -392,7 +401,7 @@ h2:empty { display: none; } /* 堆叠卡外框无标题时不留空行 */
 .node-streams .sbar > i { display: block; height: 100%; background: var(--cyan); border-radius: 2px; }
 .node-streams .sbar.none { visibility: hidden; }
 /* six columns: 3 streams span 2 each, 2 streams span 3 each, both on the grid's columns */
-@container card (min-width: 1700px) {
+@container card (min-width: 1690px) {
   .node-streams[data-m="2"] { grid-template-columns: subgrid; }
   .node-streams[data-m="3"] > .item { grid-column: span 2; }
   .node-streams[data-m="2"] > .item { grid-column: span 3; }
@@ -532,8 +541,11 @@ h2:empty { display: none; } /* 堆叠卡外框无标题时不留空行 */
 @container (min-width: 820px) { .kv[data-n="5"]:not(.node-kv) { grid-template-columns: repeat(5, minmax(0, 1fr)); } }
 /* machine card: rings above cells; six cells (a two-wide By Model counts as two) go 3 x 2
    once each cell can be ~110px, so a 6-cell card and a 4-cell card (2 x 2) next to it have
-   the same two rows of cells */
-@container card (min-width: 340px) { .kv[data-n="6"] { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+   the same two rows of cells.
+   v2.33: from 300px (was 340px) -- machine cards are one fixed size, and on a phone the one
+   column is narrower than 420px (326px inside at 390px): three rows of cells there made the
+   six-cell cards taller than the four-cell one. A cell is ~95px there; values shrink to fit. */
+@container card (min-width: 300px) { .kv[data-n="6"] { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 /* v2.30 a machine card the grid has widened -- the 4 + 2 machine row on four columns: two
    cards, each two columns wide, 830-1160px inside. Its cells keep about the width they have
    in a one-column card (~130-150px; a wider cell is a short reading in a wide box) and the
@@ -781,7 +793,9 @@ h2:empty { display: none; } /* 堆叠卡外框无标题时不留空行 */
 
 @keyframes breathe { 0%,100% { opacity: 1; } 50% { opacity: 0.45; } }
 
-@media (max-width: 820px) { .hist-split { grid-template-columns: 1fr; } }
+/* v2.33: by the section's own width, not the window's -- the section is the board's width now
+   (420 / 856 / 1728px), and three panes need ~1084px; below that they stack (never 2 + 1) */
+@container (max-width: 1083px) { .hist-split { grid-template-columns: 1fr; } }
 @media (max-width: 560px) {
   .grid { padding-top: var(--s3); padding-bottom: var(--s4); }
   .big { font-size: 32px; }
@@ -870,7 +884,7 @@ h2:empty { display: none; } /* 堆叠卡外框无标题时不留空行 */
 .addDel:hover:not(:disabled) { border-color: var(--red); color: var(--red); }
 .addDel:disabled { opacity: .5; cursor: default; }
 
-@media (max-width: 560px) {
+@media (max-width: 915px) {   /* v2.33: the 420px one-column header too */
   .addOpen { padding: 4px 9px; font-size: 11px; }
   .addName { width: 96px; }
   .addCap { flex-wrap: wrap; }
@@ -917,10 +931,11 @@ h2:empty { display: none; } /* 堆叠卡外框无标题时不留空行 */
 .langBtn + .langBtn { border-left: 1px solid var(--hair); }
 .langBtn:hover { color: var(--text); }
 .langBtn.active { color: var(--text); background: var(--glass); }
-@media (max-width: 560px) { .langBtn { padding: 4px 8px; font-size: 11px; } }
+@media (max-width: 915px) { .langBtn { padding: 4px 8px; font-size: 11px; } }   /* v2.33: the 420px one-column header too */
 /* v2.23: header controls keep their words on one line; on a phone the row wraps instead
    of squeezing the language switch (it used to clip to "中 E") or a button to one
    character per line. */
 .addOpen, .langBtn { white-space: nowrap; }
 .langSw { flex: none; }
-@media (max-width: 560px) { .meta { flex-wrap: wrap; justify-content: flex-end; gap: var(--s2) var(--s3); } }
+/* v2.33: also in the one-column tier (window <= 915px): the header is then 420px wide, as narrow as a phone */
+@media (max-width: 915px) { .meta { flex-wrap: wrap; justify-content: flex-end; gap: var(--s2) var(--s3); } }

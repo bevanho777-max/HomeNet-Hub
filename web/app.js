@@ -249,7 +249,7 @@ function fitBoard() {
   fitCards([...document.querySelectorAll('#grid > .card')]);
 }
 
-// CSS decides HOW MANY columns (1/2/3/4 by screen width, see .grid in tokens.css); this
+// CSS decides HOW MANY columns (v2.33: 1/2/4 by screen width, see :root in tokens.css); this
 // decides WHERE each card goes. Rows are filled in config order by span. A row that ends
 // short is closed by (1) widening the row's `stretch` cards in proportion to their span,
 // or, when it has none, (2) pulling up later cards that fit, and only then (3) widening
@@ -260,6 +260,9 @@ function fitBoard() {
 // every column count; the machine row before it closes by widening its own cards.
 // Placement is written as explicit grid-row / grid-column, so CSS `span` classes are just
 // the no-JS fallback.
+// v2.33: the column count is 1, 2 or 4 (tokens.css :root) and machine cards carry no
+// `stretch`: eight of them fill whole rows at every count, so nothing here widens a machine
+// card any more; the rules above still close a short row on a board with another card count.
 export function packLayout(cards, cols) {
   const pending = cards.map((c) => ({ ...c, w: c.full ? cols : Math.min(c.span || 1, cols) }));
   const rows = [];

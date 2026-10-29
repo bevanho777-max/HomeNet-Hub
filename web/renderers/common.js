@@ -122,7 +122,10 @@ export function kvItem(label, m, tpl = null, { sub = '', itemCls = '' } = {}) {
       const hot = nums.filter((x) => x.v === hi);
       const cold = nums.find((x) => x.v === lo);
       const bays = hot.map((x) => x.p.label).filter(Boolean).join(',');
-      alt = `<span class="alt-form"><span class="value fit"><i class="${lvClass(hot[0].p.level)}">${esc(hot[0].p.display)}°</i>${bays ? `<sup>${esc(bays)}</sup>` : ''}`
+      // (v2.33: and when even that does not fit -- several bays at the same top temperature in a
+      // phone-width cell -- the two temperatures alone, the bays in the title)
+      const bare = `${hot[0].p.display}° · ${cold.p.display}°`;
+      alt = `<span class="alt-form"><span class="value fit"${bays ? ` data-short="${esc(bare)}"` : ''}><i class="${lvClass(hot[0].p.level)}">${esc(hot[0].p.display)}°</i>${bays ? `<sup>${esc(bays)}</sup>` : ''}`
         + `<span class="mm-sep">·</span><i class="${lvClass(cold.p.level)}">${esc(cold.p.display)}°</i></span>`
         + `<span class="sub fit">${esc(t('abbr_hdd_maxmin'))}</span></span>`;
     }
