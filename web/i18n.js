@@ -409,7 +409,7 @@ const ZH = {
   stream_no_cache: '无缓存',
   node_no_queue: '无排队',
   node_sub_max: (m) => `最多 ${m} 路并发`,
-  node_sub_single: '单路',
+  node_sub_single: '单路推理',             // (v2.34: was 单路 -- two characters alone in a 150px cell; 单路 is now only the short form)
   node_sub_nolive: '无实时状态',
   // v2.29 counter source check + the engine found on the node
   node_ctr_err: '计数来源异常',

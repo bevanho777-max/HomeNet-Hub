@@ -138,11 +138,11 @@ export function kvItem(label, m, tpl = null, { sub = '', itemCls = '' } = {}) {
 // B23: `kind` lets mountCards route a click to the right modal without re-deriving
 // the card's type from the layout — the renderer already knows what it built.
 // v2.32: `role` = the purpose pill after the title (LLM / ComfyUI); `tagShort` / `tagShort2` =
-// the header tag's shorter forms for a narrow card (fit.js data-short / data-short2).
-export function card({ key, title, tag = '', body, accent = '', clickable = false, stale = false, kind = '', detail = null, role = '', tagShort = null, tagShort2 = null }) {
+// the header tag's shorter forms for a narrow card (fit.js data-short / data-short2; v2.34 data-short3).
+export function card({ key, title, tag = '', body, accent = '', clickable = false, stale = false, kind = '', detail = null, role = '', tagShort = null, tagShort2 = null, tagShort3 = null }) {
   // `detail` is whatever a card's modal needs, handed over by the renderer that already
   // had it. mountCards ignores it; openCardModal passes the whole card object through,
   // and the onclick handler is reassigned on every render, so this is always the data
   // from the latest snapshot rather than a stale closure.
-  return { key, title, tag, body, accent, clickable, stale, kind, detail, role, tagShort, tagShort2 };
+  return { key, title, tag, body, accent, clickable, stale, kind, detail, role, tagShort, tagShort2, tagShort3 };
 }

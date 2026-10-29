@@ -86,7 +86,7 @@ export function renderToken(gridCard, target, snap, liveView = null) {
   };
   const rowsHtml = cols.map((c) => `<tr${c.key === 'total' ? ' class="tot"' : ''}><td class="tk-name" title="${esc(c.label)}"><span class="sw" style="background:${esc(c.color)}"></span><span style="color:${esc(c.color)}">${esc(c.label)}</span></td>`
     + heads.map(([k]) => `<td class="num${k === 'll' ? ' tk-ll' : ''}">${esc(fig(c, k))}</td>`).join('') + '</tr>').join('');
-  const table = `<table class="tbl tk-tbl"><colgroup><col class="c-name">${heads.map(() => '<col class="c-num">').join('')}</colgroup>`
+  const table = `<table class="tbl tk-tbl" style="--nn:${heads.length}"><colgroup><col class="c-name">${heads.map(() => '<col class="c-num">').join('')}</colgroup>`
     + `<thead><tr><th></th>${heads.map(([, h]) => `<th class="num" title="${esc(h)}">${esc(h)}</th>`).join('')}</tr></thead><tbody>${rowsHtml}</tbody></table>`;
 
   // v2.23: bar heights are fractions (--f), not pixels, so the chart grows with the space it

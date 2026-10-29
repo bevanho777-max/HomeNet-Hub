@@ -333,6 +333,10 @@ const gridCard = {
     // v2.27 machine card: { <item metric>: <metric> } -- the second metric is shown on that
     // cell's second line (label + value) instead of taking a cell of its own
     subs: { type: 'object', additionalProperties: { type: 'string' } },
+    // v2.34 machine card: { <item metric>: <label> } -- a cell's own label where the metric's
+    // (shared with its ring) says too little in a cell
+    cell_labels: { type: 'object', additionalProperties: { type: 'string' } },
+    cell_labels_en: { type: 'object', additionalProperties: { type: 'string' } },
     // metric-key strings (machine/service) OR {label,value,level} objects (info, §12-step4)
     items: {
       type: 'array',

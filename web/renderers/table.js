@@ -92,6 +92,12 @@ export function renderTable(gridCard, target, snap) {
   // column by the longest figure it can hold, a text column by its longest value); the
   // identity column takes the rest and cuts a long name (full text in title)
   const head = allCols.map((c, i) => `<th${cls(c, i)} title="${esc(c.label)}">${esc(c.label)}</th>`).join('');
+  // v2.34 how many figure / text columns show, on the front alone and with the .col-x ones:
+  // tokens.css sizes the identity column from them (a figure column is a cell, at most
+  // --cell-max wide; the identity column takes the rest only once they all are)
+  const kinds = (list) => list.map((c) => colKind(c, 1));
+  const n = (list, k) => kinds(list).filter((x) => x === k).length;
+  const colCounts = `--nn:${n(cols.slice(1), 'num')};--nt:${n(cols.slice(1), 'txt')};--nnx:${n(allCols.slice(1), 'num')};--ntx:${n(allCols.slice(1), 'txt')}`;
   const body = shown.map((r) => `<tr>${
     // v2.22: the identity cell may ellipsise on a narrow card; its title carries the full text
     allCols.map((c, i) => { const v = esc(cell(val(r, c.key), c.format)); return i ? `<td${cls(c, i)}>${v}</td>` : `<td title="${v}">${v}</td>`; }).join('')
@@ -110,7 +116,7 @@ export function renderTable(gridCard, target, snap) {
     key, title, accent, kind: 'table',
     clickable: overflow,
     tag: gridCard.header_right ? String(gridCard.header_right) : '',
-    body: `<div class="tbl-wrap"><table class="tbl${extra.length ? ' has-x' : ''}"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>${more}${hint}`,
+    body: `<div class="tbl-wrap"><table class="tbl${extra.length ? ' has-x' : ''}" style="${colCounts}"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>${more}${hint}`,
     // Handed to the modal as-is: it needs every row and every column, not the slice the
     // card front shows. These are the same objects the server sent, which have already
     // had anything unsafe removed — see table_detail.js for the second line of defence.

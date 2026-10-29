@@ -111,7 +111,7 @@ function mountCards(containerId, cards) {
 // v2.32 the tag's short forms (fit.js swaps them in when the header is too narrow)
 function syncTagShort(tagEl, c) {
   if (!tagEl) return;
-  for (const [k, v] of [['short', c.tagShort], ['short2', c.tagShort2]]) {
+  for (const [k, v] of [['short', c.tagShort], ['short2', c.tagShort2], ['short3', c.tagShort3]]) {
     if (v) { if (tagEl.dataset[k] !== v) tagEl.dataset[k] = v; } else if (k in tagEl.dataset) delete tagEl.dataset[k];
   }
 }

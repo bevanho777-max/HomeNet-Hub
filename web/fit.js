@@ -3,7 +3,7 @@
 // in order,
 //   (a) a smaller font, in 0.5px steps, down to a floor -- 13px for a value, 10px for a
 //       label or second line (data-min overrides);
-//   (b) its short form: data-short (then data-short2, shorter still) on the element, or, for a cell whose short
+//   (b) its short form: data-short (then data-short2, data-short3, shorter still) on the element, or, for a cell whose short
 //       form is a different arrangement (HDD temperatures -> "max · min"), the .alt-form
 //       sibling the renderer put next to it (the item gets .is-alt), again from full size;
 //   (b2) v2.29: no written short form left -- the text without its trailing " · " parts,
@@ -78,8 +78,8 @@ function fitOne(el, base) {
     }
     return;
   }
-  // short forms, longest first (data-short, then data-short2), then (b2)
-  for (const sh of [el.dataset.short, el.dataset.short2, ...segmentForms(el)]) {
+  // short forms, longest first (data-short, data-short2, data-short3), then (b2)
+  for (const sh of [el.dataset.short, el.dataset.short2, el.dataset.short3, ...segmentForms(el)]) {
     if (sh == null) continue;
     if (el._fitFull == null) el._fitFull = el.innerHTML;
     el.textContent = sh;
@@ -94,7 +94,7 @@ function fitOne(el, base) {
 
 // (b2) the text without its trailing " · " parts, longest first
 function segmentForms(el) {
-  const base = el.dataset.short2 ?? el.dataset.short ?? (el._fitFull != null
+  const base = el.dataset.short3 ?? el.dataset.short2 ?? el.dataset.short ?? (el._fitFull != null
     ? (() => { const d = document.createElement('div'); d.innerHTML = el._fitFull; return d.textContent; })() : el.textContent);
   const parts = String(base).split(' · ');
   const out = [];
@@ -155,7 +155,7 @@ function fitInline(el) {
   const base = parseFloat(getComputedStyle(el).fontSize);
   const floor = Math.min(floorOf(el), base);
   if (shrink(el, base, floor) != null) return;
-  for (const sh of [el.dataset.short, el.dataset.short2, ...segmentForms(el)]) {
+  for (const sh of [el.dataset.short, el.dataset.short2, el.dataset.short3, ...segmentForms(el)]) {
     if (sh == null) continue;
     if (el._fitFull == null) el._fitFull = el.innerHTML;
     el.textContent = sh;

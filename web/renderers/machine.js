@@ -72,6 +72,8 @@ export function renderMachine(gridCard, target, snap, metrics) {
   const multi = Array.isArray(gridCard.header_right) && gridCard.header_right.length > 1 && target.badge;
   const tagShort = multi ? target.badge : b1;
   const tagShort2 = multi ? b1 : b2;
+  // (v2.34: and for the two-part header the bare model too -- "5090" on a 293px narrow card in English)
+  const tagShort3 = multi && b1 ? b2 : null;
 
   // v2.18: fewer GPUs detected than the target's gpu_count. Said in words on the card
   // face, because the aggregates alone would look perfectly healthy with one card gone.
@@ -80,7 +82,7 @@ export function renderMachine(gridCard, target, snap, metrics) {
     ? `<div class="gpu-missing">${esc(t('gpu_cards_missing', gc.value, gc.expected))}</div>` : '';
 
   return card({
-    key: target.id, title, tag, tagShort, tagShort2, body: `${pushAlert(snap)}${warn}${machineBody(gridCard, snap, metrics)}`, accent, role,
+    key: target.id, title, tag, tagShort, tagShort2, tagShort3, body: `${pushAlert(snap)}${warn}${machineBody(gridCard, snap, metrics)}`, accent, role,
     stale: snap.stale, kind: 'machine', clickable: gridCard.clickable === 'detail',
   });
 }
@@ -103,6 +105,10 @@ function machineBody(gridCard, snap, metrics, off = false) {
   // i18n: a metric template may carry `label_en`; with none, the base label is used in
   // both languages rather than falling back to the bare key.
   const label = (k) => cv(metrics?.[k], 'label') || k;
+  // v2.34 a card may name a cell differently from its ring (`cell_labels` / `cell_labels_en`):
+  // m27's CPU cell says "CPU 占用", so a 150px cell holding "1%" is not just "CPU" and a dot
+  const cellLabels = cv(gridCard, 'cell_labels') || gridCard.cell_labels || {};
+  const cellLabel = (k) => cellLabels[k] || label(k);
   const rings = (gridCard.rings || []).map((k) => ring(label(k), mget(snap, k))).join('');
   // v2.27: a table-like cell (By Model) is two cells wide; the grid fills any hole it would
   // leave (grid-auto-flow: dense). `subs` puts a second metric on a cell's second line (the
@@ -124,8 +130,8 @@ function machineBody(gridCard, snap, metrics, off = false) {
     const sk = subs[k];
     const sub = sk && !promoted.has(k) ? `${label(sk)} ${mget(snap, sk).display ?? '—'}` : '';
     const wide = (isTable(k) && !narrow.includes(k)) || takers.has(k);
-    return kvItem(label(k), mget(snap, k), metrics?.[k], { sub, itemCls: wide ? 'span2' : '' })
-      + (promoted.has(k) ? kvItem(label(sk), mget(snap, sk), metrics?.[sk]) : '');
+    return kvItem(cellLabel(k), mget(snap, k), metrics?.[k], { sub, itemCls: wide ? 'span2' : '' })
+      + (promoted.has(k) ? kvItem(cellLabel(sk), mget(snap, sk), metrics?.[sk]) : '');
   }).join('');
 
   // v2.23: rings and cells sit in one .mach block so a card the grid has widened can put

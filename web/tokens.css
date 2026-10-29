@@ -68,20 +68,19 @@ button, input, select, textarea { font-variant-numeric: tabular-nums; }
    reintroduce the bug and no one has to remember the workaround. */
 [hidden] { display: none !important; }
 
-/* v2.22 page width: everything at page level sits in one centred column. --gutter is the side
-   margin: the usual 30px (16px on phones), or whatever centres the column on a wider screen.
-   % here is of the body width, which is the viewport.
-   v2.33: the column is exactly as wide as the machine cards' columns. A machine card is a fixed
-   --card-w (420px) and never widened or stretched; the board has 1, 2 or 4 such columns -- the
-   counts that divide 8, so the eight machine cards fill every row with no hole -- never 3.
-   Header, chips, grid, Dual Compare and footer all use this width, centred: a window between two
-   tiers keeps the narrower one and the difference becomes side margin, not wider cards.
-   Tiers by viewport width (gap --s4 16px, gutters 2 x 30px):
-     4 columns from 4 x 420 + 3 x 16 + 60 = 1788px,  2 columns from 2 x 420 + 16 + 60 = 916px,
-     1 column below (a phone narrower than 420 + 2 x 16 shrinks that one column to fit). */
-:root { --card-w: 420px; --cols: 1; --page-max: var(--card-w); --gutter-min: var(--s6); }
-@media (min-width: 916px)  { :root { --cols: 2; --page-max: calc(2 * var(--card-w) + var(--s4)); } }
-@media (min-width: 1788px) { :root { --cols: 4; --page-max: calc(4 * var(--card-w) + 3 * var(--s4)); } }
+/* v2.22 page width: everything at page level sits in one column with a side margin (--gutter-min:
+   30px, 16px on phones).
+   v2.34: the column is the whole window -- no centring, no side margin beyond the gutter. Cards
+   are as wide as their grid column; what keeps them from looking stretched is the fixed cell
+   size (--cell-min .. --cell-max, below) and the card layouts that switch with the card's width
+   (machine: narrow / standard / wide). --page-max stays for the rules that centre on it (100%:
+   nothing to centre). The column COUNT lives with the grid (.board, below). */
+:root { --page-max: 100%; --gutter-min: var(--s6);
+  /* v2.34 a cell (.kv .item) is 108-150px wide wherever it is: it never shrinks below what its
+     widest ordinary reading needs at the normal font (Network "↓1.5M ↑8.5M" 91px + 2 x 9px
+     padding + border), and never grows past 150px -- a wider box only adds width to the gaps
+     between cells (justify-content: space-between), never to a cell. */
+  --cell-min: 108px; --cell-max: 150px; }
 @media (max-width: 560px) { :root { --gutter-min: var(--s4); } }
 
 html, body {
@@ -207,14 +206,29 @@ html, body {
    v2.23: WHERE each card goes is decided by packGrid() in app.js (explicit grid-row /
    grid-column, rows closed by widening `stretch` cards, never a hole); the span classes
    below are only the no-JS fallback. --cols is read back by packGrid().
-   v2.33: --cols (1 / 2 / 4) and the column width come from :root above; the grid's content box
-   is exactly --cols fixed-width columns, so a column is --card-w wide at every window width. */
+   v2.33: --cols is 1, 2, 4 -- the counts that divide 8, so the eight machine cards fill every row.
+   v2.34: and 8. The count follows the width the board really has (.board is a size container, so
+   a desktop scrollbar is already taken off), and each tier starts where its cards reach the
+   minimum width of the layout they use there (card = cells + 2 x 16px padding + 2 x 1px border;
+   tier = cols x card + (cols - 1) x 16px gap + 2 x 30px gutter):
+     narrow   cells 2 x 108 + 8          = 224 inside  -> card >= 258px
+     standard cells 3 x 108 + 2 x 8      = 340 inside  -> card >= 374px
+     wide     rings 216 + 22 + cells 340 = 578 inside  -> card >= 612px
+     1 column  below 824px  (the one card is narrow, standard or wide by its own width)
+     2 columns from  824px  = 2 x 374 + 16 + 60  (standard; wide would need 1300px, past the next tier)
+     4 columns from 1140px  = 4 x 258 + 48 + 60  (narrow; standard from 1604px, wide from 2556px)
+     8 columns from 3164px  = 8 x 374 + 112 + 60 (standard) */
+.board { container: board / inline-size; }
+.grid { --cols: 1; }
+@container board (min-width: 824px)  { .grid { --cols: 2; } }
+@container board (min-width: 1140px) { .grid { --cols: 4; } }
+@container board (min-width: 3164px) { .grid { --cols: 8; } }
 .grid { display: grid; gap: var(--s4);
   padding: var(--s4) max(var(--gutter-min), calc((100% - var(--page-max)) / 2)) var(--s5);
   grid-template-columns: repeat(var(--cols), minmax(0, 1fr));
   align-items: stretch; }
 .grid > .card.span-2 { grid-column: span 2; }
-@media (max-width: 915px) { .grid > .card.span-2 { grid-column: 1 / -1; } }
+@container board (max-width: 823.98px) { .grid > .card.span-2 { grid-column: 1 / -1; } }
 .grid > .card.span-full, .grid > .card.card-wide { grid-column: 1 / -1; }
 .card {
   position: relative; border-radius: var(--radius); padding: var(--s4) var(--s4) var(--s5);
@@ -311,19 +325,30 @@ h2:empty { display: none; } /* 堆叠卡外框无标题时不留空行 */
 
 /* ---------- v2.20 推理节点 / Inference Nodes(全宽,一机一栏)---------- */
 /* v2.23: one grid for the whole card. Each node column is a subgrid of its rows (head,
-   model, then --r rows of cells), so a row of cells is the same height in all three
-   columns -- tops and bottoms line up even when only one column has a wrapped second line.
-   --r = rows of cells: 2 (three per row) while a column is narrower than ~700px, 1 (six in
-   a row) when it is wider; --kcols is the matching column template. Columns are separated by a hairline drawn in the gap, so
-   all three columns have exactly the same content width. */
+   model, then --r rows of cells, then the concurrency bar), so a row of cells is the same
+   height in every column. Columns are separated by a hairline drawn in the 33px gap.
+   v2.34: the cells are fixed-size (--cell-min .. --cell-max, extra width goes to the gaps) and
+   the card switches arrangement with its width instead of stretching them. Per node column:
+     --kn 2  cells 2 x 3, in rows   (status | latency, prefill | decode, requests | tokens)
+     --kn 3  cells 3 x 2, in columns (health, speed, usage) -- as before
+     --kn 6  six in one row
+   and the columns stand side by side once each has room for two cells, else they stack.
+   Thresholds (card content width; 2 cells 224px, 3 cells 340px, 6 cells 6 x 108 + 5 x 6 = 678px):
+     nodes (3 columns)    stacked: 2 <340, 3 <678, 6 <738;  side by side: 2 from 738, 3 from 1086, 6 from 2100
+     ComfyUI (2 columns)  stacked: 2 <340, 3 <481;          side by side: 2 from 481, 3 from 713, 6 from 1389
+   A mode only sets variables (below); --st-N is the column template of an N-stream concurrency
+   bar: the cell grid's own columns (subgrid) when N fills them, else N fixed-size cells. */
 .card.card-wide { grid-column: 1 / -1; }
-.nodes-grid { --r: 2; --r1: 3; --kcols: minmax(0, 0.8fr) minmax(0, 1fr) minmax(0, 1.2fr);
-  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
-  /* head, model, the cell rows, and (v2.26) the concurrency bar's row -- empty (0 high) in
-     a column whose node runs one request at a time */
-  grid-template-rows: auto auto repeat(var(--r), auto) auto; column-gap: 33px; row-gap: 0; }
-.node-col { position: relative; min-width: 0; grid-row: 1 / -1; display: grid; grid-template-rows: subgrid; }
-.node-col + .node-col::before { content: ""; position: absolute; left: -17px; top: 0; bottom: 0; width: 1px; background: var(--hair); }
+.nodes-grid {
+  --kn: 2; --r: 3; --r1: 4; --kflow: row; --kgap: 8px;
+  --st-2: subgrid; --sg-2: normal; --sg-3: var(--kgap); --st-3: repeat(1, minmax(var(--cell-min), var(--cell-max))); --st-4: subgrid; --sg-4: normal;
+  --sg-5: var(--kgap); --st-5: repeat(1, minmax(var(--cell-min), var(--cell-max))); --st-6: subgrid; --sg-6: normal;
+  display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: none; column-gap: 33px; row-gap: 0; }
+.node-col { position: relative; min-width: 0; display: grid; grid-template-rows: auto auto repeat(var(--r), auto) auto; padding: var(--s3) 0; }
+.node-col + .node-col { border-top: 1px solid var(--hair); }
+.node-col:first-child { padding-top: 0; }
+.node-col:last-child { padding-bottom: 0; }
+.node-col + .node-col::before { content: none; position: absolute; left: -17px; top: 0; bottom: 0; width: 1px; background: var(--hair); }
 /* v2.27: head and model are one line each (nowrap); the route part / the model name give
    way first -- shrink, then ellipsis with the full text in title (fit.js) */
 .node-head { grid-row: 1; display: flex; align-items: center; flex-wrap: nowrap; gap: var(--s2); min-width: 0; white-space: nowrap;
@@ -347,43 +372,34 @@ h2:empty { display: none; } /* 堆叠卡外框无标题时不留空行 */
    columns: with three per row the columns are health (status / latency), speed (prefill /
    decode) and usage (requests / tokens), and the short health readings get the narrowest
    column; with six per row they sit side by side in the same order, equal width. */
-.kv.node-kv { grid-row: 3 / span var(--r); grid-template-rows: subgrid; row-gap: var(--s2); grid-auto-flow: column;
-  grid-template-columns: var(--kcols); margin-top: var(--s3); }
+.kv.node-kv { grid-row: 3 / span var(--r); grid-template-rows: subgrid; row-gap: var(--s2); grid-auto-flow: var(--kflow);
+  grid-template-columns: repeat(var(--kn), minmax(var(--cell-min), var(--cell-max))); column-gap: var(--kgap);
+  justify-content: space-between; margin-top: var(--s3); }
 /* (a node cell is the standard cell; v2.28: every node cell has a second line in every
    state, so the node rows are always three lines, 70px, and line up across the columns; a
    status such as "Generating 2/3" that does not fit its column shrinks, then reads "Gen 2/3") */
 /* always_on:false 且连不上:整栏变灰(不是故障,不着红)*/
 .node-idle { filter: grayscale(0.85) opacity(0.62); }
 .node-idle-text { color: var(--muted); }
-/* a ~550-700px column: the usage column would be the emptiest, so it gives some back */
-/* v2.27: from a ~550px column on, the six cells sit in one row (status and latency a little
-   narrower, usage a little wider) -- three to a row there would leave wide cells around a
-   two-character status */
-/* (v2.33: from 1690px, was 1700px -- in the four-column tier the card is a fixed 1728px, 1696px
-   inside, and three cells to a row there left a small count alone in a 187px cell) */
-@container card (min-width: 1690px) {
-  .nodes-grid { --r: 1; --r1: 2;
-    --kcols: minmax(0, 0.8fr) minmax(0, 0.8fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.2fr) minmax(0, 1.2fr); }
-  /* six to a row: a little less gap and side padding, so each cell keeps ~56px of text room */
-  .kv.node-kv { column-gap: 6px; --cell-pad: 8px 8px; }
-  .kv.node-kv .node-streams { column-gap: 6px; }
+/* (v2.34 modes, see the head of this section) */
+@container card (min-width: 340px)  { .nodes-grid { --kn: 3; --r: 2; --r1: 3; --kflow: column; --kgap: 8px; --sg-2: var(--kgap); --st-2: repeat(2, minmax(var(--cell-min), var(--cell-max))); --st-3: subgrid; --sg-3: normal; --sg-4: var(--kgap); --st-4: repeat(2, minmax(var(--cell-min), var(--cell-max))); --sg-5: var(--kgap); --st-5: repeat(1, minmax(var(--cell-min), var(--cell-max))); --st-6: subgrid; --sg-6: normal; } }
+@container card (min-width: 678px)  { .nodes-grid:not(.comfy-grid) { --kn: 6; --r: 1; --r1: 2; --kflow: column; --kgap: 6px; --sg-2: var(--kgap); --st-2: repeat(2, minmax(var(--cell-min), var(--cell-max))); --sg-3: var(--kgap); --st-3: repeat(3, minmax(var(--cell-min), var(--cell-max))); --sg-4: var(--kgap); --st-4: repeat(4, minmax(var(--cell-min), var(--cell-max))); --sg-5: var(--kgap); --st-5: repeat(5, minmax(var(--cell-min), var(--cell-max))); --st-6: subgrid; --sg-6: normal; } }
+@container card (min-width: 738px)  {
+  .nodes-grid:not(.comfy-grid) { grid-template-columns: repeat(3, minmax(0, 1fr)); grid-template-rows: auto auto repeat(var(--r), auto) auto; }
+  .nodes-grid:not(.comfy-grid) > .node-col { grid-row: 1 / -1; grid-template-rows: subgrid; padding: 0; border-top: 0; }
+  .nodes-grid:not(.comfy-grid) > .node-col + .node-col::before { content: ""; }
+  .nodes-grid:not(.comfy-grid) { --kn: 2; --r: 3; --r1: 4; --kflow: row; --kgap: 8px; --st-2: subgrid; --sg-2: normal; --sg-3: var(--kgap); --st-3: repeat(1, minmax(var(--cell-min), var(--cell-max))); --st-4: subgrid; --sg-4: normal; --sg-5: var(--kgap); --st-5: repeat(1, minmax(var(--cell-min), var(--cell-max))); --st-6: subgrid; --sg-6: normal; }
 }
-/* narrow card: the three nodes stack, each with its own rows */
-@container card (max-width: 900px) {
-  .nodes-grid { grid-template-columns: minmax(0, 1fr); grid-template-rows: none; }
-  .node-col { grid-row: auto; grid-template-rows: auto auto repeat(var(--r), auto) auto; padding: var(--s3) 0; }
-  .node-col + .node-col { border-top: 1px solid var(--hair); }
-  .node-col + .node-col::before { content: none; }
-  .node-col:first-child { padding-top: 0; }
-  .node-col:last-child { padding-bottom: 0; }
+@container card (min-width: 1086px) { .nodes-grid:not(.comfy-grid) { --kn: 3; --r: 2; --r1: 3; --kflow: column; --kgap: 8px; --sg-2: var(--kgap); --st-2: repeat(2, minmax(var(--cell-min), var(--cell-max))); --st-3: subgrid; --sg-3: normal; --sg-4: var(--kgap); --st-4: repeat(2, minmax(var(--cell-min), var(--cell-max))); --sg-5: var(--kgap); --st-5: repeat(1, minmax(var(--cell-min), var(--cell-max))); --st-6: subgrid; --sg-6: normal; } }
+@container card (min-width: 2100px) { .nodes-grid:not(.comfy-grid) { --kn: 6; --r: 1; --r1: 2; --kflow: column; --kgap: 6px; --sg-2: var(--kgap); --st-2: repeat(2, minmax(var(--cell-min), var(--cell-max))); --sg-3: var(--kgap); --st-3: repeat(3, minmax(var(--cell-min), var(--cell-max))); --sg-4: var(--kgap); --st-4: repeat(4, minmax(var(--cell-min), var(--cell-max))); --sg-5: var(--kgap); --st-5: repeat(5, minmax(var(--cell-min), var(--cell-max))); --st-6: subgrid; --sg-6: normal; } }
+@container card (min-width: 481px)  {
+  .nodes-grid.comfy-grid { grid-template-columns: repeat(var(--ncols, 2), minmax(0, 1fr)); grid-template-rows: auto auto repeat(var(--r), auto) auto; }
+  .nodes-grid.comfy-grid > .node-col { grid-row: 1 / -1; grid-template-rows: subgrid; padding: 0; border-top: 0; }
+  .nodes-grid.comfy-grid > .node-col + .node-col::before { content: ""; }
+  .nodes-grid.comfy-grid { --kn: 2; --r: 3; --r1: 4; --kflow: row; --kgap: 8px; --st-2: subgrid; --sg-2: normal; --sg-3: var(--kgap); --st-3: repeat(1, minmax(var(--cell-min), var(--cell-max))); --st-4: subgrid; --sg-4: normal; --sg-5: var(--kgap); --st-5: repeat(1, minmax(var(--cell-min), var(--cell-max))); --st-6: subgrid; --sg-6: normal; }
 }
-@container card (min-width: 560px) and (max-width: 900px) { .nodes-grid { --r: 1; --r1: 2; --kcols: repeat(6, minmax(0, 1fr)); } }
-
-/* v2.32 ComfyUI 节点: the same column layout with --ncols columns (two: m110 / m136) side by
-   side once the card is wider than 900px; six cells to a row once a column has ~550px. Below
-   900px the columns stack, as the nodes card's do (the rules above). */
-@container card (min-width: 901px) { .nodes-grid.comfy-grid { grid-template-columns: repeat(var(--ncols, 2), minmax(0, 1fr)); --kcols: repeat(3, minmax(0, 1fr)); } }
-@container card (min-width: 1140px) { .nodes-grid.comfy-grid { --r: 1; --r1: 2; --kcols: repeat(6, minmax(0, 1fr)); } }
+@container card (min-width: 713px)  { .nodes-grid.comfy-grid { --kn: 3; --r: 2; --r1: 3; --kflow: column; --kgap: 8px; --sg-2: var(--kgap); --st-2: repeat(2, minmax(var(--cell-min), var(--cell-max))); --st-3: subgrid; --sg-3: normal; --sg-4: var(--kgap); --st-4: repeat(2, minmax(var(--cell-min), var(--cell-max))); --sg-5: var(--kgap); --st-5: repeat(1, minmax(var(--cell-min), var(--cell-max))); --st-6: subgrid; --sg-6: normal; } }
+@container card (min-width: 1389px) { .nodes-grid.comfy-grid { --kn: 6; --r: 1; --r1: 2; --kflow: column; --kgap: 6px; --sg-2: var(--kgap); --st-2: repeat(2, minmax(var(--cell-min), var(--cell-max))); --sg-3: var(--kgap); --st-3: repeat(3, minmax(var(--cell-min), var(--cell-max))); --sg-4: var(--kgap); --st-4: repeat(4, minmax(var(--cell-min), var(--cell-max))); --sg-5: var(--kgap); --st-5: repeat(5, minmax(var(--cell-min), var(--cell-max))); --st-6: subgrid; --sg-6: normal; } }
 
 /* v2.26 concurrency bar (a node that runs several requests at once): one cell per stream,
    in the last row of the node's cell grid. When the stream count fits the cell columns
@@ -391,26 +407,21 @@ h2:empty { display: none; } /* 堆叠卡外框无标题时不留空行 */
    (subgrid), so its cells line up with the six above; otherwise it has --mc equal columns,
    a divisor of the stream count, so every row is full. Idle streams are greyed. */
 .kv.node-kv.has-streams { grid-row: 3 / span var(--r1); }
-.node-streams { grid-row: -2 / -1; grid-column: 1 / -1; display: grid; gap: var(--s2);
-  grid-template-columns: repeat(var(--mc, 3), minmax(0, 1fr)); }
-.node-streams[data-m="3"], .node-streams[data-m="6"] { grid-template-columns: subgrid; }
+.node-streams { grid-row: -2 / -1; grid-column: 1 / -1; display: grid; gap: var(--s2); column-gap: var(--kgap);
+  grid-template-columns: repeat(1, minmax(var(--cell-min), var(--cell-max))); justify-content: space-between; }
+/* (a subgrid bar keeps the cell grid's gaps -- column-gap: normal -- or its edge cells would
+   take the difference and outgrow --cell-max; --sg-N is set with --st-N) */
+.node-streams[data-m="2"] { grid-template-columns: var(--st-2); column-gap: var(--sg-2); }
+.node-streams[data-m="3"] { grid-template-columns: var(--st-3); column-gap: var(--sg-3); }
+.node-streams[data-m="4"] { grid-template-columns: var(--st-4); column-gap: var(--sg-4); }
+.node-streams[data-m="5"] { grid-template-columns: var(--st-5); column-gap: var(--sg-5); }
+.node-streams[data-m="6"] { grid-template-columns: var(--st-6); column-gap: var(--sg-6); }
 .node-streams .item.stream-idle { opacity: 0.55; }
 .node-streams .item.stream-idle .value { color: var(--muted2); }
 /* the progress bar sits on the cell's bottom edge (absolute), so it adds no height */
-.node-streams .sbar { position: absolute; left: 11px; right: 11px; bottom: 4px; height: 3px; border-radius: 2px; background: var(--track); overflow: hidden; }
+.node-streams .sbar { position: absolute; left: 9px; right: 9px; bottom: 4px; height: 3px; border-radius: 2px; background: var(--track); overflow: hidden; }
 .node-streams .sbar > i { display: block; height: 100%; background: var(--cyan); border-radius: 2px; }
 .node-streams .sbar.none { visibility: hidden; }
-/* six columns: 3 streams span 2 each, 2 streams span 3 each, both on the grid's columns */
-@container card (min-width: 1690px) {
-  .node-streams[data-m="2"] { grid-template-columns: subgrid; }
-  .node-streams[data-m="3"] > .item { grid-column: span 2; }
-  .node-streams[data-m="2"] > .item { grid-column: span 3; }
-}
-@container card (min-width: 560px) and (max-width: 900px) {
-  .node-streams[data-m="2"] { grid-template-columns: subgrid; }
-  .node-streams[data-m="3"] > .item { grid-column: span 2; }
-  .node-streams[data-m="2"] > .item { grid-column: span 3; }
-}
 
 /* ---------- 环形仪表 ---------- */
 .rings { display: flex; gap: var(--s4); flex-wrap: wrap; }
@@ -465,7 +476,8 @@ h2:empty { display: none; } /* 堆叠卡外框无标题时不留空行 */
    value line (.sub-inline: smaller grey text after the value, "552 · via LLM 388"), and
    when it does not fit there it moves into the cell's title -- no cell grows a line for
    itself. Rows are as tall as their cells and nothing is stretched (align-items: start). */
-:root { --cell-l: 14px; --cell-v: 20px; --cell-label: 10.5px; --cell-value: 15.5px; --cell-pad: 8px 11px; }
+/* (v2.34: side padding 9px, was 11px -- a 108px cell keeps 88px for its text) */
+:root { --cell-l: 14px; --cell-v: 20px; --cell-label: 10.5px; --cell-value: 15.5px; --cell-pad: 8px 9px; }
 .kv { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-auto-rows: auto; grid-auto-flow: row dense;
   gap: var(--s2); margin-top: var(--s4); align-items: start; }
 .kv .item {
@@ -539,29 +551,36 @@ h2:empty { display: none; } /* 堆叠卡外框无标题时不留空行 */
 @container (min-width: 380px) { .card-body > .kv[data-n="4"]:not(.kv-info) { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
 @container (min-width: 520px) { .card-body > .kv.kv-info[data-n="4"] { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
 @container (min-width: 820px) { .kv[data-n="5"]:not(.node-kv) { grid-template-columns: repeat(5, minmax(0, 1fr)); } }
-/* machine card: rings above cells; six cells (a two-wide By Model counts as two) go 3 x 2
-   once each cell can be ~110px, so a 6-cell card and a 4-cell card (2 x 2) next to it have
-   the same two rows of cells.
-   v2.33: from 300px (was 340px) -- machine cards are one fixed size, and on a phone the one
-   column is narrower than 420px (326px inside at 390px): three rows of cells there made the
-   six-cell cards taller than the four-cell one. A cell is ~95px there; values shrink to fit. */
-@container card (min-width: 300px) { .kv[data-n="6"] { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
-/* v2.30 a machine card the grid has widened -- the 4 + 2 machine row on four columns: two
-   cards, each two columns wide, 830-1160px inside. Its cells keep about the width they have
-   in a one-column card (~130-150px; a wider cell is a short reading in a wide box) and the
-   rings take the rest, side by side with them:
-     >= 760px   rings on the left (~46%), cells beside them 3 x 2 (four cells: 4 x 1)
-     >= 1100px  rings narrower (~26%), all six cells in one row (four cells: one row, the
-                rings wider) */
-@container card (min-width: 760px) {
-  .mach { display: grid; grid-template-columns: minmax(0, 0.85fr) minmax(0, 1fr); column-gap: var(--s5); align-items: center; }
-  .mach > .kv { margin-top: 0; grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .mach > .kv[data-n="4"], .mach > .kv[data-n="8"] { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+/* v2.34 machine card: three layouts, picked by the card's own width (its content box: card - 34px).
+   The cells are always --cell-min .. --cell-max wide and the extra width goes to the gaps between
+   them; the rings are a fixed size. Every machine card has six cell slots (a two-wide By Model
+   counts as two), so the cards on one board are the same height in every layout.
+     narrow   (< 340px inside)   rings 64px; cells 2 x 3, flowing in rows
+     standard (340 - 577px)      rings 80px above; cells 3 x 2 (as before)
+     wide     (>= 578px)         rings 64px on the left, cells 3 x 2 beside them -- one band of
+                                 two cell rows, so the card is about half as tall
+   (a four-cell card -- none on the board since m27 has six -- is 2 x 2 in all three.) */
+.card .mach > .kv { --kc: 2; grid-template-columns: repeat(var(--kc), minmax(var(--cell-min), var(--cell-max)));
+  justify-content: space-between; }
+.mach > .rings { gap: var(--s2); }
+.mach > .rings > .ring-wrap { min-width: 64px; }
+.mach > .rings .ring { width: 64px; height: 64px; }
+.mach > .rings .ring::before { inset: 6px; }
+@container card (min-width: 340px) {
+  .card .mach > .kv { --kc: 3; }
+  .card .mach > .kv[data-n="4"] { --kc: 2; }
+  .mach > .rings { gap: var(--s4); }
+  .mach > .rings > .ring-wrap { min-width: 72px; }
+  .mach > .rings .ring { width: 80px; height: 80px; }
+  .mach > .rings .ring::before { inset: 7px; }
 }
-@container card (min-width: 1100px) {
-  .mach { grid-template-columns: minmax(0, 1fr) minmax(0, 2.9fr); }
-  .mach:has(> .kv[data-n="4"]) { grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); }
-  .mach > .kv[data-n="6"] { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+@container card (min-width: 578px) {
+  .mach { display: grid; grid-template-columns: max-content minmax(0, 1fr); column-gap: var(--s5); align-items: center; }
+  .mach > .rings { gap: var(--s3); flex-wrap: nowrap; }
+  .mach > .rings > .ring-wrap { flex: 0 0 64px; min-width: 64px; }
+  .mach > .rings .ring { width: 64px; height: 64px; }
+  .mach > .rings .ring::before { inset: 6px; }
+  .card .mach > .kv { margin-top: 0; }
 }
 /* v2.18 多卡:环下/格子下逐卡小字,每张卡按自己的状态着色;单卡机器不输出这行 */
 .gpu-missing, .push-alert {
@@ -599,7 +618,11 @@ h2:empty { display: none; } /* 堆叠卡外框无标题时不留空行 */
 .tk-main { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; }
 .tk-tblwrap { flex: none; min-width: 0; }
 .card .tbl.tk-tbl { margin: 0; }
-.card .tbl.tk-tbl col.c-num { width: 54px; }
+.card .tbl.tk-tbl col.c-num, .card .tbl.tk-tbl th.num { width: auto; }
+/* (v2.34 the class-name column as above: up to --id-max, the five figure columns share the rest,
+   each 54px (46px on a phone card, 68px beside the chart) to --cell-max; --tk-w is the table's width) */
+.card .tbl.tk-tbl { --tk-w: 100cqw; --tk-num: 54px; }
+.card .tbl.tk-tbl col.c-name { width: max(min(var(--id-max), var(--tk-w) - var(--nn, 5) * var(--tk-num)), var(--tk-w) - var(--nn, 5) * var(--cell-max)); }
 .card .tbl.tk-tbl th { letter-spacing: 0; }
 .card .tbl.tk-tbl td.tk-name { color: var(--text); font-weight: 600; }
 .card .tbl.tk-tbl td.tk-ll { color: var(--muted2); }
@@ -608,7 +631,7 @@ h2:empty { display: none; } /* 堆叠卡外框无标题时不留空行 */
 /* a phone-width card: narrower figure columns (a figure is at most five characters), so the
    class names keep ~95px */
 @container card (max-width: 479px) {
-  .card .tbl.tk-tbl col.c-num { width: 46px; }
+  .card .tbl.tk-tbl { --tk-num: 46px; }
   .card .tbl.tk-tbl th, .card .tbl.tk-tbl td { padding-left: 3px; padding-right: 3px; }
   .card .tbl.tk-tbl td.tk-name { font-size: 12px; padding-left: 0; }
   .card .tbl.tk-tbl .sw { margin-right: 5px; }
@@ -616,7 +639,7 @@ h2:empty { display: none; } /* 堆叠卡外框无标题时不留空行 */
 @container card (min-width: 860px) {
   .tk-main { flex-direction: row; align-items: stretch; gap: var(--s5); }
   .tk-main > .tk-tblwrap { width: min(54%, 600px); align-self: center; }
-  .card .tbl.tk-tbl col.c-num { width: 68px; }
+  .card .tbl.tk-tbl { --tk-num: 68px; --tk-w: min(54cqw, 600px); }
   .tk-main > .spark { margin-top: 0; }
   .tk-main > .spark .col .b { max-width: 30px; }
 }
@@ -663,6 +686,15 @@ h2:empty { display: none; } /* 堆叠卡外框无标题时不留空行 */
 .card .tbl th.num, .card .tbl td.num { text-align: right; font-variant-numeric: tabular-nums; }
 .card .tbl th.num { width: 62px; }
 .card .tbl th.txt { width: 86px; }
+/* v2.34 a figure column is a cell: at least 62px, at most --cell-max. The identity column gets up
+   to two cells (--id-max 308px) and takes more only once every figure column is at its cap, so a
+   wide card spreads the figures evenly instead of opening one blank gap after a short name.
+   The table is the card's full content width (100cqw; a calc() with % on a table cell is not
+   reliable); --nn / --nt (table.js) are the visible figure / text columns. */
+.card .tbl { --id-max: calc(2 * var(--cell-max) + var(--s2)); }
+.card .tbl:not(.tk-tbl) th:first-child {
+  width: max(min(var(--id-max), 100cqw - var(--nn, 0) * 62px - var(--nt, 0) * 86px), 100cqw - var(--nn, 0) * var(--cell-max) - var(--nt, 0) * 86px); }
+.card .tbl:not(.tk-tbl) th.num { width: auto; }
 .card .tbl th:first-child, .card .tbl td:first-child { padding-left: 0; }
 .card .tbl th:last-child, .card .tbl td:last-child { padding-right: 0; }
 .card .tbl tbody tr:last-child td { border-bottom: none; }
@@ -673,7 +705,8 @@ h2:empty { display: none; } /* 堆叠卡外框无标题时不留空行 */
 .card .tbl .col-x { display: none; }
 @container card (min-width: 760px) {
   .card .tbl .col-x { display: table-cell; }
-  .card .tbl.has-x th:first-child { width: 24%; }
+  .card .tbl.has-x th:first-child {
+    width: max(min(var(--id-max), 100cqw - var(--nnx, 0) * 62px - var(--ntx, 0) * 118px), 100cqw - var(--nnx, 0) * var(--cell-max) - var(--ntx, 0) * 118px); }
   .card .tbl.has-x th.num { width: auto; }
   /* v2.30: a date column keeps room for a whole date (36px gap after a figure + "2026-10-26")
      -- split evenly, a two-column table card (Per-Project on four columns) cut it to "2026-0…" */
@@ -884,7 +917,7 @@ h2:empty { display: none; } /* 堆叠卡外框无标题时不留空行 */
 .addDel:hover:not(:disabled) { border-color: var(--red); color: var(--red); }
 .addDel:disabled { opacity: .5; cursor: default; }
 
-@media (max-width: 915px) {   /* v2.33: the 420px one-column header too */
+@media (max-width: 915px) {   /* (v2.33; v2.34: kept -- logged in, the English admin header needs it up to ~900px) */
   .addOpen { padding: 4px 9px; font-size: 11px; }
   .addName { width: 96px; }
   .addCap { flex-wrap: wrap; }
@@ -931,11 +964,11 @@ h2:empty { display: none; } /* 堆叠卡外框无标题时不留空行 */
 .langBtn + .langBtn { border-left: 1px solid var(--hair); }
 .langBtn:hover { color: var(--text); }
 .langBtn.active { color: var(--text); background: var(--glass); }
-@media (max-width: 915px) { .langBtn { padding: 4px 8px; font-size: 11px; } }   /* v2.33: the 420px one-column header too */
+@media (max-width: 915px) { .langBtn { padding: 4px 8px; font-size: 11px; } }   /* v2.33 (v2.34: kept, see .addOpen) */
 /* v2.23: header controls keep their words on one line; on a phone the row wraps instead
    of squeezing the language switch (it used to clip to "中 E") or a button to one
    character per line. */
 .addOpen, .langBtn { white-space: nowrap; }
 .langSw { flex: none; }
-/* v2.33: also in the one-column tier (window <= 915px): the header is then 420px wide, as narrow as a phone */
+/* v2.33: also up to 915px (v2.34: kept -- logged in, the English admin controls fill an 800px header) */
 @media (max-width: 915px) { .meta { flex-wrap: wrap; justify-content: flex-end; gap: var(--s2) var(--s3); } }
