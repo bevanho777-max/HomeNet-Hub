@@ -286,7 +286,8 @@ targets:
       - id: gpu_b
         endpoints: ["192.0.2.11:12346"]
         embed_endpoints: ["192.0.2.11:12347"]
-        engine: { host: 192.0.2.11, ports: [12346, 9878], logs: 9877 }
+        # (logs_unit: which systemd unit's lines the log exporter counts when one exporter serves several)
+        engine: { host: 192.0.2.11, ports: [12346, 9878], logs: 9877, logs_unit: llama-main.service }
         prom_labels: { host: "gpu-b" }
         counters:
           embed_requests: ['homenet_llama_requests_total{instance="192.0.2.11:9877",unit="llama-embed.service"}']
@@ -304,6 +305,49 @@ targets:
     name: "Inference nodes (live)"
     enabled: false
     source: { type: inference_live, nodes_target: nodes_example, interval: "2s", timeout: "1s", last_max_age: "10m" }
+
+  # v2.29: a node's prefill / decode speed (the `speed:` of a node column in layout.yaml).
+  # `type: node_speed` builds the PromQL from the node's `engine` candidate ports, so a new
+  # engine or port needs no edit here. `freshness`: the query returns the last non-idle value
+  # within `lookback` and when it was measured (`at`); older than `max_age` it is not shown as
+  # current (the card says "—" + "last measured …") and not written to the history.
+  - id: speed_example
+    name: "Speed · gpu_a"
+    enabled: false
+    source: { type: node_speed, nodes_target: nodes_example, node: gpu_a, interval: "30s" }
+    freshness:
+      max_age: "10m"
+      lookback: "7d"
+      at:
+        prefill_speed: "$.data.result[?(@.metric.k=='pp_at')].value[1]"
+        decode_speed:  "$.data.result[?(@.metric.k=='tg_at')].value[1]"
+    map:
+      prefill_speed: "$.data.result[?(@.metric.k=='pp')].value[1]"
+      decode_speed:  "$.data.result[?(@.metric.k=='tg')].value[1]"
+
+  # An inference server's status probe with a fallback (v2.31) and a readiness check (v2.29.x):
+  # `fallback_urls` are tried in order when `url` fails, each within `attempt_timeout_ms`
+  # (the whole probe still within `timeout`); `map.selected_endpoint` says which one answered.
+  # `readiness: llamacpp_models` = up only when /v1/models lists a model that is loaded, not
+  # merely when the port answers. `key_env` names the .env variable holding its API key.
+  - id: probe_fallback_example
+    name: "Inference · gpu_a"
+    enabled: false
+    always_on: true
+    source:
+      type: http
+      url: "http://192.0.2.10:8080/v1/models"
+      fallback_urls: ["http://192.0.2.10:18080/v1/models"]
+      readiness: llamacpp_models
+      key_env: EXAMPLE_INFERENCE_KEY
+      attempt_timeout_ms: 1200
+      timeout: "2500ms"
+      interval: "8s"
+    map:
+      status:  "$.status"
+      latency: "$.latency_ms"
+      model:   "$.model"
+      selected_endpoint: "$.selected_endpoint"
 
   # v2.32: ComfyUI nodes, for a `type: comfy` card (layout.yaml). Strictly read-only: every
   # `interval` one tiny GET /api/jobs per state (running / waiting) per node; when a job ends,

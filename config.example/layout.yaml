@@ -88,6 +88,10 @@ grid:
     rings: [cpu, mem_pct, disk_pct]
     items: [mem_bytes, disk_bytes, loadavg, net, procs, latency]   # six cells, 3 x 2 like the GPU nodes beside it
     header_right: uptime
+    # v2.34 (optional): a cell may be named differently from its ring -- the metric's `label`
+    # (/ `label_en`) is used otherwise. Only for cells; the rings keep the metric label.
+    # cell_labels:    { cpu: "CPU 占用" }
+    # cell_labels_en: { cpu: "CPU Usage" }
 
   - target: gpu1
     type: machine

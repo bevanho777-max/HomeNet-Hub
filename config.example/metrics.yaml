@@ -122,4 +122,7 @@ metrics:
   sessions:    { label: "Sessions" }
   skills:      { label: "Skills" }
   model:       { label: "Model" }
+  # node speed (a `type: node_speed` target, e.g. speed_example): last non-idle 5-minute rate
+  prefill_speed: { label: "Prefill t/s", higher_is_better: true }
+  decode_speed:  { label: "Decode t/s",  higher_is_better: true }
   role:        { label: "Role" }
