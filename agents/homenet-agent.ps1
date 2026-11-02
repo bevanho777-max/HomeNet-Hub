@@ -133,28 +133,47 @@ function Get-UptimeJson {
   return ('"uptime_s":{0},' -f $s)
 }
 
+# A nvidia-smi reading as a number; $null for "[N/A]", "[Unknown Error]", "" and the like.
+function Get-Num([string]$s) {
+  $n = 0.0
+  if ($s -and [double]::TryParse($s.Trim(), [System.Globalization.NumberStyles]::Float, $ci, [ref]$n)) { return $n }
+  return $null
+}
+
+# v2.36: a reading that is not a plausible value is left out (the card shows "-"), never sent raw.
+# m133's RTX 4070 Laptop (driver 617.14, power.max_limit 105 W) answered power.draw = 588 / 590 W in
+# 2990 of its idle samples 10-29 .. 11-02, a single sample at a time, and temperature.gpu = 0 while
+# the dGPU was going to sleep (11-02 04:09). power.max_limit is sent as power_cap_w, so the hub's own
+# check (power_w > 1.5x power_cap_w -> sample dropped, docs/AGENT_PROTOCOL.md) applies here too; the
+# agent asks once more before giving up on a reading above it.
 function Get-GpusJson {
   if (-not $script:hasNvidia) { return '"gpus":[]' }
-  $rows = nvidia-smi --query-gpu=index,name,utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw --format=csv,noheader,nounits 2>$null
+  $rows = nvidia-smi --query-gpu=index,name,utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw,power.max_limit --format=csv,noheader,nounits 2>$null
   if (-not $rows) { return '"gpus":[]' }
   $frags = @()
   foreach ($r in @($rows)) {
     $f = $r -split ',\s*'
-    if ($f.Count -lt 7) { continue }
-    $g = ('{{"idx":{0},"name":"{1}","vram_used_gb":{2},"vram_total_gb":{3}' -f `
-      $f[0].Trim(), $f[1].Trim(), (N1 ([double]$f[3]/1024)), (N1 ([double]$f[4]/1024)))
-    # Non-numeric readings ("[N/A]") are omitted, never written raw. Drivers 6xx report
-    # temperature.gpu with decimals (37.97); the protocol's temp_c is an integer.
-    $n = 0.0
-    if ([double]::TryParse($f[2].Trim(), [System.Globalization.NumberStyles]::Float, $ci, [ref]$n)) {
-      $g += (',"util_pct":{0}' -f (N0 $n))
+    if ($f.Count -lt 8) { continue }
+    $idx = Get-Num $f[0]
+    if ($null -eq $idx) { continue }     # an error line, not a GPU row
+    $g = ('{{"idx":{0},"name":"{1}"' -f (N0 $idx), ($f[1].Trim() -replace '["\\]', ''))
+    $used = Get-Num $f[3]; $total = Get-Num $f[4]
+    if ($null -ne $used -and $total -gt 0 -and $used -ge 0 -and $used -le $total) {
+      $g += (',"vram_used_gb":{0},"vram_total_gb":{1}' -f (N1 ($used / 1024)), (N1 ($total / 1024)))
     }
-    if ([double]::TryParse($f[5].Trim(), [System.Globalization.NumberStyles]::Float, $ci, [ref]$n)) {
-      $g += (',"temp_c":{0}' -f (N0 $n))
+    $util = Get-Num $f[2]
+    if ($null -ne $util -and $util -ge 0 -and $util -le 100) { $g += (',"util_pct":{0}' -f (N0 $util)) }
+    # Drivers 6xx report temperature.gpu with decimals (37.97); the protocol's temp_c is an integer.
+    $temp = Get-Num $f[5]
+    if ($temp -gt 0 -and $temp -lt 130) { $g += (',"temp_c":{0}' -f (N0 $temp)) }
+    $cap = Get-Num $f[7]
+    $pw = Get-Num $f[6]
+    if ($cap -gt 0 -and $pw -gt 1.5 * $cap) {
+      $pw = Get-Num (nvidia-smi -i (N0 $idx) --query-gpu=power.draw --format=csv,noheader,nounits 2>$null | Select-Object -First 1)
+      if ($pw -gt 1.5 * $cap) { $pw = $null }
     }
-    if ([double]::TryParse($f[6].Trim(), [System.Globalization.NumberStyles]::Float, $ci, [ref]$n)) {
-      $g += (',"power_w":{0}' -f (N0 $n))
-    }
+    if ($null -ne $pw -and $pw -ge 0) { $g += (',"power_w":{0}' -f (N0 $pw)) }
+    if ($cap -gt 0) { $g += (',"power_cap_w":{0}' -f (N0 $cap)) }
     $frags += ($g + '}')
   }
   return ('"gpus":[{0}]' -f ($frags -join ','))

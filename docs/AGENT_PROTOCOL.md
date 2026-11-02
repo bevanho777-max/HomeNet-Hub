@@ -93,7 +93,7 @@ agent 对任何响应都不做分支处理,唯一职责是"采集→推送→睡
 | `gpus[].power_w` | int | — | 功耗 W。Linux AMD 自 v2.19 起是上报周期内多次采样的平均(同 `util_pct`),不是单次读数 |
 | `gpus[].pci` | string | — | PCI 地址,如 `"0000:03:00.0"`(v2.18,AMD)|
 | `gpus[].temp_junction_c` / `temp_mem_c` | int | — | 热点 / 显存温度 ℃(v2.18,AMD;`temp_c` 仍是 edge)|
-| `gpus[].power_cap_w` | int | — | 功耗上限 W(`power1_cap`,v2.18,AMD)。v2.19 起 hub 据此做合理性检查:`power_w` 超过它的 1.5 倍即视为读数毛刺,丢弃该卡这一样本的功耗(不写库,多卡合计也不写)|
+| `gpus[].power_cap_w` | int | — | 功耗上限 W(`power1_cap`,v2.18,AMD;NVIDIA 的 `power.max_limit`,v2.36 Windows agent)。v2.19 起 hub 据此做合理性检查:`power_w` 超过它的 1.5 倍即视为读数毛刺,丢弃该卡这一样本的功耗(不写库,多卡合计也不写)|
 | `extra` | object | ✅ | 自由扩展区,允许空对象;机器特有数据放这里(见 4.4) |
 
 ### 4.3 缺失与空值规则
@@ -155,8 +155,11 @@ agent 对任何响应都不做分支处理,唯一职责是"采集→推送→睡
 - 内存:`Get-CimInstance Win32_OperatingSystem`(TotalVisibleMemorySize / FreePhysicalMemory)。
 - 磁盘:`Get-PSDrive C`。
 - 网络:两个周期间 `Get-NetAdapterStatistics` 字节计数器差值。
-- GPU:`nvidia-smi --query-gpu=index,name,utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw --format=csv,noheader,nounits`,逐行解析为 `gpus[]` 数组元素。
+- GPU:`nvidia-smi --query-gpu=index,name,utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw,power.max_limit --format=csv,noheader,nounits`,逐行解析为 `gpus[]` 数组元素。
   非数字的读数(`[N/A]`)省略该字段;6xx 驱动的 `temperature.gpu` 带小数(`37.97`),四舍五入成整数。
+  v2.36 起不合理的读数也省略(卡上显示 `—`):使用率不在 0–100、温度不在 1–129 ℃(独显进入休眠的过程中读到过 0)、
+  显存已用超过总量;功耗超过 `power.max_limit` 的 1.5 倍时再读一次,仍超过就不报(m133 的 RTX 4070 Laptop 空闲时
+  偶发 588 / 590 W,上限 105 W)。`power.max_limit` 作为 `power_cap_w` 上报,hub 的同一道检查也对它生效。
   没装 nvidia-smi(新系统驱动还没装好)时报 `gpus: []`,卡上 GPU 各项显示 `—`。
 - Claude 倒计时:读取现有 `claude-window.json`,算出 `remaining_min` 填入 `extra.claude`(吸收现 `claude-report.ps1` 职责,后者最终可退役)。
 - 配置(v2.30.1 起):脚本顶部只是默认值,每台机器的值写在同目录的 `agent.env.ps1`(启动时 dot-source,

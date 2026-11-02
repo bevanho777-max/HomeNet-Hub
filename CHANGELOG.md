@@ -49,6 +49,31 @@ on screen is the one from `package.json`, and this file is what needs fixing.
 
 ---
 
+## v2.36.0 — 2026-11-02
+
+**生产只从已提交的版本 build:compose 的 `config/`、`data/` 挂载可以指向绝对路径,镜像就能在 release tag 的干净
+导出目录里 build;仓库加 `.gitattributes`,一律存 LF。Windows agent 不再上报不合理的 GPU 读数。**
+
+*Rebuild required — 挂载方式变了,容器要从新的导出目录重建。Windows agent 要换成这一版(`agents/homenet-agent.ps1`)。*
+
+- **compose**:`config/`、`data/` 的挂载改为 `${HOMENET_CONFIG_DIR:-./config}`、`${HOMENET_DATA_DIR:-./data}`。在 `.env`
+  里设成绝对路径,就可以在另一个目录(例如 `git archive <tag>` 导出的干净目录)里 build 和启动:工作副本里没提交的
+  改动不会进镜像。不设时和以前一样。`agents/` 与 `package.json` 仍用相对路径 —— 在导出目录里它们就是这个 tag 的文件,
+  没提交的 agent 修改或版本号不会被挂进生产。`.env.example` 有说明。
+- **`.gitattributes`**:仓库里一律存 LF(`* text=auto eol=lf`,并逐类列出 js / json / yaml / md / sh / py 等)。
+  `*.ps1` 也是 LF,BOM 属于文件内容,照常保留。用 CRLF 保存的文件,提交时会转回 LF,一行改动不会再变成整个文件的 diff。
+- **Windows agent 的 GPU 读数**:读不到有效值就不报(卡上显示 `—`),不再把不合理的数字送上来:
+  - 使用率不在 0–100、温度不在 1–129 ℃、显存已用超过总量:省略这一项。独显进入休眠的过程中,温度读到过 0 ℃。
+  - 功耗超过 `power.max_limit` 的 1.5 倍时再读一次,仍超过就不报。m133 的 RTX 4070 Laptop(上限 105 W)
+    10-29 至 11-02 空闲时有 2990 个样本读到 588 / 590 W,都是零星的单个样本,历史图因此出现尖峰。
+  - `power.max_limit` 作为 `power_cap_w` 上报,hub 已有的功耗合理性检查(超过上限 1.5 倍即丢弃该样本)也对 NVIDIA 卡生效。
+  - nvidia-smi 回的错误行(没有卡序号的行)整行跳过。
+- 同期核对(不是读数问题):m133 GPU 长时间显示 98% 时,确实一直有推理请求在跑。10-29 以来 2308 个 ≥ 90% 的样本里,
+  有 2307 个落在 litellm 有请求在 m133 上执行的时段;空闲时 nvidia-smi 读到的是 0%、约 1.5 W、P8。
+  Strata 空闲时不会占着 GPU 轮询。m110、m136 的历史里没有这两种异常。
+
+---
+
 ## v2.35.0 — 2026-11-02
 
 **顶部状态灯加两台笔电的服务:「推理 · 133」(m133 Strata 8080 的 `/health`)和「ComfyUI · 136」(m136 ComfyUI 8188 的

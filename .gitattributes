@@ -1,0 +1,31 @@
+# Line endings (v2.36.0): the repository stores LF, whatever line endings a working copy has. An editor
+# or a Windows client that saves CRLF no longer turns a one-line change into a whole-file diff -- git
+# converts it back to LF when the file is added. Checkouts get LF on every platform.
+* text=auto eol=lf
+
+*.js    text eol=lf
+*.mjs   text eol=lf
+*.cjs   text eol=lf
+*.json  text eol=lf
+*.yaml  text eol=lf
+*.yml   text eol=lf
+*.md    text eol=lf
+*.sh    text eol=lf
+*.py    text eol=lf
+*.html  text eol=lf
+*.css   text eol=lf
+*.sql   text eol=lf
+*.example text eol=lf
+Dockerfile   text eol=lf
+.dockerignore text eol=lf
+.gitignore   text eol=lf
+
+# Windows agent: UTF-8 with BOM + LF. The BOM is file content and git keeps it as is (PowerShell 5.1
+# needs it); the line endings stay LF, so the copy deployed to a machine is byte-identical to the
+# repository and the machine modal's "agent matches HEAD" check holds.
+*.ps1   text eol=lf
+
+*.png   binary
+*.jpg   binary
+*.ico   binary
+*.woff2 binary
