@@ -49,6 +49,22 @@ on screen is the one from `package.json`, and this file is what needs fixing.
 
 ---
 
+## v2.34.1 — 2026-11-02
+
+**Linux agent 运行期重新探测 AMD 卡(把 m25 上 10-29 的现场热修并回仓库),m24–m27 统一换成 HEAD 的 agent。**
+
+*No rebuild — only `agents/homenet-agent.sh` changed (bind-mounted); restart the hub for the footer version. 无配置变更。*
+
+- **问题**:agent 原来只在启动时探测一次 GPU。2026-10-29 20:39 m25 重启后 amdgpu 晚于 agent 初始化,agent 认不到卡,
+  一直报「没有 GPU」;当晚另一个会话在 m25 上就地加了运行期重新扫描(20:58,留了 `.bak.gpu-rescan-20261029_205844`),
+  但没有进仓库 —— m25 跑的 agent 从此和 HEAD 不一致,而 m26 / m27 还停在 v2.31.0 的版本。
+- **改动**:`gpu_rescan_if_due` 每 30 秒(按 `SECONDS` 计,不受开机对时跳变影响)在采样周期开头重新跑一次
+  `amd_probe`,卡数或 PCI 地址变了记一行 `gpu rescan:`;`amd_probe` 先清空所有卡和传感器数组,重复探测不会重复追加。
+  NVIDIA 机器不扫。逻辑与 m25 上的热修一致,只是叠在 v2.32 的「4000 槽改名」(`LITELLM_4000_*`)之上。
+- **部署**:m24 / m25 / m26 / m27 都换成这一版(各留 `.bak.pre-v2.34.1`),上报的 `extra.agent.sha256` 与 HEAD 一致。
+
+---
+
 ## v2.34.0 — 2026-10-30
 
 **格子固定尺寸(108–150px);机器卡三种排法(窄 / 标准 / 宽)按卡宽切换;栏数 1 / 2 / 4 / 8,卡片填满整行,不再置中留边。**

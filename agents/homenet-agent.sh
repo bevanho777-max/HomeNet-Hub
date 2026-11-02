@@ -92,7 +92,7 @@ net_probe() {
   fi
 }
 
-# ---------- GPU 探测(启动一次) ----------
+# ---------- GPU 探测(启动 + 运行期重新扫描) ----------
 # AMD 多卡(v2.18):只认 vendor=0x1002 的 /sys/class/drm/cardN,张数不写死。按 PCI 地址
 # 排序编号 —— cardN 的 N 由驱动加载顺序决定,重启后可能互换;PCI 地址是插槽,不会变,
 # 所以 idx 0/1 永远对应同一块物理卡(m25:03:00.0=GPU0、03:02.0=GPU1)。虚拟机里的
@@ -126,6 +126,9 @@ amd_model() {  # $1=device 目录 → 型号名。sysfs 只给 PCI device id,这
 
 amd_probe() {
   local c d v pci hw f lbl i=0
+  # v2.34.1 运行期会重复探测,先清空所有卡和传感器数组,免得重复追加
+  AMD_CARDS=(); AMD_PCI=(); AMD_NAME=(); AMD_HW=()
+  AMD_T_EDGE=(); AMD_T_JUNC=(); AMD_T_MEM=(); AMD_PWR=()
   while read -r pci d; do
     [ -n "$d" ] || continue
     AMD_CARDS+=("$d"); AMD_PCI+=("$pci")
@@ -185,6 +188,26 @@ busy_reset() {
   local i
   for i in "${!AMD_CARDS[@]}"; do BUSY_SUM[$i]=0; BUSY_N[$i]=0; PWR_SUM[$i]=0; PWR_N[$i]=0; done
 }
+# v2.34.1 运行期每 30 秒重新探测 AMD 卡(m25 2026-10-29 20:58 起的现场热修,并回仓库):开机时
+# amdgpu 晚于 agent 初始化、或 hwmon 路径换了号,不用重启 agent 也能把卡认回来。按 SECONDS
+# 计时,不受开机时的对时跳变影响;在周期开头、采样之前做,累计值不会混进两种卡布局。
+GPU_RESCAN_INTERVAL=30
+GPU_NEXT_RESCAN=0
+gpu_rescan_if_due() {
+  [ "$GPU_MODE" = "nvidia" ] && return 0
+  [ "$SECONDS" -lt "$GPU_NEXT_RESCAN" ] && return 0
+  GPU_NEXT_RESCAN=$((SECONDS + GPU_RESCAN_INTERVAL))
+  local old_pci="${AMD_PCI[*]}"
+  amd_probe
+  GPU_MODE="none"
+  [ "${#AMD_CARDS[@]}" -gt 0 ] && GPU_MODE="amd"
+  BUSY_SUM=(); BUSY_N=(); PWR_SUM=(); PWR_N=()
+  busy_reset
+  if [ "${AMD_PCI[*]}" != "$old_pci" ]; then
+    echo "[homenet-agent] gpu rescan: cards=${#AMD_CARDS[@]} (${AMD_PCI[*]}) previous=($old_pci)" >&2
+  fi
+}
+
 busy_sample() {
   local i v
   for i in "${!AMD_CARDS[@]}"; do
@@ -448,6 +471,7 @@ NET_LOG=1                                  # 之后网卡状态每次变化都�
 
 # ---------- 主循环 ----------
 while :; do
+  gpu_rescan_if_due                        # 到点就重新探测 AMD 卡(在本周期采样之前)
   interval_sleep                           # = sleep $INTERVAL,AMD 卡顺带多次采样使用率
   now=$(date +%s)
   elapsed=$((now - prev_ts)); [ "$elapsed" -lt 1 ] && elapsed=1
