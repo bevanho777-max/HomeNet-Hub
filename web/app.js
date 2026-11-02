@@ -199,11 +199,37 @@ function updateBodyKeepRings(body, newHTML) {
 // ── status pills ──
 // B1: green for healthy vocab, red only for explicit failure vocab (offline/down/
 // timeout/…) or transport failure (online===false); unknown/other → neutral grey.
+// v2.35: a service whose target names its `machine` (the laptops, which sleep a lot) is grey
+// 未开机 while it cannot be reached and the machine is not reporting either. Red only when the
+// machine is demonstrably up through the failure: it was already reporting when the failed
+// probe started (a waking laptop gets one probe for its service to come back), and it has
+// reported since the outage began (the probe can fail a few seconds before a closing laptop's
+// agent is counted as stale).
+function machineOff(target, snap) {
+  if (!target.machine || snap?.online !== false) return null;
+  const m = lastSnap[target.machine];
+  const up = m && m.online !== false && m.since <= snap.tried && m.at > snap.since;
+  return up ? null : { at: m?.at || null };
+}
+
+function hmOf(ms) {
+  const d = new Date(ms), now = new Date();
+  const p2 = (x) => ('0' + x).slice(-2);
+  const s = `${p2(d.getHours())}:${p2(d.getMinutes())}`;
+  return d.toDateString() === now.toDateString() ? s : `${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${s}`;
+}
+
 function chip(target, snap) {
-  let cls = 'unknown', lat = '';
-  if (snap) {
-    if (snap.online === false) cls = 'offline';
-    else {
+  let cls = 'unknown', lat = '', tip = '';
+  const off = machineOff(target, snap);
+  if (off) {
+    lat = `<span class="lat">${esc(t('machine_off'))}</span>`;
+    tip = off.at ? t('machine_off_since', hmOf(off.at)) : t('machine_off');
+  } else if (snap) {
+    if (snap.online === false) {
+      cls = 'offline';
+      if (target.machine) tip = t('chip_svc_down');
+    } else {
       const st = snap.metrics?.status?.value;
       const lvl = statusLevel(st);
       cls = st == null ? 'online' : (lvl === 'danger' ? 'offline' : lvl === 'ok' ? 'online' : 'unknown');
@@ -211,7 +237,7 @@ function chip(target, snap) {
       if (l && l !== '—') lat = `<span class="lat">${esc(l)}</span>`;
     }
   }
-  return `<span class="chip ${cls}"><span class="dot"></span>${esc(target.name || target.id)}${lat}</span>`;
+  return `<span class="chip ${cls}"${tip ? ` title="${esc(tip)}"` : ''}><span class="dot"></span>${esc(target.name || target.id)}${lat}</span>`;
 }
 
 // ── main render ──

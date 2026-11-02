@@ -485,6 +485,7 @@ const ZH = {
   abbr_comfy_avg_over: (n) => `${n} 张`,
   machine_off: '未开机',
   machine_off_since: (when) => `未开机 · 最后上报 ${when}`,
+  chip_svc_down: '机器在线,服务没有响应',
 
   // table card
   table_more: '查看全部',
@@ -905,6 +906,7 @@ const EN = {
   abbr_comfy_avg_over: (n) => `${n} img`,
   machine_off: 'Off',
   machine_off_since: (when) => `Off · last report ${when}`,
+  chip_svc_down: 'Machine is up, service not answering',
 
   table_more: 'View all',
   table_count: (n) => ` (${n} total)`,

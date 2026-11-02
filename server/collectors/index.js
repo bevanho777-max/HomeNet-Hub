@@ -133,6 +133,7 @@ export class Scheduler {
 
   async _poll(target, metrics) {
     const { snapshot, tsdb, env } = this.ctx;
+    const tried = Date.now();
     try {
       const type = target.source.type;
       // A `shape: table` sql target is the generic one: run its queries/ file and
@@ -288,7 +289,7 @@ export class Scheduler {
       const rows = samplableRows(target.id, norm, metrics);
       if (rows.length) tsdb.record(rows);
     } catch (e) {
-      snapshot.update(target.id, { online: false, error: String(e?.message || e) });
+      snapshot.update(target.id, { online: false, error: String(e?.message || e), tried });
       this._recallModel(target);
     }
   }

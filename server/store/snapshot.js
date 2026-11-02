@@ -9,14 +9,19 @@ export class Snapshot {
   }
 
   // entry shape:
-  // { online, stale, at, metrics: {k:{value,level,display}}, extra: {...}, error? }
-  update(targetId, { online, metrics, extra, error }) {
+  // { online, stale, at, since, tried?, metrics: {k:{value,level,display}}, extra: {...}, error? }
+  // v2.35: `since` = when the current online / offline spell began; `tried` (offline only) =
+  // when the latest failed attempt started. A status pill for a service on a laptop needs both
+  // to tell "the machine is off" from "the machine is up and the service is not" (web/app.js).
+  update(targetId, { online, metrics, extra, error, tried }) {
     const prev = this._state.get(targetId);
+    const now = Date.now();
     if (online) {
       this._state.set(targetId, {
         online: true,
         stale: false,
-        at: Date.now(),
+        at: now,
+        since: prev?.online ? (prev.since ?? now) : now,
         metrics: metrics || {},
         extra: extra || (prev?.extra ?? null),
         error: null,
@@ -27,6 +32,8 @@ export class Snapshot {
         online: false,
         stale: true,
         at: prev?.at ?? null,
+        since: prev && !prev.online ? (prev.since ?? now) : now,
+        tried: tried ?? now,
         metrics: prev?.metrics || {},
         extra: prev?.extra ?? null,
         error: error || prev?.error || 'unreachable',
@@ -47,6 +54,8 @@ export class Snapshot {
         online: e.online,
         stale: e.stale,
         at: e.at,
+        since: e.since,
+        ...(e.tried ? { tried: e.tried } : {}),
         metrics: e.metrics,
         ...(e.extra ? { extra: e.extra } : {}),
         ...(e.error ? { error: e.error } : {}),

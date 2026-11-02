@@ -49,6 +49,26 @@ on screen is the one from `package.json`, and this file is what needs fixing.
 
 ---
 
+## v2.35.0 — 2026-11-02
+
+**顶部状态灯加两台笔电的服务:「推理 · 133」(m133 Strata 8080 的 `/health`)和「ComfyUI · 136」(m136 ComfyUI 8188 的
+`/system_stats`),排在 llama · 26 后面,显示延迟。笔电没开机时灯是灰色「未开机」,不着红。**
+
+*Rebuild required — `server/` and `web/` changed. 配置:`config/targets.yaml`(`inference133` 改名、加 `machine`;新目标
+`svc_comfy136`)、`config/layout.yaml` 的 `status_bar.targets`。*
+
+- **新字段 `machine:`**(服务目标上,写它所在机器的 push 目标 id):服务连不上时,那台机器没在上报 → 灰色「未开机」
+  (悬停显示最后上报时间);机器在线、服务不响应 → 红色(悬停「机器在线,服务没有响应」)。没写 `machine:` 的服务照旧,
+  连不上就是红色。`config.example/targets.yaml` 有一个示例(`laptop_service_example`)。
+- **判红要机器「整段都在」**:红色要求机器在失败的那次探测开始前就已经在上报,而且在服务断掉之后还上报过。
+  合盖时服务探测可能比 agent 被判离线(10 秒)早几秒失败,刚唤醒时 agent 可能比下一次服务探测(15 秒)早回来 ——
+  这两种情况都显示灰色,不会闪红。为此快照多了两个字段:`since`(这一段在线 / 离线从何时开始)和 `tried`
+  (离线时,最近一次失败的尝试何时开始),`/api/snapshot` 一并返回。
+- 「推理 · 133」沿用推理节点卡已有的 `inference133` 探测(15 秒一次,不多打一个请求),只改了显示名(英文 Inference · 133)。
+  「ComfyUI · 136」是新的 15 秒探测(3 秒超时);「ComfyUI 节点」卡自己的采集不变。
+
+---
+
 ## v2.34.2 — 2026-11-02
 
 **每个推理节点可以有自己的 API key:新增 `NODE_KEY_M26` / `NODE_KEY_M133`,由 `targets.yaml` 的 `engine.key_env` 指定。**

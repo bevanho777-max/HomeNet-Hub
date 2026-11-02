@@ -496,6 +496,20 @@ targets:
       disk_bytes: { v: "$.disk.used_gb", max: "$.disk.total_gb" }
       net:        { rx: "$.net.rx_bps",  tx: "$.net.tx_bps" }
 
+  # v2.35: a service ON that laptop, as a top status pill (list it in layout status_bar.targets).
+  # `machine:` names the laptop's target above: while the laptop is not reporting, the pill is grey
+  # "Off" (hover: when it last reported) instead of red. Red only when the laptop is up -- it was
+  # reporting when the failed probe started and has reported since -- and the service still does
+  # not answer. Without `machine:` an unreachable service is red, as before.
+  - id: laptop_service_example
+    name: "ComfyUI · Laptop"
+    machine: laptop_example
+    enabled: false
+    source: { type: http, url: "http://192.168.1.40:8188/system_stats", interval: "15s", timeout: "3s" }
+    map:
+      status:  "$.status"
+      latency: "$.latency_ms"
+
   # B20: NAS with per-disk temperatures. The agent emits extra.disks[] HDD-first
   # then SSD/NVMe, so the indices below are stable groups rather than raw
   # enumeration order — re-check them after adding or pulling a drive. Each

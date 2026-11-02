@@ -207,6 +207,9 @@ const targetsSchema = {
           always_on: { type: 'boolean' },
           // v2.32: what the machine is for, a pill after the machine card's title (LLM / ComfyUI)
           role: { type: 'string', maxLength: 24 },
+          // v2.35: the machine target (a push agent) this service runs on. Its status pill is grey
+          // 未开机 while that machine is off, red only when the machine is up and the service is not.
+          machine: { type: 'string', pattern: '^[a-zA-Z0-9_]+$' },
           // v2.20 inference_nodes: which rows of today's usage belong to which node, and
           // the host:port endpoints used to find the litellm instances routing to it.
           nodes: {

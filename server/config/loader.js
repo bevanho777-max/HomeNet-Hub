@@ -219,6 +219,8 @@ export function publicConfig(cfg) {
     ...(typeof t.always_on === 'boolean' ? { always_on: t.always_on } : {}),
     // v2.32: the purpose pill after a machine card's title (LLM / ComfyUI)
     ...(typeof t.role === 'string' && t.role ? { role: t.role } : {}),
+    // v2.35: the machine a service runs on (its status pill goes grey, not red, while it is off)
+    ...(typeof t.machine === 'string' && t.machine ? { machine: t.machine } : {}),
     // v2.28: how often it is polled, as written ("15s") -- the inference node's latency cell
     // says so on its second line. Only the interval: the rest of `source` stays server-side.
     ...(typeof t.source?.interval === 'string' ? { interval: t.source.interval } : {}),
