@@ -49,6 +49,22 @@ on screen is the one from `package.json`, and this file is what needs fixing.
 
 ---
 
+## v2.34.2 — 2026-11-02
+
+**每个推理节点可以有自己的 API key:新增 `NODE_KEY_M26` / `NODE_KEY_M133`,由 `targets.yaml` 的 `engine.key_env` 指定。**
+
+*Recreate required — `docker-compose.yml` passes two new variables. 配置:`config/targets.yaml` 的 m26 / m133 节点加 `key_env`。*
+
+- **背景**:2026-11 起后端 key 轮换(私有仓 BACKLOG 29-3)—— 原来四台后端共用一把(也是旧 litellm master 的值),现在每台
+  各一把;m26 的 llama-server(`--api-key-file`)与 m133 的 Strata(`"api_key"`)原本不验 key,这次也开起来。开了以后
+  llama.cpp 的 `/slots`、`/metrics` 和 Strata 的 `/v1/status` 都要带 key,hub 读实时状态时得按节点带上对的那一把。
+- **改动**:compose 把 `NODE_KEY_M26`、`NODE_KEY_M133` 传进容器(`.env.example` 有说明);引擎探测与实时读取早就按
+  `engine.key_env` 取 key(v2.25 起),只是此前只有 m25 配了 `STRATA_API_KEY`。key 只在请求头里用,不写日志、不进浏览器。
+- 节点还没开 key 时带上也无妨(不验 key 的服务忽略这个头),所以先部署 hub、再逐台切后端,切的时候 hub 不用再动
+  (m25 仍用 `STRATA_API_KEY`,它切换时只改 `.env` 并重建容器)。
+
+---
+
 ## v2.34.1 — 2026-11-02
 
 **Linux agent 运行期重新探测 AMD 卡(把 m25 上 10-29 的现场热修并回仓库),m24–m27 统一换成 HEAD 的 agent。**
