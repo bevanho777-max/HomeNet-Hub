@@ -23,6 +23,7 @@ services:
       - PUSH_TOKEN_M110=${PUSH_TOKEN_M110:-}  # machine 110 push agent
       - PUSH_TOKEN_M24=${PUSH_TOKEN_M24:-}   # machine 24 self-monitor agent
       - PUSH_TOKEN_M27=${PUSH_TOKEN_M27:-}   # machine 27 push agent
+      - PUSH_TOKEN_M28=${PUSH_TOKEN_M28:-}   # machine 28 push agent
       - PUSH_TOKEN_NAS75=${PUSH_TOKEN_NAS75:-}  # NAS 75 push agent
       - PUSH_TOKEN_M133=${PUSH_TOKEN_M133:-}  # laptop 133 push agent (Windows)
       - PUSH_TOKEN_M136=${PUSH_TOKEN_M136:-}  # laptop 136 push agent (Windows)

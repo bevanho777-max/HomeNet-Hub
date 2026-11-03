@@ -49,6 +49,32 @@ on screen is the one from `package.json`, and this file is what needs fixing.
 
 ---
 
+## v2.37.0 — 2026-11-03
+
+**Agent 的间隔计时改用单调时钟,对时往回拨不再让重新探测显卡停摆几小时。网格栏数改成通用规则:取机器卡数的因数,
+放得下的最大那个。compose 传 `PUSH_TOKEN_M28`。**
+
+*Rebuild required — `web/`、compose 都改了。Linux 机器和 NAS 的 agent 要换成这一版;Windows agent 没改。*
+
+- **Linux agent(`agents/homenet-agent.sh`)**:重新探测 AMD 卡、网速的周期、litellm 缓存的 TTL 与陈旧判断都改用
+  `/proc/uptime`,墙钟只用于 payload 的 `ts`。v2.34.1 的重新探测按 bash 的 `SECONDS` 计时,注释说它不受对时影响,这是
+  错的:`SECONDS` 是当前时间减 shell 启动时间,对时往回拨多少就倒退多少。VM 开机时时钟快 8h13m、agent 又早于第二张卡
+  初始化,于是只认到一张卡,而且约 8 小时内不再重新探测。
+- **NAS agent(`agents/nas75-agent.sh`)**:同类问题。网速周期和 df / mdstat / synodisk 的缓存时间戳改用 `/proc/uptime`。
+  以前对时往回拨时,磁盘温度不再刷新,也不会判定为过期。
+- **Windows agent**:检查过,没有同类问题,不改。它只用墙钟算网速周期,往回拨时只有一个样本偏高,下一拍就恢复;
+  其余计数都按循环次数。
+- **验证**:同版本 bash 下用 `LD_PRELOAD` 把墙钟往回拨 8h13m,其余不动。旧版回拨后重新探测、litellm 采集、synodisk 刷新
+  全部停止,卡数一直是 1;新版重新探测仍每 30 秒一次,认回第二张卡,其余刷新也照常。
+- **网格栏数(`web/app.js` `pickColumns`、`web/tokens.css`)**:不再是 CSS 里的宽度表。`packGrid()` 取机器卡张数的因数,
+  在每张卡不小于 `--machine-min`(300px)的前提下取最大的:九张是 1 / 3 / 9 栏(3 栏从 992px、9 栏从 2888px),
+  八张是 1 / 2 / 4 / 8 栏。增减机器不用再改规则。代价是质数张(例如 7、11)只有 1 栏和全部并排两种。
+  300px 是实测的:格子放进 258px 就够,但英文标题 + `2× 7900 XTX` + uptime 要 278px 才不截断,再留出 `120d 12h` 的位置。
+  卡片固定尺寸、格子 108–150px、三种排法自动切换、不留空洞的规则都没变。容器查询换成 `ResizeObserver`,滚动条
+  出现时栏数照样跟着实际宽度变。
+- **推理节点卡**:连不上时状态格第二行由「连不上」改为「无法连接」(三个字在宽格子里不到内容宽度的 25%)。
+- **compose**:传 `PUSH_TOKEN_M28`(机器 28 的推送 token)。
+
 ## v2.36.0 — 2026-11-02
 
 **生产只从已提交的版本 build:compose 的 `config/`、`data/` 挂载可以指向绝对路径,镜像就能在 release tag 的干净

@@ -428,7 +428,7 @@ const ZH = {
   engine_err: (e) => `最近一次探测没有找到引擎:${e}`,
   node_sub_ondemand: '按需开机',
   node_sub_timeout: '探测超时',
-  node_sub_unreachable: '连不上',
+  node_sub_unreachable: '无法连接',
   node_sub_probe: (iv) => `每 ${iv} 探测`,
   node_sub_probe_any: '健康探测',
   node_panel_streams: '并发（各路 decode t/s；并发数）',

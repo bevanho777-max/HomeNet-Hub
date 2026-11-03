@@ -62,6 +62,19 @@ HOST_NAME="$(hostname 2>/dev/null | tr -cd 'A-Za-z0-9._-' | cut -c1-63)"
 HOST_JSON=""
 [ -n "$HOST_MID" ] && HOST_JSON="\"host\":{\"machine_id\":\"$HOST_MID\",\"hostname\":\"$HOST_NAME\"}"
 
+# ---------- 单调时钟 ----------
+# v2.37 所有「隔多久」(重新探测 AMD 卡、网速的周期、litellm 缓存)都用 /proc/uptime 的整数秒,墙钟
+# 只用于 payload 的 ts。date +%s 和 bash 的 SECONDS 都跟着墙钟走(SECONDS = 当前时间 - shell 启动
+# 时间):ESXi 主机时钟快 8h13m,VM 开机后对时往回拨,v2.34.1 的重新探测因此约 8 小时不跑,m25 重启后
+# 两张卡只认到一张(BACKLOG 43)。sleep 和 curl -m 是相对计时,不受影响。
+# 读不到 /proc/uptime 就保留上次的值:计时停住,循环不退出。
+MONO=0
+mono_read() {
+  local up=""
+  { read -r up _ < /proc/uptime; } 2>/dev/null
+  [ -n "$up" ] && MONO="${up%%.*}"
+}
+
 # ---------- 网卡探测(启动 + 运行期自愈) ----------
 # 用户显式给了 NET_IFACE 就固定用它,运行期不再改写;否则每次探测都重新取默认路由
 # 网卡 —— 覆盖"agent 早于网络就绪启动"导致 net 字段永久缺失的情况。
@@ -189,14 +202,15 @@ busy_reset() {
   for i in "${!AMD_CARDS[@]}"; do BUSY_SUM[$i]=0; BUSY_N[$i]=0; PWR_SUM[$i]=0; PWR_N[$i]=0; done
 }
 # v2.34.1 运行期每 30 秒重新探测 AMD 卡(m25 2026-10-29 20:58 起的现场热修,并回仓库):开机时
-# amdgpu 晚于 agent 初始化、或 hwmon 路径换了号,不用重启 agent 也能把卡认回来。按 SECONDS
-# 计时,不受开机时的对时跳变影响;在周期开头、采样之前做,累计值不会混进两种卡布局。
+# amdgpu 晚于 agent 初始化、或 hwmon 路径换了号,不用重启 agent 也能把卡认回来。按单调时钟
+# 计时(v2.37,见 mono_read);在周期开头、采样之前做,累计值不会混进两种卡布局。
 GPU_RESCAN_INTERVAL=30
 GPU_NEXT_RESCAN=0
 gpu_rescan_if_due() {
   [ "$GPU_MODE" = "nvidia" ] && return 0
-  [ "$SECONDS" -lt "$GPU_NEXT_RESCAN" ] && return 0
-  GPU_NEXT_RESCAN=$((SECONDS + GPU_RESCAN_INTERVAL))
+  mono_read
+  [ "$MONO" -lt "$GPU_NEXT_RESCAN" ] && return 0
+  GPU_NEXT_RESCAN=$((MONO + GPU_RESCAN_INTERVAL))
   local old_pci="${AMD_PCI[*]}"
   amd_probe
   GPU_MODE="none"
@@ -458,11 +472,13 @@ NET_LOG=0                                  # 启动横幅之前不打网卡状�
 net_probe
 NET_RETRY_TICKS="${NET_RETRY_TICKS:-15}"   # NET_OK=0 时每 N 拍重探(默认 2s/拍 -> 约 30s)
 net_retry=0
-prev_ts=$(date +%s)
+mono_read
+prev_mono=$MONO
 
 # litellm 采集的 last-known-good 缓存:真正采集每 LITELLM_TTL 秒一次,其余拍复用上次结果。
 # 推送用 curl -m 1,采集绝不能跟在它的预算里,所以这里跟 nas75 agent 的 DISKS_INTERVAL 同构。
-llm_cache=""; llm_cache_ts=0
+# 时间戳是单调时钟;开机不久时它还很小,所以往前推一个 TTL,第一拍就采。
+llm_cache=""; llm_cache_ts=$((MONO - LITELLM_TTL))
 
 busy_reset
 
@@ -473,8 +489,9 @@ NET_LOG=1                                  # 之后网卡状态每次变化都�
 while :; do
   gpu_rescan_if_due                        # 到点就重新探测 AMD 卡(在本周期采样之前)
   interval_sleep                           # = sleep $INTERVAL,AMD 卡顺带多次采样使用率
-  now=$(date +%s)
-  elapsed=$((now - prev_ts)); [ "$elapsed" -lt 1 ] && elapsed=1
+  now=$(date +%s)                          # 只进 payload 的 ts;下面的间隔都用 MONO
+  mono_read
+  elapsed=$((MONO - prev_mono)); [ "$elapsed" -lt 1 ] && elapsed=1
 
   # cpu:两周期 /proc/stat 差值
   cpu_json=""
@@ -511,18 +528,18 @@ while :; do
       net_probe                            # 本拍只建基线,下一拍起恢复出数
     fi
   fi
-  prev_ts=$now
+  prev_mono=$MONO
 
   # litellm:每 LITELLM_TTL 秒才真采一次(PG ~160ms + docker logs ~70ms),其余拍走缓存。
   # 缓存超过 LITELLM_STALE 未刷新就整体丢弃,宁可小格显示 "—" 也不展示陈旧数字。
   llm_extra=""
   if [ -n "$LITELLM_PG_DSN" ]; then
-    if [ $((now - llm_cache_ts)) -ge "$LITELLM_TTL" ]; then
+    if [ $((MONO - llm_cache_ts)) -ge "$LITELLM_TTL" ]; then
       llm_fresh=$(llm_collect)
-      [ -n "$llm_fresh" ] && { llm_cache=$llm_fresh; llm_cache_ts=$now; }
+      [ -n "$llm_fresh" ] && { llm_cache=$llm_fresh; llm_cache_ts=$MONO; }
     fi
     llm_extra="$llm_cache"
-    [ -n "$llm_extra" ] && [ $((now - llm_cache_ts)) -gt "$LITELLM_STALE" ] && llm_extra=""
+    [ -n "$llm_extra" ] && [ $((MONO - llm_cache_ts)) -gt "$LITELLM_STALE" ] && llm_extra=""
   fi
 
   extra_json=""

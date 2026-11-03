@@ -275,8 +275,20 @@ function fitBoard() {
   fitCards([...document.querySelectorAll('#grid > .card')]);
 }
 
-// CSS decides HOW MANY columns (v2.33: 1/2/4 by screen width, see :root in tokens.css); this
-// decides WHERE each card goes. Rows are filled in config order by span. A row that ends
+// v2.37 HOW MANY columns: a divisor of the number of machine cards, so they fill every row, and of
+// those the largest whose cards still reach `cardMin` (--machine-min in tokens.css). Nine cards take
+// 1, 3 or 9 columns, eight 1, 2, 4 or 8; adding or removing a machine needs no new rule. A count with
+// no divisor between 1 and itself (seven, eleven) stays at one column until all of them fit.
+export function pickColumns(count, room, cardMin, gap) {
+  const n = Math.max(1, count);
+  let best = 1;
+  for (let d = 2; d <= n; d++) {
+    if (n % d === 0 && d * cardMin + (d - 1) * gap <= room) best = d;
+  }
+  return best;
+}
+
+// packLayout decides WHERE each card goes. Rows are filled in config order by span. A row that ends
 // short is closed by (1) widening the row's `stretch` cards in proportion to their span,
 // or, when it has none, (2) pulling up later cards that fit, and only then (3) widening
 // its last card -- so no column count leaves an empty cell, and no filler card is ever
@@ -286,9 +298,9 @@ function fitBoard() {
 // every column count; the machine row before it closes by widening its own cards.
 // Placement is written as explicit grid-row / grid-column, so CSS `span` classes are just
 // the no-JS fallback.
-// v2.33: the column count is 1, 2 or 4 (tokens.css :root) and machine cards carry no
-// `stretch`: eight of them fill whole rows at every count, so nothing here widens a machine
-// card any more; the rules above still close a short row on a board with another card count.
+// v2.33: machine cards carry no `stretch`: the column count divides their number (pickColumns), so
+// they fill whole rows at every count and nothing here widens a machine card any more; the rules
+// above close the short rows of the other cards.
 export function packLayout(cards, cols) {
   const pending = cards.map((c) => ({ ...c, w: c.full ? cols : Math.min(c.span || 1, cols) }));
   const rows = [];
@@ -328,8 +340,16 @@ export function packLayout(cards, cols) {
 function packGrid() {
   const grid = document.getElementById('grid');
   if (!grid) return;
-  const cols = parseInt(getComputedStyle(grid).getPropertyValue('--cols'), 10) || 1;
   const els = [...grid.children].filter((el) => el.classList.contains('card'));
+  // A board with no machine cards divides its other cards the same way (a full-width card takes a
+  // row alone at any count).
+  const machines = els.filter((el) => el.dataset.kind === 'machine').length;
+  const count = machines || els.filter((el) => el.dataset.span !== 'full').length;
+  const cs = getComputedStyle(grid);
+  const room = grid.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+  const cardMin = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--machine-min')) || 300;
+  const cols = pickColumns(count, room, cardMin, parseFloat(cs.columnGap) || 0);
+  if (grid.style.getPropertyValue('--cols') !== String(cols)) grid.style.setProperty('--cols', String(cols));
   const rows = packLayout(els.map((el) => ({
     el, full: el.dataset.span === 'full', span: parseInt(el.dataset.span, 10) || 1, stretch: el.dataset.stretch === '1',
   })), cols);
@@ -350,10 +370,18 @@ function packGrid() {
 // cards line up by construction; nothing is stretched to match a taller neighbour.)
 
 let packRaf = 0;
-window.addEventListener('resize', () => {
+const schedulePack = () => {
   cancelAnimationFrame(packRaf);
   packRaf = requestAnimationFrame(() => { packGrid(); fitBoard(); fitLines(); });
-});
+};
+window.addEventListener('resize', schedulePack);
+// v2.37 the board's width also changes with no window resize (a desktop scrollbar appearing); the
+// column count no longer follows that by itself through a CSS container query.
+let packedWidth = -1;
+new ResizeObserver(([entry]) => {
+  const w = Math.round(entry.contentRect.width);
+  if (w !== packedWidth) { packedWidth = w; schedulePack(); }
+}).observe(document.getElementById('grid'));
 
 // B12-row: a row-stack lays out horizontally only when its measured width meets
 // the threshold (data-min = min_row_width, else children × 180px); otherwise it

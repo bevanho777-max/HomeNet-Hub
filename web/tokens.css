@@ -74,13 +74,17 @@ button, input, select, textarea { font-variant-numeric: tabular-nums; }
    are as wide as their grid column; what keeps them from looking stretched is the fixed cell
    size (--cell-min .. --cell-max, below) and the card layouts that switch with the card's width
    (machine: narrow / standard / wide). --page-max stays for the rules that centre on it (100%:
-   nothing to centre). The column COUNT lives with the grid (.board, below). */
+   nothing to centre). The column COUNT lives with the grid (.grid, below). */
 :root { --page-max: 100%; --gutter-min: var(--s6);
   /* v2.34 a cell (.kv .item) is 108-150px wide wherever it is: it never shrinks below what its
      widest ordinary reading needs at the normal font (Network "↓1.5M ↑8.5M" 91px + 2 x 9px
      padding + border), and never grows past 150px -- a wider box only adds width to the gaps
      between cells (justify-content: space-between), never to a cell. */
-  --cell-min: 108px; --cell-max: 150px; }
+  --cell-min: 108px; --cell-max: 150px;
+  /* v2.37 the narrowest a machine card may get from the column count; packGrid() reads it. The cells
+     alone fit 258px (narrow layout, see .grid below), the header does not: an English title +
+     "2× 7900 XTX" + uptime is cut below 278px even at "0d 1h", and 300px leaves room for "120d 12h". */
+  --machine-min: 300px; }
 @media (max-width: 560px) { :root { --gutter-min: var(--s4); } }
 
 html, body {
@@ -205,30 +209,24 @@ html, body {
    in a row as tall as the tallest.
    v2.23: WHERE each card goes is decided by packGrid() in app.js (explicit grid-row /
    grid-column, rows closed by widening `stretch` cards, never a hole); the span classes
-   below are only the no-JS fallback. --cols is read back by packGrid().
-   v2.33: --cols is 1, 2, 4 -- the counts that divide 8, so the eight machine cards fill every row.
-   v2.34: and 8. The count follows the width the board really has (.board is a size container, so
-   a desktop scrollbar is already taken off), and each tier starts where its cards reach the
-   minimum width of the layout they use there (card = cells + 2 x 16px padding + 2 x 1px border;
-   tier = cols x card + (cols - 1) x 16px gap + 2 x 30px gutter):
-     narrow   cells 2 x 108 + 8          = 224 inside  -> card >= 258px
+   below are only the no-JS fallback.
+   v2.33: the column count divides the number of machine cards, so they fill every row.
+   v2.37: packGrid() works the count out and writes it to --cols (1 here is only the value before
+   the first pack): the largest divisor d of the machine-card count with
+     d x --machine-min + (d - 1) x 16px gap <= the room inside .grid's padding
+   (.grid's own width, so a desktop scrollbar is already taken off). Adding or removing a machine
+   needs no change here. Nine cards: 3 columns from 992px, 9 from 2888px (2 x 30px gutter included).
+   The card layouts switch with the card's own width (card = cells + 2 x 16px padding + 2 x 1px border):
+     narrow   cells 2 x 108 + 8          = 224 inside  -> card >= 258px (one column on a phone)
      standard cells 3 x 108 + 2 x 8      = 340 inside  -> card >= 374px
-     wide     rings 216 + 22 + cells 340 = 578 inside  -> card >= 612px
-     1 column  below 824px  (the one card is narrow, standard or wide by its own width)
-     2 columns from  824px  = 2 x 374 + 16 + 60  (standard; wide would need 1300px, past the next tier)
-     4 columns from 1140px  = 4 x 258 + 48 + 60  (narrow; standard from 1604px, wide from 2556px)
-     8 columns from 3164px  = 8 x 374 + 112 + 60 (standard) */
+     wide     rings 216 + 22 + cells 340 = 578 inside  -> card >= 612px */
 .board { container: board / inline-size; }
 .grid { --cols: 1; }
-@container board (min-width: 824px)  { .grid { --cols: 2; } }
-@container board (min-width: 1140px) { .grid { --cols: 4; } }
-@container board (min-width: 3164px) { .grid { --cols: 8; } }
 .grid { display: grid; gap: var(--s4);
   padding: var(--s4) max(var(--gutter-min), calc((100% - var(--page-max)) / 2)) var(--s5);
   grid-template-columns: repeat(var(--cols), minmax(0, 1fr));
   align-items: stretch; }
 .grid > .card.span-2 { grid-column: span 2; }
-@container board (max-width: 823.98px) { .grid > .card.span-2 { grid-column: 1 / -1; } }
 .grid > .card.span-full, .grid > .card.card-wide { grid-column: 1 / -1; }
 .card {
   position: relative; border-radius: var(--radius); padding: var(--s4) var(--s4) var(--s5);

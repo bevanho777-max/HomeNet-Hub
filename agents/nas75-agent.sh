@@ -68,6 +68,19 @@ HOST_NAME="$(hostname 2>/dev/null | tr -cd 'A-Za-z0-9._-' | cut -c1-63)"
 HOST_JSON=""
 [ -n "$HOST_MID" ] && HOST_JSON="\"host\":{\"machine_id\":\"$HOST_MID\",\"hostname\":\"$HOST_NAME\"}"
 
+# ---------- monotonic clock ----------
+# v2.37 every "how long since" (net rate period, df / mdstat / synodisk caches) uses whole seconds
+# from /proc/uptime; the wall clock only goes into the payload's ts. date +%s follows the wall
+# clock: when time sync steps it backwards, now - ts goes negative, so a refresh or a stale check
+# would wait out the whole step (hours on the ESXi host that runs 8h13m fast, BACKLOG 43).
+# If /proc/uptime cannot be read MONO keeps its last value: timing stalls, the loop keeps going.
+MONO=0
+mono_read() {
+  local up=""
+  { read -r up _ < /proc/uptime; } 2>/dev/null
+  [ -n "$up" ] && MONO="${up%%.*}"
+}
+
 # ---------- self-daemon: exit if an instance is already running (cron keep-alive) ----------
 # (skipped in --once mode, which must be runnable next to the live agent)
 if [ "$ONCE" = "0" ] && [ -f "$PIDFILE" ]; then
@@ -267,14 +280,16 @@ NET_LOG=0                                  # stay quiet until the startup banner
 net_probe
 NET_RETRY_TICKS="${NET_RETRY_TICKS:-15}"   # while NET_OK=0, re-probe every N ticks (~30s at 2s)
 net_retry=0
-prev_ts=$(date +%s)
+mono_read
+prev_mono=$MONO
 
 # last-known-good cache for df/mdstat-based fields (disk, extra.volumes, extra.raid)
 CACHE_TTL="${CACHE_TTL:-60}"          # max seconds to reuse a stale value before omitting
 disk_cache=""; disk_cache_ts=0
 vol_cache="";  vol_cache_ts=0
 raid_cache=""; raid_cache_ts=0
-disks_cache=""; disks_cache_ts=0
+# (the timestamps are MONO, small right after boot: start one interval back so the first cycle refreshes)
+disks_cache=""; disks_cache_ts=$((MONO - DISKS_INTERVAL))
 
 echo "[nas75-agent] id=$AGENT_ID hub=$URL iface=${NET_IFACE:-none}" >&2
 NET_LOG=1                                  # from here on, log every NIC state change
@@ -282,8 +297,9 @@ NET_LOG=1                                  # from here on, log every NIC state c
 # ---------- main loop ----------
 while :; do
   sleep "$INTERVAL"
-  now=$(date +%s)
-  elapsed=$((now - prev_ts)); [ "$elapsed" -lt 1 ] && elapsed=1
+  now=$(date +%s)                          # payload ts only; every interval below uses MONO
+  mono_read
+  elapsed=$((MONO - prev_mono)); [ "$elapsed" -lt 1 ] && elapsed=1
 
   # cpu: /proc/stat delta over one interval
   cpu_json=""
@@ -321,34 +337,34 @@ while :; do
       net_probe                            # this tick only rebuilds the baseline
     fi
   fi
-  prev_ts=$now
+  prev_mono=$MONO
 
   # disk / volumes / raid come from df + /proc/mdstat, which can fail for a single
   # cycle on a busy NAS and would otherwise drop the whole field. Take this cycle's
   # value if present, else reuse the last good one (up to CACHE_TTL). cpu/mem/net read
   # /proc directly and are collected fresh every cycle.
   disk_fresh=$(disk_json)
-  disk_out=$(cache_pick "$disk_fresh" "$disk_cache" "$disk_cache_ts" "$now")
-  [ -n "$disk_fresh" ] && { disk_cache=$disk_fresh; disk_cache_ts=$now; }
+  disk_out=$(cache_pick "$disk_fresh" "$disk_cache" "$disk_cache_ts" "$MONO")
+  [ -n "$disk_fresh" ] && { disk_cache=$disk_fresh; disk_cache_ts=$MONO; }
 
   vol_fresh=$(volumes_json)
-  vol_out=$(cache_pick "$vol_fresh" "$vol_cache" "$vol_cache_ts" "$now")
-  [ -n "$vol_fresh" ] && { vol_cache=$vol_fresh; vol_cache_ts=$now; }
+  vol_out=$(cache_pick "$vol_fresh" "$vol_cache" "$vol_cache_ts" "$MONO")
+  [ -n "$vol_fresh" ] && { vol_cache=$vol_fresh; vol_cache_ts=$MONO; }
 
   raid_fresh=$(raid_json)
-  raid_out=$(cache_pick "$raid_fresh" "$raid_cache" "$raid_cache_ts" "$now")
-  [ -n "$raid_fresh" ] && { raid_cache=$raid_fresh; raid_cache_ts=$now; }
+  raid_out=$(cache_pick "$raid_fresh" "$raid_cache" "$raid_cache_ts" "$MONO")
+  [ -n "$raid_fresh" ] && { raid_cache=$raid_fresh; raid_cache_ts=$MONO; }
 
   # disks: synodisk forks a process (~20ms for both enums), so refresh it on a slow
   # interval and reuse in between rather than paying that on every 2s push. A cache
   # older than DISKS_STALE is dropped so a persistently failing synodisk omits the
   # field instead of pinning stale temperatures on the dashboard forever.
-  if [ $((now - disks_cache_ts)) -ge "$DISKS_INTERVAL" ]; then
+  if [ $((MONO - disks_cache_ts)) -ge "$DISKS_INTERVAL" ]; then
     disks_fresh=$(disks_json)
-    [ -n "$disks_fresh" ] && { disks_cache=$disks_fresh; disks_cache_ts=$now; }
+    [ -n "$disks_fresh" ] && { disks_cache=$disks_fresh; disks_cache_ts=$MONO; }
   fi
   disks_out=$disks_cache
-  [ -n "$disks_out" ] && [ $((now - disks_cache_ts)) -gt "$DISKS_STALE" ] && disks_out=""
+  [ -n "$disks_out" ] && [ $((MONO - disks_cache_ts)) -gt "$DISKS_STALE" ] && disks_out=""
 
   # extra (§4.4): join only the non-empty NAS-specific fragments
   extra=""

@@ -65,15 +65,17 @@ status_bar:                         # top service pill row
   targets: [svc_api, svc_imagegen, svc_inference, svc_notify]
 
 grid:
-  # span (v2.22, optional): how many grid columns a card takes. The grid has 1 / 2 / 3 / 4
-  # columns by screen width (<700 / 700-1200 / 1200-1800 / >=1800px), centred, max 2400px.
+  # span (v2.22, optional): how many grid columns a card takes. The column count (v2.37) is a
+  # divisor of the number of machine cards, the largest whose cards still fit the screen
+  # (300px minimum each): nine machines take 1, 3 or 9 columns, eight 1, 2, 4 or 8. A prime
+  # number of machines stays at one column until all of them fit side by side.
   #   1 (default) one column · 2 two columns (the whole row on a one-column phone) · full the whole row
   # Every card in a row is as tall as the tallest. Leaving span out keeps today's
   # behaviour: one column per card.
   # stretch (v2.23, optional, true/false): the card may be WIDENED to close a gap. Rows are
   # filled in the order below by span; a row that ends short first widens its stretch cards
   # (in proportion to their span), and only when it has none pulls a later card up that
-  # fits -- never across a full-width card (v2.30). So no column count (1/2/3/4) leaves a
+  # fits -- never across a full-width card (v2.30). So no column count leaves a
   # hole, and no filler card is ever added.
   # A widened card lays itself out for the room: token boxes go beside the chart, a table
   # card shows its detail_columns too, a machine card puts its cells beside the rings.
@@ -161,7 +163,7 @@ grid:
   - type: info
     title: "About"
     title_en: "About"
-    stretch: true                   # closes its row on 2- and 4-column screens
+    stretch: true                   # closes its row when the columns outnumber the cards left
     # An info row's `value` is a literal sentence as often as it is a number, so both
     # halves take a variant — unlike a metric key elsewhere, which is a reference.
     items:
@@ -217,7 +219,7 @@ grid:
   #   items: [vram_bytes, mem_bytes, gpu_temp, gpu_power, disk_bytes, net]
   #   header_right: [badge, uptime]
 
-  # token usage — span 2 + stretch: on a 4-column screen it is widened to the whole row
+  # token usage — span 2 + stretch: a row it leaves short is closed by widening it
   - target: token
     type: token
     span: 2                         # the class boxes + spark need the room on wide screens
