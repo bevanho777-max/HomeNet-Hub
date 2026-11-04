@@ -18,6 +18,7 @@ $StateFile = "C:\Users\mingc\claude-window.json"
 $ClaudeRefreshLoops = 15
 $NetIface  = ""         # pin the NIC by adapter name; empty = auto-detect default route
 $NetRetryLoops = 15     # while no NIC is available, re-probe every N loops (~30s at 2s)
+$ComfyEveryLoops = 5    # v2.41: re-read ComfyUI's processes / listening ports every N loops (~10s at 2s)
 $DumpPayload = $false   # set $true to write each payload to last-payload.json for debugging
 
 $EnvFile = Join-Path $PSScriptRoot "agent.env.ps1"
@@ -179,6 +180,36 @@ function Get-GpusJson {
   return ('"gpus":[{0}]' -f ($frags -join ','))
 }
 
+# v2.41 ComfyUI on this machine, as the "comfyui":{...} member of extra -- always sent (procs 0 when none),
+# so the hub can tell "the agent looked and ComfyUI is not running" (red) from an older agent that does
+# not look at all. A ComfyUI server = a python process running ComfyUI's main.py (portable, a venv, or
+# the desktop app's bundled copy: ...\ComfyUI\main.py). listen = the TCP ports those processes actually
+# listen on (Get-NetTCPConnection), so the hub probes the port in use -- 8188 portable, 8000 desktop,
+# whatever --port says -- and says Unreachable (yellow) while a ComfyUI process runs but does
+# not answer: m136 11-03 17:02, asyncio's accept loop died on WinError 64 and closed the 8188 listener
+# while the process kept running. cmd_port = --port from the command line; pid / since = the oldest one.
+function Get-ComfyExtra {
+  $procs = @(Get-CimInstance Win32_Process -Filter "Name='python.exe' OR Name='pythonw.exe'" |
+    Where-Object { $_.CommandLine -match '(?i)[\\/]ComfyUI[\\/]main\.py' } | Sort-Object CreationDate)
+  if (-not $procs.Count) { return '"comfyui":{"procs":0,"listen":[]}' }
+  $seen = @{}; $list = @(); $cmdPort = 0
+  foreach ($p in $procs) {
+    if (-not $cmdPort -and $p.CommandLine -match '--port[= ]+"?(\d{2,5})') { $cmdPort = [int]$matches[1] }
+    foreach ($l in @(Get-NetTCPConnection -State Listen -OwningProcess $p.ProcessId -ErrorAction SilentlyContinue)) {
+      $addr = ([string]$l.LocalAddress) -replace '[^0-9A-Fa-f:.]', ''
+      $key = "$addr|$($l.LocalPort)"
+      if ($seen[$key] -or $list.Count -ge 6) { continue }
+      $seen[$key] = $true
+      $list += ('{{"port":{0},"addr":"{1}"}}' -f [int]$l.LocalPort, $addr)
+    }
+  }
+  $first = $procs[0]
+  $since = [DateTimeOffset]::new($first.CreationDate.ToUniversalTime()).ToUnixTimeSeconds()
+  $tail = ''
+  if ($cmdPort) { $tail = ',"cmd_port":' + $cmdPort }
+  return ('"comfyui":{{"procs":{0},"listen":[{1}],"pid":{2},"since":{3}{4}}}' -f $procs.Count, ($list -join ','), [int]$first.ProcessId, $since, $tail)
+}
+
 # Claude Max window: same self-recorded start algorithm as claude-report.ps1
 # (blockId change -> record now as new start, +5h = reset). Shares the same state file.
 # Returns the "claude":{...} member of extra, or "" when ccusage is not installed.
@@ -206,7 +237,9 @@ function Get-ClaudeExtra {
 
 # ---------------- main loop ----------------
 if (-not $ClaudeRefreshLoops -or $ClaudeRefreshLoops -lt 1) { $ClaudeRefreshLoops = 15 }
+if (-not $ComfyEveryLoops -or $ComfyEveryLoops -lt 1) { $ComfyEveryLoops = 5 }
 $claudeFrag = ""
+$comfyFrag = ""
 $loop = 0
 while ($true) {
   Start-Sleep -Seconds $Interval
@@ -236,8 +269,9 @@ while ($true) {
   $prevTs = $now
 
   if ($loop % $ClaudeRefreshLoops -eq 0) { $claudeFrag = Get-ClaudeExtra }
+  if ($loop % $ComfyEveryLoops -eq 0) { $comfyFrag = Get-ComfyExtra }
   $loop++
-  $extraJson = '{' + ((@($claudeFrag, $agentFrag, $hostFrag) | Where-Object { $_ }) -join ',') + '}'
+  $extraJson = '{' + ((@($claudeFrag, $agentFrag, $hostFrag, $comfyFrag) | Where-Object { $_ }) -join ',') + '}'
 
   $payload = ('{{"v":1,"id":"{0}","ts":{1},"os":"windows",{2}{3}{4}{5}{6}{7},"extra":{8}}}' -f `
     $AgentId, $now, (Get-UptimeJson), (Get-CpuJson), (Get-MemJson), (Get-DiskJson), $netJson, (Get-GpusJson), $extraJson)

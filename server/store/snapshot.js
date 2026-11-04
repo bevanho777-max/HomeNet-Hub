@@ -35,7 +35,8 @@ export class Snapshot {
         since: prev && !prev.online ? (prev.since ?? now) : now,
         tried: tried ?? now,
         metrics: prev?.metrics || {},
-        extra: prev?.extra ?? null,
+        // (v2.41: a failed poll may say what it tried -- the followed ComfyUI port; nobody else passes extra here)
+        extra: extra ?? prev?.extra ?? null,
         error: error || prev?.error || 'unreachable',
       });
     }

@@ -154,6 +154,15 @@ agent 对任何响应都不做分支处理,唯一职责是"采集→推送→睡
 > 不连 Strata。agent 的 env 设了 `STRATA_RESIDENT_UNIT`(m25:`strata-q5-resident.service`)才有 `resident` 与 `resident_unit`。
 > hub:探测失败、常驻实例没在听、但有别的 Strata 在听 → 青色「测试中 · <端口> / Testing · <port>」。hub 不向测试实例发任何请求。
 
+> **`extra.comfyui`(v2.41,Windows agent)**:`{ "procs": N, "listen": [{ "port": 8188, "addr": "0.0.0.0" }], "cmd_port": 8188,
+> "pid": 340832, "since": <unix 秒> }`。`procs` = 命令行跑 `...\ComfyUI\main.py` 的 python 进程数(便携版、venv、桌面版内置的那份都算);
+> `listen` = 这些进程实际监听的 TCP 端口与绑定地址(`Get-NetTCPConnection`,最多 6 个);`cmd_port` = 命令行里的 `--port`;
+> `pid` / `since` = 最早的那个进程。每 10 秒(`$ComfyEveryLoops` 个周期)看一次;**一直发**,没有 ComfyUI 时是
+> `{"procs":0,"listen":[]}` —— hub 靠它分辨「agent 看过、ComfyUI 没在跑」(红)和不报这个字段的旧 agent。
+> hub(`server/comfy_follow.js`):ComfyUI 节点卡的每个节点、`process: comfyui` 的 http 目标,探测的端口跟随 `listen` 里
+> 不是只绑 loopback 的端口(配置端口在其中就用它,否则 `cmd_port`,否则最小的);探测失败时 `procs` > 0 → 黄色
+> 「连线中断 / Unreachable」,机器在线而 `procs` = 0 → 红色(节点卡写「未运行 / Not running」),机器离线 → 灰色「未开机」。
+
 > **空闲轮询(v2.38,`server/idle_spin.js`)**:多卡的 Strata 节点,Strata 在两张卡之间交接时用一个在 GPU 上自旋的
 > 单线程 kernel 等主机内存里的旗标,没有请求时 `gpu_busy_percent` 也读 100、核心频率在最高档,但显存时钟停在闲置档。
 > hub 在同时满足下面几条时,把机器卡的 GPU 环显示成灰色「空闲轮询 / Idle spin」(不着红,title 写实际 busy、原因、功耗),

@@ -32,9 +32,15 @@
 // Today = the Beijing calendar day the job FINISHED in. Images = a completed job's
 // previewable outputs (outputs_count when that is missing); average time per image = the
 // summed execution time of today's completed jobs / their images.
+//
+// v2.41 the port follows ComfyUI: each node's URL is the configured one with the port its machine's agent
+// says ComfyUI listens on (extra.comfyui of the machine target with the node's id; server/comfy_follow.js).
+// A ComfyUI restarted on 8000 (desktop app) or with another --port is read there without a config change;
+// view() says which port (`port`, `followed`).
 import Database from 'better-sqlite3';
 import crypto from 'node:crypto';
 import http from 'node:http';
+import { followUrl, portOf } from '../comfy_follow.js';
 
 const BACKOFF_MAX_MS = 30000;
 const SYSTEM_EVERY_MS = 60000;
@@ -205,8 +211,9 @@ export class ComfyCollector {
       if (!n?.id || !n.url) continue;
       const url = String(n.url).replace(/\/+$/, '');
       const old = this.nodes.get(n.id);
-      if (old && old.url === url) next.set(n.id, old);
-      else { if (old) this._closeWs(old); next.set(n.id, { id: n.id, url, st: freshState() }); }
+      // `base` = as configured; `url` = what is probed (base with the followed port, see poll)
+      if (old && old.base === url) next.set(n.id, old);
+      else { if (old) this._closeWs(old); next.set(n.id, { id: n.id, base: url, url, st: freshState() }); }
     }
     for (const [id, n] of this.nodes) if (!next.has(id)) this._closeWs(n);
     this.nodes = next;
@@ -216,10 +223,22 @@ export class ComfyCollector {
 
   stop() { for (const n of this.nodes.values()) this._closeWs(n); }
 
-  async poll() {
+  /** @param machineOf  id -> that machine target's snapshot (for the port ComfyUI listens on), optional */
+  async poll(machineOf = null) {
     const now = Date.now();
+    if (machineOf) for (const n of this.nodes.values()) this._follow(n, machineOf(n.id));
     await Promise.all([...this.nodes.values()].map((n) => this._pollNode(n, now)));
     return this.view();
+  }
+
+  // v2.41 the URL follows the port ComfyUI listens on; a change closes the socket and polls at once
+  _follow(n, machineSnap) {
+    const want = followUrl(n.base, machineSnap);
+    if (want === n.url) return;
+    this._closeWs(n);
+    n.url = want;
+    n.st.nextAt = 0;
+    n.st.wsNextAt = 0;
   }
 
   async _pollNode(n, now) {
@@ -371,6 +390,8 @@ export class ComfyCollector {
       const run = st.reachable === true && st.running ? st.running : null;
       const prog = run && st.progress?.prompt_id === run.id ? st.progress : null;
       nodes[id] = {
+        port: portOf(n.url),
+        followed: n.url !== n.base,
         reachable: st.reachable === true,
         checked: st.reachable !== null,
         error: st.err,

@@ -15,6 +15,7 @@ import { speedQuery } from '../engine.js';
 import { normalize, samplableRows } from '../normalize.js';
 import { applyIdleSpin } from '../idle_spin.js';
 import { pivotTokens } from '../token_detail.js';
+import { followUrl, portOf } from '../comfy_follow.js';
 
 const SNAPSHOT_TOKEN_DAYS = 30; // window for the token card day-trend + 5-day spark
 const PUSH_SWEEP_MS = 5000;
@@ -135,6 +136,11 @@ export class Scheduler {
   async _poll(target, metrics) {
     const { snapshot, tsdb, env } = this.ctx;
     const tried = Date.now();
+    // v2.41 `process: comfyui` (+ `machine`): an http probe of a ComfyUI server goes to the port its machine's
+    // agent says ComfyUI listens on (comfy_follow.js); the port tried is kept in the snapshot's extra either way
+    const follow = target.process === 'comfyui' && target.machine && target.source?.type === 'http' && target.source.url;
+    const src = follow ? { ...target.source, url: followUrl(target.source.url, snapshot.get(target.machine)) } : target.source;
+    const followExtra = follow ? { extra: { port: portOf(src.url), followed: src.url !== target.source.url } } : {};
     try {
       const type = target.source.type;
       // A `shape: table` sql target is the generic one: run its queries/ file and
@@ -173,7 +179,8 @@ export class Scheduler {
       // v2.32: ComfyUI nodes -- what each one is doing now and today's images (comfyui.js);
       // the queue goes into the timeseries for the column modal
       if (type === 'comfyui') {
-        const view = await this.ctx.comfy.poll();
+        // v2.41: each node probed on the port its machine's agent says ComfyUI listens on (comfy_follow.js)
+        const view = await this.ctx.comfy.poll((id) => snapshot.get(id));
         snapshot.update(target.id, { online: true, metrics: {}, extra: { comfy: view } });
         const rows = this.ctx.comfy.historyRows(target.id, view);
         if (rows.length) tsdb.record(rows);
@@ -270,7 +277,7 @@ export class Scheduler {
         snapshot.update(target.id, { online: true, metrics: norm.metrics, extra: { token: pivot } });
         return;
       }
-      const raw = type === 'http' ? await collectHttp(target.source, parseDuration(target.source.timeout, 3000), env)
+      const raw = type === 'http' ? await collectHttp(src, parseDuration(target.source.timeout, 3000), env)
         : type === 'exec' ? await collectExec(target.source)
         : type === 'tcp' ? await collectTcp(target.source, parseDuration(target.source.timeout, 3000))
         : type === 'tls' ? await collectTls(target.source, parseDuration(target.source.timeout, 4000))
@@ -286,12 +293,12 @@ export class Scheduler {
         : null;
       if (raw == null) throw new Error(`unsupported source type: ${type}`);
       const norm = normalize(raw, target, metrics);
-      snapshot.update(target.id, { online: true, metrics: norm.metrics });
+      snapshot.update(target.id, { online: true, metrics: norm.metrics, ...followExtra });
       this._rememberModel(target, norm.metrics.model);
       const rows = samplableRows(target.id, norm, metrics);
       if (rows.length) tsdb.record(rows);
     } catch (e) {
-      snapshot.update(target.id, { online: false, error: String(e?.message || e), tried });
+      snapshot.update(target.id, { online: false, error: String(e?.message || e), tried, ...followExtra });
       this._recallModel(target);
     }
   }

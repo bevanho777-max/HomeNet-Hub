@@ -9,7 +9,7 @@ import { renderStack } from './renderers/stack.js';
 import { renderInfo } from './renderers/info.js';
 import { renderTable } from './renderers/table.js';
 import { renderNodes, strataAlive, testingPorts } from './renderers/nodes.js';
-import { renderComfy } from './renderers/comfy.js';
+import { renderComfy, comfyInfo, comfyCutTitle } from './renderers/comfy.js';
 import { initHistory, historyRefresh, relocalizeHistory } from './renderers/history.js';
 import { initMachineDetail, openMachineModal, openNodeModal, openComfyModal, closeMachineModal, bindMachineModal, relocalizeMachineModal } from './renderers/machine_detail.js';
 import { openTableModal, closeTableModal, bindTableModal, relocalizeTableModal } from './renderers/table_detail.js';
@@ -229,7 +229,18 @@ function chip(target, snap) {
     lat = `<span class="lat">${esc(t('machine_off'))}</span>`;
     tip = off.at ? t('machine_off_since', hmOf(off.at)) : t('machine_off');
   } else if (snap) {
-    if (snap.online === false && target.machine && testingPorts(lastSnap[target.machine]).length) {
+    // v2.41 `process: comfyui`: judged by the ComfyUI process its machine's agent reports (extra.comfyui)
+    const comfy = target.process === 'comfyui' && target.machine ? comfyInfo(lastSnap[target.machine]) : null;
+    if (snap.online === false && Number(comfy?.procs) > 0) {
+      // v2.41 连线中断: ComfyUI still runs on the machine but does not answer (m136 11-03: listener closed)
+      cls = 'cut';
+      lat = `<span class="lat">${esc(t('node_cut'))}</span>`;
+      tip = comfyCutTitle(target.machine, comfy, snap.extra?.port, snap.error);
+    } else if (snap.online === false && target.process === 'comfyui') {
+      // red: the machine is up (machineOff said so) and no ComfyUI process runs -- or an older agent
+      cls = 'offline';
+      tip = comfy ? t('comfy_down_title', target.machine) : t('chip_svc_down');
+    } else if (snap.online === false && target.machine && testingPorts(lastSnap[target.machine]).length) {
       // v2.40 测试中: the resident instance is off, a test instance listens; the hub does not touch it
       const m = lastSnap[target.machine];
       cls = 'testing';
@@ -249,6 +260,8 @@ function chip(target, snap) {
       cls = st == null ? 'online' : (lvl === 'danger' ? 'offline' : lvl === 'ok' ? 'online' : 'unknown');
       const l = snap.metrics?.latency?.display;
       if (l && l !== '—') lat = `<span class="lat">${esc(l)}</span>`;
+      // (v2.41: probed on the port ComfyUI moved to, not the configured one)
+      if (snap.extra?.followed && snap.extra?.port) tip = t('comfy_followed_title', snap.extra.port);
     }
   }
   return `<span class="chip ${cls}"${tip ? ` title="${esc(tip)}"` : ''}><span class="dot"></span>${esc(target.name || target.id)}${lat}</span>`;

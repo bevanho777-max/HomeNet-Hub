@@ -7,8 +7,9 @@
 // line up row by row across the columns. Every cell has a second line in every state.
 //
 // A node that does not answer is grey and says 未开机 (the ComfyUI machines are switched off
-// or asleep a lot), never red. Today's figures come from the hub's own job table, so they
-// stay on the card, greyed, while the node is off.
+// or asleep a lot) while its machine is off. Today's figures come from the hub's own job table,
+// so they stay on the card, greyed, while the node is off. v2.41: while the machine is up, its
+// agent says whether ComfyUI still runs -- yellow 连线中断 if it does, red 未运行 if not (comfyState).
 import { card, esc } from './common.js';
 import { cv, t } from '../i18n.js';
 
@@ -37,26 +38,68 @@ function cell(label, value, { cls = '', sub = '—', short = null, subShort = nu
     + `<span class="sub fit"${subShort && subShort !== sub ? ds(subShort) : ''}>${esc(sub)}</span></div>`;
 }
 
-// 'busy' | 'idle' | 'off' | 'wait' (no reading yet)
-export function comfyState(n) {
-  if (!n?.checked) return 'wait';
-  if (!n.reachable) return 'off';
-  return n.job || n.running > 0 ? 'busy' : 'idle';
+// v2.41 extra.comfyui of a live, fresh machine snapshot (agents/homenet-agent.ps1: procs, listen
+// [{port, addr}], cmd_port, pid, since); null when the machine is off / stale or its agent does not report
+// it. The same rule as server/comfy_follow.js.
+export function comfyInfo(m) {
+  if (!m || m.online === false || m.stale) return null;
+  const c = m.extra?.comfyui;
+  return c && typeof c === 'object' && Number.isFinite(Number(c.procs)) ? c : null;
+}
+const LOOPBACK = /^(127\.|::1$|::ffff:127\.)/i;
+const listenText = (c) => (Array.isArray(c?.listen) ? c.listen : []).map((l) => `${String(l?.addr ?? '').includes(':') ? `[${l.addr}]` : l?.addr}:${l?.port}`).join(', ');
+
+// why a ComfyUI that runs does not answer, as the status's second line: not listening at all, listening on
+// loopback only, or its port does not answer from the hub
+function cutSub(c, port) {
+  const ls = Array.isArray(c?.listen) ? c.listen : [];
+  if (!ls.length) return { sub: t('comfy_cut_nolisten'), subShort: t('abbr_comfy_nolisten') };
+  if (ls.every((l) => LOOPBACK.test(String(l?.addr ?? '')))) return { sub: t('comfy_cut_loopback'), subShort: t('abbr_comfy_loopback') };
+  return { sub: t('comfy_cut_port', port ?? ls[0]?.port), subShort: t('abbr_comfy_port', port ?? ls[0]?.port) };
 }
 
-function statusCell(state, n) {
+/** the 连线中断 title, for the node card and the 「ComfyUI · 136」 pill (web/app.js) */
+export function comfyCutTitle(machine, c, port, error) {
+  const since = Number(c?.since) > 0 ? hm(Number(c.since) * 1000) : '?';
+  return t('comfy_cut_title', machine, port ?? c?.cmd_port ?? '?', error || '', c?.pid ?? '?', since, listenText(c));
+}
+
+// 'busy' | 'idle' | 'off' | 'wait' (no reading yet) | v2.41 'cut' | 'down'
+// v2.41: a node that does not answer is judged by its machine's agent (the machine target with the node's id,
+// extra.comfyui): a ComfyUI process still runs -> 'cut' 连线中断 / Unreachable (yellow: m136 11-03 17:02,
+// asyncio's accept loop died on WinError 64 and closed the 8188 listener while the process kept running);
+// the machine is up and no ComfyUI runs -> 'down' 未运行 / Not running (red); the machine is off (or its
+// agent does not report ComfyUI) -> 'off', grey 未开机 as before.
+export function comfyState(n, m = null) {
+  if (!n?.checked) return 'wait';
+  if (n.reachable) return n.job || n.running > 0 ? 'busy' : 'idle';
+  const c = comfyInfo(m);
+  if (!c) return 'off';
+  return Number(c.procs) > 0 ? 'cut' : 'down';
+}
+
+function statusCell(state, n, machine, m) {
   const lat = { sub: t('comfy_latency', n.latency_ms ?? '—'), subShort: `${n.latency_ms ?? '—'} ms` };
-  if (state === 'busy') return cell(t('comfy_status'), t('comfy_busy'), { cls: 'lv-cool', short: t('abbr_comfy_busy'), ...lat });
-  if (state === 'idle') return cell(t('comfy_status'), t('comfy_idle'), { cls: 'lv-ok', ...lat });
+  // (v2.41: probed on a port other than the configured one -- said in the title)
+  const fol = n.followed && n.port ? { title: t('comfy_followed_title', n.port) } : {};
+  if (state === 'busy') return cell(t('comfy_status'), t('comfy_busy'), { cls: 'lv-cool', short: t('abbr_comfy_busy'), ...lat, ...fol });
+  if (state === 'idle') return cell(t('comfy_status'), t('comfy_idle'), { cls: 'lv-ok', ...lat, ...fol });
   if (state === 'off') {
     return cell(t('comfy_status'), t('comfy_off'), { cls: 'node-idle-text', sub: t('node_sub_ondemand'), subShort: t('abbr_ondemand'), title: n.error ? t('comfy_off_title', n.error) : '' });
+  }
+  if (state === 'cut') {
+    const c = comfyInfo(m);
+    return cell(t('comfy_status'), t('node_cut'), { cls: 'lv-warn', ...cutSub(c, n.port), title: comfyCutTitle(machine, c, n.port, n.error) });
+  }
+  if (state === 'down') {
+    return cell(t('comfy_status'), t('comfy_down'), { cls: 'lv-danger', sub: t('comfy_down_sub'), subShort: t('abbr_comfy_noproc'), title: t('comfy_down_title', machine) });
   }
   return cell(t('comfy_status'), '—', { sub: t('comfy_checking') });
 }
 
 function queueCell(state, n) {
-  // (off: when the hub last reached it -- since this hub started)
-  if (state === 'off') return cell(t('comfy_queue'), '—', n.seen_at ? { sub: t('comfy_seen', hm(n.seen_at)), subShort: hm(n.seen_at) } : { sub: t('comfy_never'), subShort: t('abbr_comfy_never') });
+  // (off / cut / down: when the hub last reached it -- since this hub started)
+  if (state === 'off' || state === 'cut' || state === 'down') return cell(t('comfy_queue'), '—', n.seen_at ? { sub: t('comfy_seen', hm(n.seen_at)), subShort: hm(n.seen_at) } : { sub: t('comfy_never'), subShort: t('abbr_comfy_never') });
   if (state !== 'busy' && state !== 'idle') return cell(t('comfy_queue'), '—', { sub: '—' });
   const r = n.running ?? 0, k = n.pending ?? 0;
   return cell(t('comfy_queue'), t('comfy_queue_val', r, k), {
@@ -67,7 +110,7 @@ function queueCell(state, n) {
 
 function progressCell(state, n) {
   const j = n.job;
-  if (state !== 'busy' || !j) return cell(t('comfy_progress'), '—', { sub: state === 'idle' || state === 'off' ? t('comfy_no_job') : '—', labelShort: t('abbr_comfy_progress') });
+  if (state !== 'busy' || !j) return cell(t('comfy_progress'), '—', { sub: state === 'idle' || state === 'off' || state === 'cut' || state === 'down' ? t('comfy_no_job') : '—', labelShort: t('abbr_comfy_progress') });
   const el = (j.exact ? '' : '≥') + dur(j.elapsed_s);
   if (j.step != null && j.steps) {
     return cell(t('comfy_progress'), t('comfy_step', j.step, j.steps), {
@@ -106,20 +149,22 @@ export function renderComfy(gc, resolve) {
   const view = resolve(gc.target).snap?.extra?.comfy || null;
   const cols = (gc.nodes || []).map((col, idx) => {
     const n = view?.nodes?.[col.node] || null;
-    const state = comfyState(n);
+    const mach = resolve(col.node)?.snap || null;     // v2.41 the machine of the same id (its agent's extra.comfyui)
+    const state = comfyState(n, mach);
+    const stale = state === 'off' || state === 'cut' || state === 'down';
     const name = cv(col, 'name') || col.node;
     const sys = n?.system || {};
     const ver = sys.version ? t('comfy_version', sys.version) : 'ComfyUI';
     const gpu = [sys.gpu, sys.vram_total_gb != null ? `${sys.vram_total_gb} GB` : null].filter(Boolean).join(' · ') || '—';
     const gpuTitle = sys.gpu ? t('comfy_gpu_title', sys.gpu, sys.vram_used_gb ?? '—', sys.vram_total_gb ?? '—') : '';
-    const colCls = state === 'off' ? 'node-idle' : state === 'busy' ? 'node-online node-busy' : 'node-online';
+    const colCls = state === 'off' ? 'node-idle' : state === 'busy' ? 'node-online node-busy' : state === 'cut' || state === 'down' ? `node-online node-${state}` : 'node-online';
     // (cells flow down the columns: status / queue, progress / last, today / average)
-    const cells = statusCell(state, n || {}) + queueCell(state, n || {})
+    const cells = statusCell(state, n || {}, col.node, mach) + queueCell(state, n || {})
       + progressCell(state, n || {}) + lastCell(n || {})
       + todayCells(n || {});
     return `<div class="node-col ${colCls}" data-col="${idx}">`
       + `<div class="node-head"><span class="node-name">${esc(name)}</span><span class="node-port fit" data-min="10">· ${esc(ver)}</span></div>`
-      + `<div class="node-model fit${state === 'off' ? ' is-last' : ''}"${gpuTitle ? ` title="${esc(gpuTitle)}"` : ''}>${esc(gpu)}</div>`
+      + `<div class="node-model fit${stale ? ' is-last' : ''}"${gpuTitle ? ` title="${esc(gpuTitle)}"` : ''}>${esc(gpu)}</div>`
       + `<div class="kv node-kv">${cells}</div>`
       + '</div>';
   });

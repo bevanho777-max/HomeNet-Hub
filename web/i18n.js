@@ -449,7 +449,7 @@ const ZH = {
   node_testing: '测试中',
   node_sub_testing: '常驻实例未运行',
   node_testing_title: (m, unit, listen) => `测试中:${m} 的常驻 Strata${unit ? `(${unit})` : ''}没在跑,机器上的测试实例在听 ${listen}。\n`
-    + '转发口只跟随常驻实例,不会把请求送到测试实例;litellm 4001 的请求自动落到 m26。hub 不向测试实例发任何请求。',
+    + '转发口只跟随常驻实例,不会把请求送到测试实例;litellm 4001 的请求自动改走 m133 的 flash-iq3,m133 也不在时落到 m26。hub 不向测试实例发任何请求。',
   node_sub_cut: '探测路径不通',
   node_cut_title: (m, n, e) => `连线中断:hub 探测不到这个节点${e ? `(${e})` : ''},但 ${m} 的 agent 在线,机器上还有 ${n} 个 Strata 进程。\n`
     + '是探测路径的问题(转发口、端口、防火墙),不是 Strata 停了。m25 的转发口每 30 秒自动跟随 Strata 的端口。',
@@ -471,6 +471,22 @@ const ZH = {
   comfy_never: '本次未连上',
   abbr_comfy_never: '未连上',
   comfy_off_title: (e) => `连不上（${e}）。ComfyUI 的机器经常关机或睡眠，不算故障。`,
+  // v2.41 机器在线时按 agent 回报的 ComfyUI 进程判断:进程在 = 连线中断(黄),进程不在 = 未运行(红)
+  comfy_down: '未运行',
+  comfy_down_sub: '无 ComfyUI 进程',
+  abbr_comfy_noproc: '无进程',
+  comfy_down_title: (m) => `${m} 在线,但没有 ComfyUI 进程在跑(agent 每 10 秒看一次)。`,
+  comfy_cut_nolisten: '进程在 · 未监听',
+  abbr_comfy_nolisten: '未监听',
+  comfy_cut_loopback: '只绑 127.0.0.1',
+  abbr_comfy_loopback: '仅本机',
+  comfy_cut_port: (p) => `端口 ${p} 不通`,
+  abbr_comfy_port: (p) => `:${p} 不通`,
+  comfy_cut_title: (m, port, e, pid, since, listen) => `连线中断:hub 连不上 ${m} 的 ComfyUI(端口 ${port}${e ? `,${e}` : ''}),`
+    + `但 ${m} 的 agent 在线,ComfyUI 进程还在(PID ${pid},${since} 启动)。\n`
+    + (listen ? `它在听 ${listen}:是端口或防火墙的问题,hub 会自动跟随它实际监听的端口。`
+      : '它没有在监听任何端口:进程还在、已不接受连接(卡住了),要重启 ComfyUI 才会恢复。'),
+  comfy_followed_title: (p) => `ComfyUI 现在听 ${p} 端口,hub 按 agent 的回报自动跟随(配置里写的端口没在用)。`,
   comfy_latency: (ms) => `延迟 ${ms} ms`,
   comfy_queue: '队列',
   comfy_queue_val: (r, k) => `跑 ${r} · 排队 ${k}`,
@@ -895,7 +911,7 @@ const EN = {
   node_testing: 'Testing',
   node_sub_testing: 'resident off',
   node_testing_title: (m, unit, listen) => `Testing: ${m}'s resident Strata${unit ? ` (${unit})` : ''} is not running; a test instance listens on ${listen}.\n`
-    + 'The forward only follows the resident instance, so no request reaches the test instance; litellm 4001 falls back to m26. The hub sends nothing to the test instance.',
+    + 'The forward only follows the resident instance, so no request reaches the test instance; litellm 4001 falls back to m133\'s flash-iq3, then to m26 when m133 is off too. The hub sends nothing to the test instance.',
   node_sub_cut: 'probe path down',
   node_cut_title: (m, n, e) => `Unreachable: the hub cannot probe this node${e ? ` (${e})` : ''}, but ${m}'s agent is up and ${n} Strata process${n === 1 ? '' : 'es'} still run there.\n`
     + 'The probe path is broken (forward, port, firewall), not Strata. m25\'s forward follows Strata\'s port every 30 s.',
@@ -915,6 +931,21 @@ const EN = {
   comfy_never: 'not reached yet',
   abbr_comfy_never: 'unseen',
   comfy_off_title: (e) => `Not reachable (${e}). ComfyUI machines are often switched off or asleep; not a fault.`,
+  comfy_down: 'Not running',
+  comfy_down_sub: 'no ComfyUI process',
+  abbr_comfy_noproc: 'no process',
+  comfy_down_title: (m) => `${m} is up, but no ComfyUI process runs there (its agent looks every 10 s).`,
+  comfy_cut_nolisten: 'running, not listening',
+  abbr_comfy_nolisten: 'no port',
+  comfy_cut_loopback: 'loopback only',
+  abbr_comfy_loopback: 'local only',
+  comfy_cut_port: (p) => `port ${p} down`,
+  abbr_comfy_port: (p) => `:${p} down`,
+  comfy_cut_title: (m, port, e, pid, since, listen) => `Unreachable: the hub cannot reach ComfyUI on ${m} (port ${port}${e ? `, ${e}` : ''}), `
+    + `but ${m}'s agent is up and the ComfyUI process still runs (PID ${pid}, started ${since}).\n`
+    + (listen ? `It listens on ${listen}: a port or firewall problem; the hub follows the port it actually listens on.`
+      : 'It listens on no port: the process is alive but no longer accepts connections (stuck); restarting ComfyUI brings it back.'),
+  comfy_followed_title: (p) => `ComfyUI now listens on port ${p}; the hub follows it from the agent's report (the configured port is not in use).`,
   comfy_latency: (ms) => `Latency ${ms} ms`,
   comfy_queue: 'Queue',
   comfy_queue_val: (r, k) => `Run ${r} · Queued ${k}`,

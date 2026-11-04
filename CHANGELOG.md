@@ -49,6 +49,36 @@ on screen is the one from `package.json`, and this file is what needs fixing.
 
 ---
 
+## v2.41.0 — 2026-11-05
+
+**ComfyUI 的端口自动跟随、「连线中断」:Windows agent 上报 ComfyUI 的进程和实际监听的端口,hub 探测跟着那个端口走;
+机器在线、探测失败时,ComfyUI 进程还在 = 黄色「连线中断 / Unreachable」,进程不在 = 红色,机器关着才是灰色「未开机」。**
+
+*Rebuild required — `server/`、`web/` 都改了。Windows agent 要换成这一版(多一个 `extra.comfyui`);Linux / NAS agent 没改。
+`targets.yaml` 的「ComfyUI · 136」加 `process: comfyui`。*
+
+- **起因(2026-11-05)**:顶部「ComfyUI · 136」红灯,m136 机器卡显存一直占着 19.6 G、GPU 0 %。
+  - ComfyUI 进程(便携版,PID 340832,11-02 11:46 启动)还在,但**没有任何端口在监听**,本机 `127.0.0.1:8188` 也连不上;
+  - 它的 stderr 最后几行:asyncio 的 accept 在 `0.0.0.0:8188` 上失败(`OSError: [WinError 64] 指定的网络名不再可用`),
+    接着 `Accept failed on a socket` —— Windows 的 ProactorEventLoop 遇到这个错误会关掉监听套接字,进程照跑、已建立的连线还在,
+    但再也不接新连线。hub 最后一次连上是 11-03 17:01:52。
+  - 防火墙规则 `homenet-comfyui-8188` 还在;佔显存的是这个 ComfyUI(模型还在显存里)和 Blender。
+  - 原来的灯只能说「连不上」,看不出是 ComfyUI 卡住、换了端口还是没在跑。
+- **Windows agent(`agents/homenet-agent.ps1`)**:新的 `extra.comfyui`(见 `docs/AGENT_PROTOCOL.md`),每 10 秒一次,一直发。
+- **端口跟随(`server/comfy_follow.js`)**:
+  - ComfyUI 节点卡的每个节点(id = 机器 id)、`process: comfyui` 的 http 目标,探测的端口取 agent 报的监听端口
+    (配置端口在其中就用它,否则 `--port`,否则最小的;只绑 loopback 的不算)。8188 便携版、8000 桌面版、任何 `--port` 都不用改配置。
+  - 节点卡的 view 多了 `port` / `followed`;状态灯目标的快照 `extra` 记这次探测的端口。端口一变就关掉 /ws、立刻重探。
+  - 新端口的 Windows 防火墙规则由 24 上的 `homenet-comfy-fw-follow.timer` 每分钟补(私有仓 BACKLOG 52;agent 不提权,补不了)。
+- **ComfyUI 节点卡(`web/renderers/comfy.js`)**:节点连不上时看同 id 机器卡的 `extra.comfyui`:
+  - 进程在 → 黄色「连线中断」,第二行说明「进程在 · 未监听」/「只绑 127.0.0.1」/「端口 N 不通」,title 写 PID、启动时间、监听端口;
+  - 机器在线、没有进程 → 红色「未运行 / Not running」;
+  - 机器关着,或 agent 不报这个字段 → 照旧灰色「未开机」。
+- **状态灯(`web/app.js`)**:`process: comfyui` 的灯同样处理;探测跟随到别的端口时 title 会写出来。
+- `server/config/schema.js` / `loader.js`:target 的 `process`(只接受 `comfyui`)进公开配置。
+- 「测试中」的 title 改成 4001 的新备援顺序(先 m133 的 flash-iq3,再 m26)。
+- `docs/AGENT_PROTOCOL.md` 同步。
+
 ## v2.40.0 — 2026-11-05
 
 **推理节点「测试中 · <端口>」:常驻 Strata 没在跑、但机器上有别的 Strata 实例(Bevan 的测试)在听时,显示青色
