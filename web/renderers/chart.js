@@ -83,6 +83,9 @@ function gapThreshold(pts) {
   return p90 > 0 ? p90 * GAP_FACTOR : null;
 }
 
+// v2.38 the pale grey behind a 空闲轮询 stretch (tokens.css .sw-band uses the same colour)
+const BAND_FILL = 'rgba(148,163,184,0.22)';
+
 /**
  * @param {HTMLCanvasElement} canvas
  * @param {Record<string,{ts:number,value:number}[]>} series  from /api/history
@@ -94,7 +97,9 @@ function gapThreshold(pts) {
 export function drawMulti(canvas, series, legendEl, opts) {
   // leftMax (v2.26): the left axis is 0..100 (percent) unless a chart plots a small count on
   // it (the node modal's running-stream count: 0..4)
-  const { subs, metrics, height = 240, emptyText = 'No data yet (collecting samples…)', maxGapSec = null, leftMax = 100 } = opts;
+  // bands (v2.38): [{ from, to }] in seconds, drawn as a pale background under the lines (the
+  // machine modal's 空闲轮询 stretches); bandLabel names them in the legend
+  const { subs, metrics, height = 240, emptyText = 'No data yet (collecting samples…)', maxGapSec = null, leftMax = 100, bands = [], bandLabel = '' } = opts;
   const dpr = window.devicePixelRatio || 1;
   const cssW = canvas.clientWidth || 360, cssH = height;
   canvas.width = cssW * dpr; canvas.height = cssH * dpr;
@@ -167,6 +172,15 @@ export function drawMulti(canvas, series, legendEl, opts) {
     return `${d.getMonth() + 1}/${d.getDate()} ${hh}:${mm}`;
   };
   for (let i = 0; i <= 3; i++) { const t = xMin + (xMax - xMin) * i / 3; ctx.fillText(fmtT(t), xPos(t), cssH - 6); }
+
+  let bandShown = false;
+  for (const b of bands || []) {
+    const x0 = Math.max(padL, xPos(Math.max(b.from, xMin))), x1 = Math.min(cssW - padR, xPos(Math.min(b.to, xMax)));
+    if (!(x1 > x0)) continue;
+    ctx.fillStyle = BAND_FILL;
+    ctx.fillRect(x0, padT, Math.max(1, x1 - x0), H);
+    bandShown = true;
+  }
 
   for (const sub of present) {
     const pts = series[sub.k] || [];
@@ -260,6 +274,6 @@ export function drawMulti(canvas, series, legendEl, opts) {
       const cur = pts.length ? pts[pts.length - 1].value : null;
       const val = cur == null ? '—' : Math.round(cur) + unitOf(metrics, sub);
       return `<span class="lg"><span class="sw" style="background:${sub.color}"></span>${esc(labelOf(metrics, sub))} <b style="color:var(--text)">${val}</b></span>`;
-    }).join('');
+    }).join('') + (bandShown && bandLabel ? `<span class="lg"><span class="sw sw-band"></span>${esc(bandLabel)}</span>` : '');
   }
 }

@@ -209,10 +209,22 @@ fi
 # 和使用率一起在周期内多次读取取平均;一次都没读到就省略字段,不报 0。
 GPU_SAMPLES="${GPU_SAMPLES:-4}"
 case "$GPU_SAMPLES" in ''|*[!0-9]*|0) GPU_SAMPLES=4 ;; esac
-BUSY_SUM=(); BUSY_N=(); PWR_SUM=(); PWR_N=()
+# 显存读写率与显存时钟(v2.38):hub 的「空闲轮询」判断要知道显存在不在干活(server/idle_spin.js)。
+# mem_busy_percent 同样是瞬时值,周期内取平均;pp_dpm_mclk 带 * 的那一档是当前显存时钟,取周期内的最大值 ——
+# 升降频时会短暂落在低档,取一个点会把正在干活的卡误报成显存闲置。
+BUSY_SUM=(); BUSY_N=(); PWR_SUM=(); PWR_N=(); MB_SUM=(); MB_N=(); MCLK_MAX=()
 busy_reset() {
   local i
-  for i in "${!AMD_CARDS[@]}"; do BUSY_SUM[$i]=0; BUSY_N[$i]=0; PWR_SUM[$i]=0; PWR_N[$i]=0; done
+  for i in "${!AMD_CARDS[@]}"; do BUSY_SUM[$i]=0; BUSY_N[$i]=0; PWR_SUM[$i]=0; PWR_N[$i]=0; MB_SUM[$i]=0; MB_N[$i]=0; MCLK_MAX[$i]=0; done
+}
+# 当前显存时钟(MHz)放进 MCLK_V(不用 $(...),省掉每次采样一个子进程);读不到为空
+mclk_read() {
+  local l
+  MCLK_V=""
+  [ -r "$1/pp_dpm_mclk" ] || return 0
+  while IFS= read -r l; do
+    case "$l" in *'*'*) l="${l#*: }"; l="${l%%[Mm][Hh]z*}"; case "$l" in ''|*[!0-9]*) ;; *) MCLK_V="$l" ;; esac; break ;; esac
+  done < "$1/pp_dpm_mclk"
 }
 # v2.34.1 运行期每 30 秒重新探测 AMD 卡(m25 2026-10-29 20:58 起的现场热修,并回仓库):开机时
 # amdgpu 晚于 agent 初始化、或 hwmon 路径换了号,不用重启 agent 也能把卡认回来。按单调时钟
@@ -228,7 +240,7 @@ gpu_rescan_if_due() {
   amd_probe
   GPU_MODE="none"
   [ "${#AMD_CARDS[@]}" -gt 0 ] && GPU_MODE="amd"
-  BUSY_SUM=(); BUSY_N=(); PWR_SUM=(); PWR_N=()
+  BUSY_SUM=(); BUSY_N=(); PWR_SUM=(); PWR_N=(); MB_SUM=(); MB_N=(); MCLK_MAX=()
   busy_reset
   if [ "${AMD_PCI[*]}" != "$old_pci" ]; then
     echo "[homenet-agent] gpu rescan: cards=${#AMD_CARDS[@]} (${AMD_PCI[*]}) previous=($old_pci)" >&2
@@ -240,6 +252,10 @@ busy_sample() {
   for i in "${!AMD_CARDS[@]}"; do
     v=""; { read -r v < "${AMD_CARDS[$i]}/gpu_busy_percent"; } 2>/dev/null
     case "$v" in ''|*[!0-9]*) ;; *) BUSY_SUM[$i]=$(( BUSY_SUM[$i] + v )); BUSY_N[$i]=$(( BUSY_N[$i] + 1 )) ;; esac
+    v=""; { read -r v < "${AMD_CARDS[$i]}/mem_busy_percent"; } 2>/dev/null
+    case "$v" in ''|*[!0-9]*) ;; *) MB_SUM[$i]=$(( ${MB_SUM[$i]:-0} + v )); MB_N[$i]=$(( ${MB_N[$i]:-0} + 1 )) ;; esac
+    mclk_read "${AMD_CARDS[$i]}" 2>/dev/null
+    [ -n "$MCLK_V" ] && [ "$MCLK_V" -gt "${MCLK_MAX[$i]:-0}" ] && MCLK_MAX[$i]=$MCLK_V
     [ -n "${AMD_PWR[$i]}" ] || continue
     v=""; { read -r v < "${AMD_PWR[$i]}"; } 2>/dev/null
     case "$v" in ''|*[!0-9]*) ;; *) PWR_SUM[$i]=$(( PWR_SUM[$i] + v )); PWR_N[$i]=$(( PWR_N[$i] + 1 )) ;; esac
@@ -444,6 +460,8 @@ gpus_json() {  # 输出完整 "gpus":[...] 片段(必填,无卡为 [])
       #   temp_c        edge —— 与其他机器、旧版 agent 同一个传感器,卡面温度沿用它
       #   temp_junction_c / temp_mem_c  热点与显存温度,只进明细
       #   power_w / power_cap_w         微瓦 → 瓦,四舍五入;power_w 同 util_pct,是周期内多次采样的平均
+      #   mem_busy_pct  (v2.38)显存读写率,周期内多次采样的平均
+      #   mclk_mhz      (v2.38)当前显存时钟,周期内多次采样的最大值
       for i in "${!AMD_CARDS[@]}"; do
         d="${AMD_CARDS[$i]}"
         frag="{\"idx\":$i,\"pci\":\"${AMD_PCI[$i]}\""
@@ -454,6 +472,17 @@ gpus_json() {  # 输出完整 "gpus":[...] 片段(必填,无卡为 [])
           util=$(sysfs_int "$d/gpu_busy_percent")
         fi
         [ -n "$util" ] && frag="$frag,\"util_pct\":$util"
+        if [ "${MB_N[$i]:-0}" -gt 0 ]; then
+          mb=$(( (MB_SUM[$i] + MB_N[$i] / 2) / MB_N[$i] ))
+        else
+          mb=$(sysfs_int "$d/mem_busy_percent")
+        fi
+        [ -n "$mb" ] && frag="$frag,\"mem_busy_pct\":$mb"
+        if [ "${MCLK_MAX[$i]:-0}" -gt 0 ]; then
+          frag="$frag,\"mclk_mhz\":${MCLK_MAX[$i]}"
+        else
+          mclk_read "$d" 2>/dev/null; [ -n "$MCLK_V" ] && frag="$frag,\"mclk_mhz\":$MCLK_V"
+        fi
         vu=$(sysfs_int "$d/mem_info_vram_used")
         vt=$(sysfs_int "$d/mem_info_vram_total")
         if [ -n "$vu" ] && [ -n "$vt" ]; then

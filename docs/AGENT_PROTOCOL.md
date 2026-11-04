@@ -93,6 +93,8 @@ agent 对任何响应都不做分支处理,唯一职责是"采集→推送→睡
 | `gpus[].power_w` | int | — | 功耗 W。Linux AMD 自 v2.19 起是上报周期内多次采样的平均(同 `util_pct`),不是单次读数 |
 | `gpus[].pci` | string | — | PCI 地址,如 `"0000:03:00.0"`(v2.18,AMD)|
 | `gpus[].temp_junction_c` / `temp_mem_c` | int | — | 热点 / 显存温度 ℃(v2.18,AMD;`temp_c` 仍是 edge)|
+| `gpus[].mem_busy_pct` | int | — | 显存读写率 0–100(v2.38,Linux AMD `mem_busy_percent`,周期内多次采样的平均)。实测推理中也常读到 0–1,只作没有 `mclk_mhz` 时的后备 |
+| `gpus[].mclk_mhz` | int | — | 当前显存时钟 MHz(v2.38,Linux AMD `pp_dpm_mclk` 带 `*` 的一档,周期内多次采样的**最大值**)。hub 的「空闲轮询」判断用它(见下)|
 | `gpus[].power_cap_w` | int | — | 功耗上限 W(`power1_cap`,v2.18,AMD;NVIDIA 的 `power.max_limit`,v2.36 Windows agent)。v2.19 起 hub 据此做合理性检查:`power_w` 超过它的 1.5 倍即视为读数毛刺,丢弃该卡这一样本的功耗(不写库,多卡合计也不写)|
 | `extra` | object | ✅ | 自由扩展区,允许空对象;机器特有数据放这里(见 4.4) |
 
@@ -144,6 +146,14 @@ agent 对任何响应都不做分支处理,唯一职责是"采集→推送→睡
 >
 > **试跑**:`homenet-agent.sh --once` 采集一个周期、把 payload 打到 stdout 后退出,不推送,
 > 也不要求 `HUB_URL` / `PUSH_TOKEN`。部署前用它核对输出。
+
+> **空闲轮询(v2.38,`server/idle_spin.js`)**:多卡的 Strata 节点,Strata 在两张卡之间交接时用一个在 GPU 上自旋的
+> 单线程 kernel 等主机内存里的旗标,没有请求时 `gpu_busy_percent` 也读 100、核心频率在最高档,但显存时钟停在闲置档。
+> hub 在同时满足下面几条时,把机器卡的 GPU 环显示成灰色「空闲轮询 / Idle spin」(不着红,title 写实际 busy、原因、功耗),
+> 并另记一条 `idle_spin`(1 / 0)序列,机器弹窗的使用率、功耗图把这段时间画成淡色背景:
+> 这台机器的推理节点(同 id)被引擎识别为 Strata、实时状态 10 秒内读到、进行中 0、排队 0、最后一个请求结束已 ≥ 10 秒;
+> push 里 ≥ 2 张卡;平均 GPU busy ≥ 90 %;每张卡的 `mclk_mhz` < 500(没有 `mclk_mhz` 时 `mem_busy_pct` ≤ 5)。
+> 两个字段都没有的 agent(v2.38 前、Windows / NVIDIA)、单卡、llama.cpp 节点都不判断,行为不变。历史里的 `gpu` 照写实际值。
 
 ### 5.2 Windows(`agents/homenet-agent.ps1`)
 

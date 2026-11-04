@@ -39,6 +39,7 @@
   --lv-warn: var(--yellow);
   --lv-danger: var(--red);
   --lv-cool: var(--cyan);
+  --idle-spin: rgba(148, 163, 184, 0.78);   /* v2.38 空闲轮询: grey, not a level colour */
   /* 机器识别色（柔和装饰，由 --accent 覆盖） */
   --m24: #5aa6ff;
   --m110: #4fe3d0;
@@ -434,6 +435,10 @@ h2:empty { display: none; } /* 堆叠卡外框无标题时不留空行 */
 }
 .ring::before { content: ""; position: absolute; inset: 7px; border-radius: 50%; background: radial-gradient(circle at 50% 35%, #0e1626, #070b14); }
 .ring b { position: relative; z-index: 1; font-size: 17px; font-weight: 500; letter-spacing: 0.3px; }
+/* v2.38 空闲轮询: two short lines in the ring's centre, grey (server/idle_spin.js) */
+.ring.idle-spin b { display: flex; flex-direction: column; align-items: center; font-size: 12px; line-height: 1.2; letter-spacing: 0; color: var(--muted); }
+.legend .sw.sw-band { height: 10px; background: rgba(148,163,184,0.22); outline: 1px solid rgba(148,163,184,0.35); }
+.ring.idle-spin::after { display: none; }   /* no comet: nothing is working */
 .ring-label { font-size: 11.5px; color: var(--muted); letter-spacing: 0.5px; }
 /* 绕环跑的一道流光：亮白头 + 状态色拖尾（§6 保留）
    v2.22: the comet used to spin the whole ::after with transform: rotate(). A rotating

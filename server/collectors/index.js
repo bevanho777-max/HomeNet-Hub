@@ -13,6 +13,7 @@ import { markPush, isPushStale, checkPushToken } from './push.js';
 import { collectNodes, promQuery } from './nodes.js';
 import { speedQuery } from '../engine.js';
 import { normalize, samplableRows } from '../normalize.js';
+import { applyIdleSpin } from '../idle_spin.js';
 import { pivotTokens } from '../token_detail.js';
 
 const SNAPSHOT_TOKEN_DAYS = 30; // window for the token card day-trend + 5-day spark
@@ -159,6 +160,7 @@ export class Scheduler {
       // tokens history keeps coming from Prometheus.
       if (type === 'inference_live') {
         const view = await this.ctx.live.poll();
+        this._liveView = view;            // v2.38: handlePush judges 空闲轮询 against it (idle_spin.js)
         snapshot.update(target.id, { online: true, metrics: {}, extra: { live: view } });
         this.ctx.liveBus?.emit(view);
         // v2.26: per node the running streams, the total and each stream's decode go into
@@ -334,6 +336,8 @@ export class Scheduler {
     const metrics = this.ctx.getMetrics();
     markPush(target.id);
     const norm = normalize(body || {}, target, metrics);
+    // v2.38 空闲轮询: a multi-GPU Strata node that serves nothing yet reads GPU busy (idle_spin.js)
+    applyIdleSpin(body || {}, target, norm.metrics, this._liveView);
     // §7.5 原样保留原始 body.extra 到快照(缺省则 update 内部沿用上次)
     this.ctx.snapshot.update(target.id, { online: true, metrics: norm.metrics, extra: body.extra });
     const rows = samplableRows(target.id, norm, metrics);

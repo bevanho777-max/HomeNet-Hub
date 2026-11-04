@@ -182,6 +182,26 @@ function gpuPanels(idx) {
   ];
 }
 
+// v2.38 the 空闲轮询 stretches (server/idle_spin.js records idle_spin = 1 / 0 for a multi-GPU
+// Strata node) as [{ from, to }] for drawMulti's pale background. /api/history buckets the
+// series, so a bucket counts when at least half of it was idle spin; each one reaches to the
+// next sample unless the hub stopped recording in between (then one typical step).
+function idleSpinBands(points, maxGapSec = 900) {
+  const pts = (points || []).filter((p) => p && Number.isFinite(p.ts) && Number.isFinite(p.value)).sort((a, b) => a.ts - b.ts);
+  const steps = pts.slice(1).map((p, k) => p.ts - pts[k].ts).filter((d) => d > 0).sort((a, b) => a - b);
+  const step = steps.length ? steps[Math.floor(steps.length / 2)] : 60;
+  const bands = [];
+  pts.forEach((p, k) => {
+    if (p.value < 0.5) return;
+    const next = pts[k + 1];
+    const to = next && next.ts - p.ts <= Math.max(maxGapSec, step * 3) ? next.ts : p.ts + step;
+    const last = bands[bands.length - 1];
+    if (last && p.ts <= last.to) last.to = Math.max(last.to, to);
+    else bands.push({ from: p.ts, to });
+  });
+  return bands;
+}
+
 // Extra panels (2..4) for the multi-GPU view, created on first use under the main
 // legend and hidden for every other card.
 function extraGpuPanels(n) {
@@ -313,10 +333,13 @@ async function load() {
         const gm = gpuMetrics(cardIdx);
         const panels = gpuPanels(cardIdx);
         const opts = { metrics: gm, emptyText: t('chart_no_data_range', range) };
-        drawMulti(canvas, series, legend, { ...opts, subs: panels[0].subs, height: 220 });
+        // v2.38 空闲轮询 stretches behind utilization and power (the two that read high then)
+        const spin = { bands: idleSpinBands(series.idle_spin), bandLabel: t('idle_spin_band') };
+        drawMulti(canvas, series, legend, { ...opts, ...spin, subs: panels[0].subs, height: 220 });
         panels.slice(1).forEach((p, k) => {
           setLine(extra[k].title, t(p.title));
-          drawMulti(extra[k].canvas, series, extra[k].legend, { ...opts, subs: p.subs, height: 200 });
+          const shade = p.title === 'gpu_panel_power' ? spin : {};
+          drawMulti(extra[k].canvas, series, extra[k].legend, { ...opts, ...shade, subs: p.subs, height: 200 });
         });
       } else if (split) {
         // One series per panel, each on its own auto-scaled axis.

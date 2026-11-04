@@ -42,6 +42,14 @@ export const mget = (snap, key) => (snap?.metrics?.[key] || { value: null, level
 
 // Ring gauge. value===null → show "—", never 0%, color = cool (§4.1/§6).
 export function ring(label, m) {
+  // v2.38 空闲轮询 (server/idle_spin.js): a multi-GPU Strata node serving nothing whose GPUs read
+  // busy -- the arc keeps the real figure but grey, the centre says so, the title has the numbers
+  if (m.idle_spin && typeof m.value === 'number') {
+    const p = Math.max(0, Math.min(100, m.value));
+    const [l1, l2] = t('idle_spin_ring');
+    return `<div class="ring-wrap" title="${esc(t('idle_spin_title', m.idle_spin))}"><div class="ring idle-spin" style="--p:${p};--c:var(--idle-spin)">`
+      + `<b><span>${esc(l1)}</span><span>${esc(l2)}</span></b></div><div class="ring-label">${esc(label)}</div></div>`;
+  }
   const isNull = m.value == null || typeof m.value !== 'number';
   const p = isNull ? 0 : Math.max(0, Math.min(100, m.value));
   const c = isNull ? 'var(--lv-cool)' : levelColor(m.level);

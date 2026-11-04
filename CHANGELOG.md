@@ -49,6 +49,32 @@ on screen is the one from `package.json`, and this file is what needs fixing.
 
 ---
 
+## v2.38.0 — 2026-11-04
+
+**机器卡显示「空闲轮询」:多卡 Strata 节点没有请求、GPU 却读 100 % 时,GPU 环改成灰色「空闲轮询 / Idle spin」,不着红;
+另记 `idle_spin` 序列,机器弹窗把这段时间画成淡色背景。Linux agent 多报显存时钟和显存读写率。**
+
+*Rebuild required — `server/`、`web/` 都改了。Linux 机器的 agent 要换成这一版(多两个字段);NAS / Windows agent 没改。*
+
+- **为什么**:m25 的 Strata 把模型分在两张卡上,卡与卡交接时用一个在 GPU 上自旋的单线程 kernel 等主机内存里的旗标
+  (Strata 源码 `src/split/src/hip/cuda.h`)。没有请求时 `gpu_busy_percent` 也是 100,核心 3 GHz,但显存时钟 96 MHz、CPU 闲置,
+  两卡合计约 230 W(BACKLOG 47)。卡面一直是红色 100 %,看起来像故障。
+- **判断(`server/idle_spin.js`,push 时对照 2 秒一次的推理节点实时状态)**:
+  - 这台机器的推理节点(同 id)被引擎识别为 Strata,实时状态 10 秒内读到;
+  - Strata 进行中 0、排队 0,最后一个请求结束已 ≥ 10 秒(agent 是 2 秒的平均,请求刚结束的尾巴不算);
+  - push 里 ≥ 2 张卡,平均 GPU busy ≥ 90 %;
+  - 每张卡显存时钟 < 500 MHz(RX 7900 XTX 最低两档 96 / 456,干活时 1249)。agent 没报时钟时才用显存读写率 ≤ 5 % ——
+    实测推理进行中读写率大多也是 0–1 %,它只是后备。
+  - 单卡、llama.cpp 节点、NVIDIA / Windows agent(不报这两个字段)都不判断,行为不变。
+- **卡面(`web/renderers/common.js` `ring()`)**:GPU 环灰色、中心两行「空闲 / 轮询」(英文 Idle / spin),弧长仍是实际的 busy;
+  title 写实际 busy(每张卡)、原因、显存时钟、此时功耗。有请求时恢复正常显示。hub 把 `gpu` 与每卡 `gpuN` 的等级设成
+  `cool`,不触发红色。
+- **历史**:`gpu`、`gpuN` 照写实际值;另写 `idle_spin`(1 / 0)。机器弹窗(`machine_detail.js`)的使用率、功耗两张图把
+  `idle_spin` 为 1 的时段画成淡色背景,图例多一项「空闲轮询」(`chart.js` `drawMulti` 的新选项 `bands` / `bandLabel`)。
+- **Linux agent(`agents/homenet-agent.sh`)**:AMD 每卡多报 `mem_busy_pct`(周期内多次采样的平均)和 `mclk_mhz`
+  (`pp_dpm_mclk` 当前档,周期内的最大值:升降频时会短暂落在低档,取一个点会把干活的卡误报成闲置)。
+- `docs/AGENT_PROTOCOL.md`:两个新字段与「空闲轮询」的规则。
+
 ## v2.37.1 — 2026-11-04
 
 **By Model 的第二槽(litellm 4001 / m25)改由 agent 的 env 决定:`LITELLM_4001_LIKE` / `LITELLM_4001_LABEL`。**

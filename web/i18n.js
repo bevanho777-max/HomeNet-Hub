@@ -322,6 +322,17 @@ const ZH = {
   gpu_panel_vram: '显存',
   gpu_panel_temp: '温度（edge / junction / mem）',
   gpu_panel_power: '功耗',
+  // v2.38 空闲轮询 (server/idle_spin.js)
+  idle_spin: '空闲轮询',
+  idle_spin_ring: ['空闲', '轮询'],
+  idle_spin_band: '空闲轮询',
+  idle_spin_title: (s) => {
+    const cards = (s?.cards || []).map((c) => `卡 ${c.i} ${c.busy ?? '—'}%`).join(' · ');
+    const mem = (s?.cards || []).map((c) => (c.mclk != null ? `${c.mclk} MHz` : `读写 ${c.mem ?? '—'}%`)).join(' / ');
+    return `空闲轮询:Strata 没有请求在跑,GPU busy 实际 ${s?.busy ?? '—'}%(${cards})。\n`
+      + `原因:Strata 双卡交接的轮询 kernel 在 GPU 上自旋等待,不是在计算 —— 显存时钟 ${mem}。\n`
+      + `此时功耗 ${s?.power != null ? Math.round(s.power) : '—'} W。有请求时恢复正常显示。`;
+  },
   agent_head_match: (sha) => `agent 与 HEAD 一致（${sha}）`,
   agent_head_mismatch: (run, head) => `agent 与 HEAD 不一致：运行中 ${run}，HEAD ${head}`,
   agent_head_unknown: (sha) => `agent ${sha}（HEAD 版本未知）`,
@@ -753,6 +764,16 @@ const EN = {
   gpu_panel_vram: 'VRAM',
   gpu_panel_temp: 'Temperature (edge / junction / mem)',
   gpu_panel_power: 'Power',
+  idle_spin: 'Idle spin',
+  idle_spin_ring: ['Idle', 'spin'],
+  idle_spin_band: 'Idle spin',
+  idle_spin_title: (s) => {
+    const cards = (s?.cards || []).map((c) => `GPU${c.i} ${c.busy ?? '—'}%`).join(' · ');
+    const mem = (s?.cards || []).map((c) => (c.mclk != null ? `${c.mclk} MHz` : `${c.mem ?? '—'}% busy`)).join(' / ');
+    return `Idle spin: Strata is serving no request, yet GPU busy reads ${s?.busy ?? '—'}% (${cards}).\n`
+      + `Cause: Strata's dual-GPU hand-off polling kernel spins on the GPU while it waits; it is not computing (memory clock ${mem}).\n`
+      + `Power now ${s?.power != null ? Math.round(s.power) : '—'} W. Normal display returns with the next request.`;
+  },
   agent_head_match: (sha) => `Agent matches HEAD (${sha})`,
   agent_head_mismatch: (run, head) => `Agent differs from HEAD: running ${run}, HEAD ${head}`,
   agent_head_unknown: (sha) => `Agent ${sha} (HEAD version unknown)`,
