@@ -30,16 +30,25 @@ function hm(sec) {
   return d.toDateString() === now.toDateString() ? s : `${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${s}`;
 }
 
-// 'online' | 'idle' | 'down'
-export function nodeState(probeTarget, probeSnap) {
+// 'online' | 'idle' | 'cut' | 'down'
+// v2.39 'cut' (连线中断 / Unreachable, yellow): the probe fails, but the machine of the same id is up (its
+// agent pushes) and its agent counts Strata processes (extra.strata.procs) -- the path to Strata is broken
+// (the 18090 forward on m25 pointed at a port Strata had left, 2026-11-04), not Strata. Red 故障 only when
+// no Strata process is left either.
+export function nodeState(probeTarget, probeSnap, machineSnap = null) {
   if (probeSnap && probeSnap.online !== false) return 'online';
-  return probeTarget?.always_on === false ? 'idle' : 'down';
+  if (probeTarget?.always_on === false) return 'idle';
+  return strataAlive(machineSnap) ? 'cut' : 'down';
+}
+export function strataAlive(m) {
+  return !!m && m.online !== false && !m.stale && Number(m.extra?.strata?.procs) > 0;
 }
 
-const STATE_CLASS = { online: 'lv-ok', idle: 'node-idle-text', down: 'lv-danger' };
+const STATE_CLASS = { online: 'lv-ok', idle: 'node-idle-text', cut: 'lv-warn', down: 'lv-danger' };
 
 function statusText(state, probeTarget) {
   if (state === 'online') return t('node_online');
+  if (state === 'cut') return t('node_cut');
   if (state === 'down') return t('node_down');
   // always_on:false machines are usually just switched off — say both, since the hub
   // cannot tell "powered off" from "on but not serving".
@@ -57,6 +66,7 @@ function statusSub(state, probeSnap, lv) {
     return M > 1 ? { sub: t('node_sub_max', M), subShort: t('abbr_sub_max', M), subShort2: t('abbr2_sub_max', M) } : { sub: t('node_sub_single'), subShort: t('abbr_sub_single') };
   }
   if (state === 'idle') return { sub: t('node_sub_ondemand'), subShort: t('abbr_ondemand') };
+  if (state === 'cut') return { sub: t('node_sub_cut'), subShort: t('abbr_cut') };
   return { sub: probeSnap?.error === 'timeout' ? t('node_sub_timeout') : t('node_sub_unreachable') };
 }
 
@@ -251,7 +261,8 @@ export function renderNodes(gc, resolve) {
   const cols = (gc.nodes || []).map((col, idx) => {
     const { target: probeT, snap: probeS } = resolve(col.probe);
     const { target: speedT, snap: speedS } = col.speed ? resolve(col.speed) : { target: null, snap: null };
-    const state = nodeState(probeT, probeS);
+    const mach = resolve(col.node)?.snap || null;          // v2.39: the machine of the same id (its agent)
+    const state = nodeState(probeT, probeS, mach);
     // v2.25 live state of this node (inference_live target named by the card's `live`)
     const lv = gc.live ? resolve(gc.live).snap?.extra?.live?.nodes?.[col.node] || null : null;
     const busy = state === 'online' && lv?.reachable && lv.busy > 0;
@@ -316,7 +327,8 @@ export function renderNodes(gc, resolve) {
         // "推理" / "Gen" -- the concurrency bar under the column shows each stream anyway
         ? cell(t('node_status'), esc(`${t('node_busy')} ${lv.running}/${lv.max_streams}`), { cls: 'lv-cool', short: `${t('abbr_busy')} ${lv.running}/${lv.max_streams}`, short2: t('abbr_busy'), sub: lv.queued ? t('node_queued', lv.queued) : t('node_no_queue') })
         : cell(t('node_status'), esc(t('node_busy')), { cls: 'lv-cool', short: t('abbr_busy'), sub: t('node_busy_n', lv.busy) + (lv.queued ? ` · ${t('node_queued', lv.queued)}` : '') }))
-      : cell(t('node_status'), esc(statusText(state, probeT)), { cls: STATE_CLASS[state], short: statusShort(state, probeT), ...statusSub(state, probeS, lv) });
+      : cell(t('node_status'), esc(statusText(state, probeT)), { cls: STATE_CLASS[state], short: statusShort(state, probeT), ...statusSub(state, probeS, lv),
+        ...(state === 'cut' ? { title: t('node_cut_title', col.node, Number(mach?.extra?.strata?.procs) || 0, probeS?.error || '') } : {}) });
     // v2.28 latency's second line: how often the hub probes the node (the target's interval)
     const iv = probeT?.interval;
     // (v2.30: and in the narrowest column only the interval, the rest in the title)

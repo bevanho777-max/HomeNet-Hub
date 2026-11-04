@@ -202,6 +202,7 @@ html, body {
 .chip.online .dot { background: var(--green); box-shadow: 0 0 8px var(--green); animation: breathe 2.6s ease-in-out infinite; }
 .chip.offline .dot { background: var(--red); box-shadow: 0 0 8px var(--red); }
 .chip.unknown .dot { background: var(--muted2); }
+.chip.cut .dot { background: var(--yellow); box-shadow: 0 0 8px var(--yellow); }   /* v2.39 连线中断 */
 .chip .lat { color: var(--muted2); font-size: 11px; }
 
 /* ---------- 卡片网格 ---------- */

@@ -49,6 +49,28 @@ on screen is the one from `package.json`, and this file is what needs fixing.
 
 ---
 
+## v2.39.0 — 2026-11-04
+
+**推理节点「连线中断」:探测失败、但机器在线而且 Strata 进程还在时,推理节点卡显示黄色「连线中断 / Unreachable」,
+不再是红色「故障」;Linux agent 上报 Strata 进程数。**
+
+*Rebuild required — `web/` 改了。Linux 机器的 agent 要换成这一版(多一个 `extra.strata`);NAS / Windows agent 没改。*
+
+- **起因(2026-11-04 22:13 起)**:Bevan 的 Codex 会话在 m25 修 Strata 时停了常驻实例(127.0.0.1:18081),在 127.0.0.1:18082
+  起候选实例测试。24 进 m25 的转发口 192.168.1.25:18090 还指着 18081,hub 和 litellm 4001 都连不上。推理节点卡显示红色
+  「故障 · 无法连接」,其实 Strata 一直在跑。m25 那一侧的修复(转发口每 30 秒自动跟随 Strata 的端口)在私有仓 BACKLOG 50。
+- **推理节点卡(`web/renderers/nodes.js`)**:新状态 `cut`,黄色「连线中断」,第二行「探测路径不通」。条件:
+  - 探测失败;
+  - 同 id 的机器卡在线、不陈旧;
+  - 它的 agent 报 `extra.strata.procs` > 0。
+  - title 写明是探测路径的问题(转发口、端口、防火墙),不是 Strata 停了。
+  - Strata 进程也不在时照旧是红色「故障」;`always_on: false` 的节点照旧是灰色。
+- **状态灯(`web/app.js` `chip()`)**:有 `machine:` 的服务目标同样处理,黄色。另外 `machineOff`(灰色「未开机」)只对
+  `always_on: false` 的机器生效 —— 常开的 m25 不会因为 agent 断了就显示「未开机」。
+- **Linux agent(`agents/homenet-agent.sh`)**:每 10 秒 `pgrep -fc 'serve/server\.py .*--engine strata'`,大于 0 才发
+  `extra.strata: { procs: N }`。
+- `docs/AGENT_PROTOCOL.md`:`extra.strata`。
+
 ## v2.38.0 — 2026-11-04
 
 **机器卡显示「空闲轮询」:多卡 Strata 节点没有请求、GPU 却读 100 % 时,GPU 环改成灰色「空闲轮询 / Idle spin」,不着红;

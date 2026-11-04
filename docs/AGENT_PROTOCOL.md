@@ -147,6 +147,10 @@ agent 对任何响应都不做分支处理,唯一职责是"采集→推送→睡
 > **试跑**:`homenet-agent.sh --once` 采集一个周期、把 payload 打到 stdout 后退出,不推送,
 > 也不要求 `HUB_URL` / `PUSH_TOKEN`。部署前用它核对输出。
 
+> **`extra.strata`(v2.39,Linux agent)**:`{ "procs": N }`,这台机器上 `serve/server.py --engine strata` 的进程数(每 10 秒用
+> `pgrep` 数一次);没有 Strata 进程就不发这个字段。hub 用它分辨推理节点「连线中断」和「故障」:探测失败、同 id 的机器卡在线
+> 而且 `procs` > 0 → 黄色「连线中断 / Unreachable」(探测路径的问题);Strata 进程也不在 → 红色「故障」。
+
 > **空闲轮询(v2.38,`server/idle_spin.js`)**:多卡的 Strata 节点,Strata 在两张卡之间交接时用一个在 GPU 上自旋的
 > 单线程 kernel 等主机内存里的旗标,没有请求时 `gpu_busy_percent` 也读 100、核心频率在最高档,但显存时钟停在闲置档。
 > hub 在同时满足下面几条时,把机器卡的 GPU 环显示成灰色「空闲轮询 / Idle spin」(不着红,title 写实际 busy、原因、功耗),

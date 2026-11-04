@@ -523,6 +523,10 @@ prev_mono=$MONO
 # 推送用 curl -m 1,采集绝不能跟在它的预算里,所以这里跟 nas75 agent 的 DISKS_INTERVAL 同构。
 # 时间戳是单调时钟;开机不久时它还很小,所以往前推一个 TTL,第一拍就采。
 llm_cache=""; llm_cache_ts=$((MONO - LITELLM_TTL))
+# Strata 进程(v2.39):hub 判断推理节点「连线中断」要知道这台机器上 Strata 还在不在跑(web/renderers/nodes.js)。
+# 每 STRATA_TTL 秒数一次 `serve/server.py --engine strata` 的进程(pgrep 不算它自己);有才发 extra.strata,没有就省略。
+STRATA_TTL="${STRATA_TTL:-10}"
+strata_cache=""; strata_ts=-1000000
 
 busy_reset
 
@@ -590,6 +594,13 @@ while :; do
   [ -n "$AGENT_SHA" ] && extra_json="\"agent\":{\"file\":\"homenet-agent.sh\",\"sha256\":\"$AGENT_SHA\"}"
   [ -n "$HOST_JSON" ] && extra_json="$extra_json${extra_json:+,}$HOST_JSON"
   [ -n "$llm_extra" ] && extra_json="$extra_json${extra_json:+,}$llm_extra"
+  if [ $((MONO - strata_ts)) -ge "$STRATA_TTL" ]; then
+    strata_n=$(pgrep -fc 'serve/server\.py .*--engine strata' 2>/dev/null) || strata_n=0
+    strata_cache=""
+    case "$strata_n" in ''|*[!0-9]*) ;; *) [ "$strata_n" -gt 0 ] && strata_cache="\"strata\":{\"procs\":$strata_n}" ;; esac
+    strata_ts=$MONO
+  fi
+  [ -n "$strata_cache" ] && extra_json="$extra_json${extra_json:+,}$strata_cache"
 
   payload=$(printf '{"v":1,"id":"%s","ts":%d,"os":"linux",%s%s%s%s%s%s,"extra":{%s}}' \
     "$AGENT_ID" "$now" \

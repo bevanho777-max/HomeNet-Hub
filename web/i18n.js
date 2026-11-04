@@ -204,7 +204,8 @@ const ZH = {
   abbr_probe: (iv) => `每 ${iv}`,          // 每 15s 探测
   abbr_nolive: '无实时',                   // v2.29 无实时状态
   abbr_latency: '延迟',                    // v2.30 推理节点格子标签(中文本身已短;英文 Latency → Lat)
-  abbr_ondemand: '按需',                   // 按需开机
+  abbr_ondemand: '按需',
+  abbr_cut: '路径不通',                   // 按需开机
   abbr2_sub_max: (m) => `≤${m}`,           // 最多 N 路并发 → ≤N 路 → ≤N
   abbr_ctr_err: '计数异常',                 // v2.29 计数来源异常
   part_now: '当前',
@@ -438,6 +439,11 @@ const ZH = {
   engine_checked: (when) => `${when} 探测`,
   engine_err: (e) => `最近一次探测没有找到引擎:${e}`,
   node_sub_ondemand: '按需开机',
+  // v2.39 连线中断:探测不到,但机器在线、Strata 进程还在
+  node_cut: '连线中断',
+  node_sub_cut: '探测路径不通',
+  node_cut_title: (m, n, e) => `连线中断:hub 探测不到这个节点${e ? `(${e})` : ''},但 ${m} 的 agent 在线,机器上还有 ${n} 个 Strata 进程。\n`
+    + '是探测路径的问题(转发口、端口、防火墙),不是 Strata 停了。m25 的转发口每 30 秒自动跟随 Strata 的端口。',
   node_sub_timeout: '探测超时',
   node_sub_unreachable: '无法连接',
   node_sub_probe: (iv) => `每 ${iv} 探测`,
@@ -649,6 +655,7 @@ const EN = {
   abbr_nolive: 'no live',
   abbr_latency: 'Lat',
   abbr_ondemand: 'on call',
+  abbr_cut: 'path down',
   abbr2_sub_max: (m) => `max ${m}`,
   abbr_ctr_err: 'Ctr error',
   part_now: 'Now',
@@ -871,6 +878,10 @@ const EN = {
   engine_checked: (when) => `checked ${when}`,
   engine_err: (e) => `last probe found no engine: ${e}`,
   node_sub_ondemand: 'on demand',
+  node_cut: 'Unreachable',
+  node_sub_cut: 'probe path down',
+  node_cut_title: (m, n, e) => `Unreachable: the hub cannot probe this node${e ? ` (${e})` : ''}, but ${m}'s agent is up and ${n} Strata process${n === 1 ? '' : 'es'} still run there.\n`
+    + 'The probe path is broken (forward, port, firewall), not Strata. m25\'s forward follows Strata\'s port every 30 s.',
   node_sub_timeout: 'probe timeout',
   node_sub_unreachable: 'unreachable',
   node_sub_probe: (iv) => `probe every ${iv}`,

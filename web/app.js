@@ -8,7 +8,7 @@ import { renderService } from './renderers/service.js';
 import { renderStack } from './renderers/stack.js';
 import { renderInfo } from './renderers/info.js';
 import { renderTable } from './renderers/table.js';
-import { renderNodes } from './renderers/nodes.js';
+import { renderNodes, strataAlive } from './renderers/nodes.js';
 import { renderComfy } from './renderers/comfy.js';
 import { initHistory, historyRefresh, relocalizeHistory } from './renderers/history.js';
 import { initMachineDetail, openMachineModal, openNodeModal, openComfyModal, closeMachineModal, bindMachineModal, relocalizeMachineModal } from './renderers/machine_detail.js';
@@ -207,6 +207,9 @@ function updateBodyKeepRings(body, newHTML) {
 // agent is counted as stale).
 function machineOff(target, snap) {
   if (!target.machine || snap?.online !== false) return null;
+  // v2.39: only a machine that is often off (always_on: false) makes a dead service "未开机"; an
+  // always-on one (m25 behind Inference · 25) stays red -- or yellow 连线中断, see chip()
+  if ((CONFIG.targets || []).find((x) => x.id === target.machine)?.always_on !== false) return null;
   const m = lastSnap[target.machine];
   const up = m && m.online !== false && m.since <= snap.tried && m.at > snap.since;
   return up ? null : { at: m?.at || null };
@@ -226,7 +229,12 @@ function chip(target, snap) {
     lat = `<span class="lat">${esc(t('machine_off'))}</span>`;
     tip = off.at ? t('machine_off_since', hmOf(off.at)) : t('machine_off');
   } else if (snap) {
-    if (snap.online === false) {
+    if (snap.online === false && target.machine && strataAlive(lastSnap[target.machine])) {
+      // v2.39 连线中断: the probe fails while the machine is up and Strata still runs on it
+      cls = 'cut';
+      lat = `<span class="lat">${esc(t('node_cut'))}</span>`;
+      tip = t('node_cut_title', target.machine, Number(lastSnap[target.machine]?.extra?.strata?.procs) || 0, snap.error || '');
+    } else if (snap.online === false) {
       cls = 'offline';
       if (target.machine) tip = t('chip_svc_down');
     } else {
