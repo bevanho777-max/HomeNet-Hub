@@ -8,7 +8,7 @@ import { renderService } from './renderers/service.js';
 import { renderStack } from './renderers/stack.js';
 import { renderInfo } from './renderers/info.js';
 import { renderTable } from './renderers/table.js';
-import { renderNodes, strataAlive } from './renderers/nodes.js';
+import { renderNodes, strataAlive, testingPorts } from './renderers/nodes.js';
 import { renderComfy } from './renderers/comfy.js';
 import { initHistory, historyRefresh, relocalizeHistory } from './renderers/history.js';
 import { initMachineDetail, openMachineModal, openNodeModal, openComfyModal, closeMachineModal, bindMachineModal, relocalizeMachineModal } from './renderers/machine_detail.js';
@@ -229,7 +229,13 @@ function chip(target, snap) {
     lat = `<span class="lat">${esc(t('machine_off'))}</span>`;
     tip = off.at ? t('machine_off_since', hmOf(off.at)) : t('machine_off');
   } else if (snap) {
-    if (snap.online === false && target.machine && strataAlive(lastSnap[target.machine])) {
+    if (snap.online === false && target.machine && testingPorts(lastSnap[target.machine]).length) {
+      // v2.40 测试中: the resident instance is off, a test instance listens; the hub does not touch it
+      const m = lastSnap[target.machine];
+      cls = 'testing';
+      lat = `<span class="lat">${esc(`${t('node_testing')} · ${testingPorts(m)[0]}`)}</span>`;
+      tip = t('node_testing_title', target.machine, m?.extra?.strata?.resident_unit || '', (m?.extra?.strata?.listen || []).map((x) => `127.0.0.1:${x.port} (${x.unit || '?'})`).join(', '));
+    } else if (snap.online === false && target.machine && strataAlive(lastSnap[target.machine])) {
       // v2.39 连线中断: the probe fails while the machine is up and Strata still runs on it
       cls = 'cut';
       lat = `<span class="lat">${esc(t('node_cut'))}</span>`;

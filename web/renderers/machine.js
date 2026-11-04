@@ -120,7 +120,12 @@ function machineBody(gridCard, snap, metrics, off = false) {
   // would be mostly empty. The column it gives back gets real content: a `subs` metric has a
   // cell of its own again, right after its cell (the gateway's "Last 5m" beside Chat Today);
   // only a card without one widens its last plain cell. The grid keeps its shape, no hole.
-  const narrow = keys.filter((k) => isTable(k) && shownParts(mget(snap, k)).length < 2);
+  // v2.40: also when its entries are so short that two cells would be mostly empty -- just after midnight
+  // "27b 3 flash-q5 1" filled 21-24 % of a two-wide By Model cell (the layout check's floor is 25 %). 19
+  // characters is about 86 px in this font: 25 % of the widest two-wide cell (343 px), and still one line in
+  // one cell (fit.js shows what fits and counts the rest in "+N" anyway).
+  const tableText = (m) => shownParts(m).map((p) => `${p.label || ''} ${p.display ?? ''}`).join(' ');
+  const narrow = keys.filter((k) => isTable(k) && (shownParts(mget(snap, k)).length < 2 || tableText(mget(snap, k)).length <= 19));
   let spare = narrow.length;
   const promoted = new Set();
   for (const k of keys) if (spare && subs[k] && !isTable(k)) { promoted.add(k); spare -= 1; }

@@ -203,6 +203,8 @@ html, body {
 .chip.offline .dot { background: var(--red); box-shadow: 0 0 8px var(--red); }
 .chip.unknown .dot { background: var(--muted2); }
 .chip.cut .dot { background: var(--yellow); box-shadow: 0 0 8px var(--yellow); }   /* v2.39 连线中断 */
+.chip.testing .dot { background: var(--cyan); box-shadow: 0 0 8px var(--cyan); }    /* v2.40 测试中 */
+.node-route-fb { color: var(--muted); }                                                 /* v2.40 备援路由 */
 .chip .lat { color: var(--muted2); font-size: 11px; }
 
 /* ---------- 卡片网格 ---------- */

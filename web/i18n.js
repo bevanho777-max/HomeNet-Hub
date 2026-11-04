@@ -205,7 +205,9 @@ const ZH = {
   abbr_nolive: '无实时',                   // v2.29 无实时状态
   abbr_latency: '延迟',                    // v2.30 推理节点格子标签(中文本身已短;英文 Latency → Lat)
   abbr_ondemand: '按需',
-  abbr_cut: '路径不通',                   // 按需开机
+  abbr_cut: '路径不通',
+  abbr_testing: '测试',
+  abbr_sub_testing: '常驻未运行',                   // 按需开机
   abbr2_sub_max: (m) => `≤${m}`,           // 最多 N 路并发 → ≤N 路 → ≤N
   abbr_ctr_err: '计数异常',                 // v2.29 计数来源异常
   part_now: '当前',
@@ -378,6 +380,8 @@ const ZH = {
   node_litellm_port: (p) => `litellm ${p}`,
   node_route_stale: '待移除',
   node_route_pending: '未接入',
+  node_route_fb: '备援',
+  node_route_fb_title: (p) => `litellm ${p} 的备援:它自己的节点不可用(连不上、5xx、超时)时,请求改走这里`,
   node_public_via: (d) => `对外 ${d}`,
   // v2.23 cell second lines (inference nodes card)
   node_sub_last: (when, v) => `最后 ${when} · ${v}`,
@@ -441,6 +445,11 @@ const ZH = {
   node_sub_ondemand: '按需开机',
   // v2.39 连线中断:探测不到,但机器在线、Strata 进程还在
   node_cut: '连线中断',
+  // v2.40 测试中:常驻实例没在跑,别的 Strata(测试实例)在听
+  node_testing: '测试中',
+  node_sub_testing: '常驻实例未运行',
+  node_testing_title: (m, unit, listen) => `测试中:${m} 的常驻 Strata${unit ? `(${unit})` : ''}没在跑,机器上的测试实例在听 ${listen}。\n`
+    + '转发口只跟随常驻实例,不会把请求送到测试实例;litellm 4001 的请求自动落到 m26。hub 不向测试实例发任何请求。',
   node_sub_cut: '探测路径不通',
   node_cut_title: (m, n, e) => `连线中断:hub 探测不到这个节点${e ? `(${e})` : ''},但 ${m} 的 agent 在线,机器上还有 ${n} 个 Strata 进程。\n`
     + '是探测路径的问题(转发口、端口、防火墙),不是 Strata 停了。m25 的转发口每 30 秒自动跟随 Strata 的端口。',
@@ -656,6 +665,8 @@ const EN = {
   abbr_latency: 'Lat',
   abbr_ondemand: 'on call',
   abbr_cut: 'path down',
+  abbr_testing: 'Test',
+  abbr_sub_testing: 'resident off',
   abbr2_sub_max: (m) => `max ${m}`,
   abbr_ctr_err: 'Ctr error',
   part_now: 'Now',
@@ -823,6 +834,8 @@ const EN = {
   node_litellm_port: (p) => `litellm ${p}`,
   node_route_stale: 'to be removed',
   node_route_pending: 'not connected',
+  node_route_fb: 'fallback',
+  node_route_fb_title: (p) => `litellm ${p}'s fallback: requests come here when its own node is down (refused, 5xx, timeout)`,
   node_public_via: (d) => `Public · ${d}`,
   node_sub_last: (when, v) => `Last ${when} · ${v}`,
   node_sub_ll: (n) => `via LLM ${n}`,
@@ -879,6 +892,10 @@ const EN = {
   engine_err: (e) => `last probe found no engine: ${e}`,
   node_sub_ondemand: 'on demand',
   node_cut: 'Unreachable',
+  node_testing: 'Testing',
+  node_sub_testing: 'resident off',
+  node_testing_title: (m, unit, listen) => `Testing: ${m}'s resident Strata${unit ? ` (${unit})` : ''} is not running; a test instance listens on ${listen}.\n`
+    + 'The forward only follows the resident instance, so no request reaches the test instance; litellm 4001 falls back to m26. The hub sends nothing to the test instance.',
   node_sub_cut: 'probe path down',
   node_cut_title: (m, n, e) => `Unreachable: the hub cannot probe this node${e ? ` (${e})` : ''}, but ${m}'s agent is up and ${n} Strata process${n === 1 ? '' : 'es'} still run there.\n`
     + 'The probe path is broken (forward, port, firewall), not Strata. m25\'s forward follows Strata\'s port every 30 s.',

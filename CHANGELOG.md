@@ -49,6 +49,30 @@ on screen is the one from `package.json`, and this file is what needs fixing.
 
 ---
 
+## v2.40.0 — 2026-11-05
+
+**推理节点「测试中 · <端口>」:常驻 Strata 没在跑、但机器上有别的 Strata 实例(Bevan 的测试)在听时,显示青色
+「测试中 · 18082 / Testing · 18082」;推理节点卡认得 litellm 实例的备援路由(`fallback`),显示「litellm 4001 备援」。**
+
+*Rebuild required — `server/`、`web/` 都改了。Linux agent 要换成这一版(`extra.strata` 多了 `listen`);m25 的 agent env 加
+`STRATA_RESIDENT_UNIT=strata-q5-resident.service`。NAS / Windows agent 没改。*
+
+- **起因(2026-11-04)**:Bevan 的 Codex 会话在 m25 测试时停常驻实例(127.0.0.1:18081)、在 18082 起测试实例。
+  - m25 的转发口改成只跟随常驻实例(私有仓 BACKLOG 51),测试期间探测连不上;
+  - litellm 4001 的请求经 fallback 落到 m26。
+  - 卡面应该说明「在测试」,而不是「连线中断」或「故障」。
+- **推理节点卡(`web/renderers/nodes.js`)**:新状态 `testing`。条件:
+  - 探测失败;
+  - 同 id 机器卡在线;
+  - agent 的 `extra.strata` 有 `resident_unit`,`listen` 里没有常驻实例、但有别的端口。
+  - 显示青色「测试中 · <端口>」,第二行「常驻实例未运行」;title 写常驻 unit、测试实例的端口与 unit,并说明请求落到 m26、hub 不打扰测试实例。
+  - 状态灯同样处理。hub 不向测试实例发任何请求:端口、unit 都来自 agent 本机的 `/proc` 与 `ss`。
+- **备援路由(`server/collectors/nodes.js`)**:inference_nodes 的 `instances` 可写 `fallback: [节点]`。
+  - 这个实例到该节点的 live 路由算「预期」,显示「litellm 4001 备援」(灰),不再是「待移除」,也不带实例的对外名(lm2)。
+  - m26 一栏的标题按端口排成「litellm 4001 备援 · litellm 4002」。
+- **Linux agent**:`extra.strata` 多了 `listen: [{port, unit, resident}]` 与 `resident_unit`(要设 env `STRATA_RESIDENT_UNIT`),仍是每 10 秒一次。
+- `docs/AGENT_PROTOCOL.md` 同步。
+
 ## v2.39.0 — 2026-11-04
 
 **推理节点「连线中断」:探测失败、但机器在线而且 Strata 进程还在时,推理节点卡显示黄色「连线中断 / Unreachable」,

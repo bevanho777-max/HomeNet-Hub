@@ -339,12 +339,16 @@ export async function collectNodes(target, env, { engine = null } = {}) {
     const routes = [];
     for (const r of results) {
       const serves = Array.isArray(r.i.serves) ? r.i.serves : null;
-      const intended = serves ? serves.includes(n.id) : true;
+      // v2.40 `fallback`: nodes this instance falls back to when its own node is gone (4001 -> m26 while m25's
+      // resident Strata is off; router_settings.fallbacks). A live fallback route is intended, shown as such,
+      // and never carries the instance's public name.
+      const fallback = Array.isArray(r.i.fallback) && r.i.fallback.includes(n.id) && !(serves && serves.includes(n.id));
+      const intended = serves ? serves.includes(n.id) || fallback : true;
       const live = r.deps ? r.deps.some((d) => d.at && (n.chat.has(d.at) || n.emb.has(d.at))) : false;
       // live + intended = the route; live + not intended = left over, to be removed;
       // intended but not live = planned, not connected yet.
-      if (live || (intended && serves)) {
-        routes.push({ port: r.i.port, intended, live, public: r.i.public ? String(r.i.public) : null });
+      if (live || (intended && serves && !fallback)) {
+        routes.push({ port: r.i.port, intended, live, ...(fallback ? { fallback: true } : {}), public: r.i.public && !fallback ? String(r.i.public) : null });
       }
     }
     routes.sort((a, b) => a.port - b.port);

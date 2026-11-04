@@ -35,16 +35,25 @@ function hm(sec) {
 // agent pushes) and its agent counts Strata processes (extra.strata.procs) -- the path to Strata is broken
 // (the 18090 forward on m25 pointed at a port Strata had left, 2026-11-04), not Strata. Red 故障 only when
 // no Strata process is left either.
+// v2.40 'testing' (测试中 · <port> / Testing · <port>, cyan): the probe fails because the resident instance is not
+// running, while another Strata (Bevan's test instance) listens on the machine. The machine's agent says so
+// (extra.strata.listen with resident flags, from /proc + ss); the hub sends nothing to the test instance.
 export function nodeState(probeTarget, probeSnap, machineSnap = null) {
   if (probeSnap && probeSnap.online !== false) return 'online';
   if (probeTarget?.always_on === false) return 'idle';
+  if (testingPorts(machineSnap).length) return 'testing';
   return strataAlive(machineSnap) ? 'cut' : 'down';
 }
 export function strataAlive(m) {
   return !!m && m.online !== false && !m.stale && Number(m.extra?.strata?.procs) > 0;
 }
+export function testingPorts(m) {
+  const s = m && m.online !== false && !m.stale ? m.extra?.strata : null;
+  if (!s?.resident_unit || !Array.isArray(s.listen) || s.listen.some((x) => x?.resident)) return [];
+  return s.listen.map((x) => Number(x?.port)).filter((p) => Number.isFinite(p) && p > 0);
+}
 
-const STATE_CLASS = { online: 'lv-ok', idle: 'node-idle-text', cut: 'lv-warn', down: 'lv-danger' };
+const STATE_CLASS = { online: 'lv-ok', idle: 'node-idle-text', testing: 'lv-cool', cut: 'lv-warn', down: 'lv-danger' };
 
 function statusText(state, probeTarget) {
   if (state === 'online') return t('node_online');
@@ -67,6 +76,7 @@ function statusSub(state, probeSnap, lv) {
   }
   if (state === 'idle') return { sub: t('node_sub_ondemand'), subShort: t('abbr_ondemand') };
   if (state === 'cut') return { sub: t('node_sub_cut'), subShort: t('abbr_cut') };
+  if (state === 'testing') return { sub: t('node_sub_testing'), subShort: t('abbr_sub_testing') };
   return { sub: probeSnap?.error === 'timeout' ? t('node_sub_timeout') : t('node_sub_unreachable') };
 }
 
@@ -277,6 +287,8 @@ export function renderNodes(gc, resolve) {
     if (route && Array.isArray(route.routes)) {
       port = route.routes.length ? route.routes.map((r) => {
         const lbl = esc(t('node_litellm_port', r.port));
+        // v2.40 a fallback route (4001 -> m26 while m25's resident instance is off)
+        if (r.live && r.fallback) return `<span class="node-route node-route-fb" title="${esc(t('node_route_fb_title', r.port))}">${lbl} ${esc(t('node_route_fb'))}</span>`;
         if (r.live && r.intended) return `<span class="node-route">${lbl}</span>`;
         if (r.live) return `<span class="node-route-stale"><s>${lbl}</s> ${esc(t('node_route_stale'))}</span>`;
         return `<span class="node-route-pending">${lbl} ${esc(t('node_route_pending'))}</span>`;
@@ -327,8 +339,13 @@ export function renderNodes(gc, resolve) {
         // "推理" / "Gen" -- the concurrency bar under the column shows each stream anyway
         ? cell(t('node_status'), esc(`${t('node_busy')} ${lv.running}/${lv.max_streams}`), { cls: 'lv-cool', short: `${t('abbr_busy')} ${lv.running}/${lv.max_streams}`, short2: t('abbr_busy'), sub: lv.queued ? t('node_queued', lv.queued) : t('node_no_queue') })
         : cell(t('node_status'), esc(t('node_busy')), { cls: 'lv-cool', short: t('abbr_busy'), sub: t('node_busy_n', lv.busy) + (lv.queued ? ` · ${t('node_queued', lv.queued)}` : '') }))
-      : cell(t('node_status'), esc(statusText(state, probeT)), { cls: STATE_CLASS[state], short: statusShort(state, probeT), ...statusSub(state, probeS, lv),
-        ...(state === 'cut' ? { title: t('node_cut_title', col.node, Number(mach?.extra?.strata?.procs) || 0, probeS?.error || '') } : {}) });
+      : state === 'testing'
+        // v2.40 "测试中 · 18082": which port the test instance listens on; its unit(s) in the title
+        ? cell(t('node_status'), esc(`${t('node_testing')} · ${testingPorts(mach)[0]}`), { cls: STATE_CLASS.testing,
+          short: `${t('abbr_testing')} ${testingPorts(mach)[0]}`, short2: t('abbr_testing'), ...statusSub(state, probeS, lv),
+          title: t('node_testing_title', col.node, mach?.extra?.strata?.resident_unit || '', (mach?.extra?.strata?.listen || []).map((x) => `127.0.0.1:${x.port} (${x.unit || '?'})`).join(', ')) })
+        : cell(t('node_status'), esc(statusText(state, probeT)), { cls: STATE_CLASS[state], short: statusShort(state, probeT), ...statusSub(state, probeS, lv),
+          ...(state === 'cut' ? { title: t('node_cut_title', col.node, Number(mach?.extra?.strata?.procs) || 0, probeS?.error || '') } : {}) });
     // v2.28 latency's second line: how often the hub probes the node (the target's interval)
     const iv = probeT?.interval;
     // (v2.30: and in the narrowest column only the interval, the rest in the title)

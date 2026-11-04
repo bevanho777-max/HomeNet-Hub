@@ -525,8 +525,31 @@ prev_mono=$MONO
 llm_cache=""; llm_cache_ts=$((MONO - LITELLM_TTL))
 # Strata 进程(v2.39):hub 判断推理节点「连线中断」要知道这台机器上 Strata 还在不在跑(web/renderers/nodes.js)。
 # 每 STRATA_TTL 秒数一次 `serve/server.py --engine strata` 的进程(pgrep 不算它自己);有才发 extra.strata,没有就省略。
+# v2.40:再报它们实际监听的本机端口和所属 systemd unit(/proc/<pid>/cgroup 与 ss,不连 Strata)。
+#   STRATA_RESIDENT_UNIT  常驻实例的 unit(m25:strata-q5-resident.service);设了才报 resident,
+#                         hub 据此把「常驻不在、别的实例在听」显示成「测试中 · <端口>」。
 STRATA_TTL="${STRATA_TTL:-10}"
+STRATA_RESIDENT_UNIT="$(printf '%s' "${STRATA_RESIDENT_UNIT:-}" | tr -cd 'A-Za-z0-9@._-')"
 strata_cache=""; strata_ts=-1000000
+# 输出 extra.strata 的 JSON 片段(不含外层);没有 Strata 进程时输出空串
+strata_collect() {
+  local pids n pid cg unit ports p list="" res
+  pids=$(pgrep -f 'serve/server\.py .*--engine strata' 2>/dev/null) || pids=""
+  n=$(printf '%s\n' "$pids" | grep -c '[0-9]')
+  [ "$n" -gt 0 ] || return 0
+  local ssout; ssout=$(ss -ltnpH 2>/dev/null)
+  for pid in $pids; do
+    cg=""; { read -r cg < "/proc/$pid/cgroup"; } 2>/dev/null
+    unit="${cg##*/}"; case "$unit" in *.service) ;; *) unit="" ;; esac
+    unit="$(printf '%s' "$unit" | tr -cd 'A-Za-z0-9@._-')"
+    ports=$(printf '%s\n' "$ssout" | awk -v pid="pid=$pid," 'index($0, pid) { a=$4; sub(/.*:/, "", a); if (a ~ /^[0-9]+$/) print a }' | sort -un | head -4)
+    for p in $ports; do
+      res=false; [ -n "$STRATA_RESIDENT_UNIT" ] && [ "$unit" = "$STRATA_RESIDENT_UNIT" ] && res=true
+      list="$list${list:+,}{\"port\":$p,\"unit\":\"$unit\",\"resident\":$res}"
+    done
+  done
+  printf '"strata":{"procs":%d,"listen":[%s]%s}' "$n" "$list" "${STRATA_RESIDENT_UNIT:+,\"resident_unit\":\"$STRATA_RESIDENT_UNIT\"}"
+}
 
 busy_reset
 
@@ -595,9 +618,7 @@ while :; do
   [ -n "$HOST_JSON" ] && extra_json="$extra_json${extra_json:+,}$HOST_JSON"
   [ -n "$llm_extra" ] && extra_json="$extra_json${extra_json:+,}$llm_extra"
   if [ $((MONO - strata_ts)) -ge "$STRATA_TTL" ]; then
-    strata_n=$(pgrep -fc 'serve/server\.py .*--engine strata' 2>/dev/null) || strata_n=0
-    strata_cache=""
-    case "$strata_n" in ''|*[!0-9]*) ;; *) [ "$strata_n" -gt 0 ] && strata_cache="\"strata\":{\"procs\":$strata_n}" ;; esac
+    strata_cache=$(strata_collect)
     strata_ts=$MONO
   fi
   [ -n "$strata_cache" ] && extra_json="$extra_json${extra_json:+,}$strata_cache"
