@@ -49,6 +49,21 @@ on screen is the one from `package.json`, and this file is what needs fixing.
 
 ---
 
+## v2.37.1 — 2026-11-04
+
+**By Model 的第二槽(litellm 4001 / m25)改由 agent 的 env 决定:`LITELLM_4001_LIKE` / `LITELLM_4001_LABEL`。**
+
+*No rebuild for the panel itself — only `agents/` and docs changed. Linux agents should be replaced so they match HEAD;
+the hub is redeployed from the tag only so its agent-version check knows the new script. Windows / NAS agents unchanged.*
+
+- **Linux agent(`agents/homenet-agent.sh`)**:第二槽以前写死 `%flashnext%`,而且排在 `%27b%` 之后;m25 的模型换过好几次
+  (35b → flashnext → 27b q8 → 2026-11-04 Strata 的 `flashnext-q5-single-256k`),每次都得改脚本,带 27b 的部署名还会被算进
+  m26 的 `27b` 槽。现在和第三槽(4000)一样:`LITELLM_4001_LIKE`(SQL LIKE,只接受 `[A-Za-z0-9._%-]`,空串 = 该槽恒为 0)、
+  `LITELLM_4001_LABEL`(上标),排在 `%27b%` 之前判。**没设时是 `%flashnext%` / `flashnext`**,输出与 v2.37.0 逐字相同
+  (同一个库、同一时刻实测五个槽一样),所以只有网关机要改 env。
+- **网关机 m24**:`/etc/homenet-agent.env` 加 `LITELLM_4001_LIKE=%flashnext-q5-single-256k%`、`LITELLM_4001_LABEL=flash-q5`。
+- `docs/AGENT_PROTOCOL.md` 的 by_model 一段同步。
+
 ## v2.37.0 — 2026-11-03
 
 **Agent 的间隔计时改用单调时钟,对时往回拨不再让重新探测显卡停摆几小时。网格栏数改成通用规则:取机器卡数的因数,

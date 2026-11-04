@@ -267,12 +267,16 @@ embedding **没有被藏起来**:
 - 近 5 分钟的 embedding 量单独走 `reqs_5m_embed` 字段。默认不上卡(`layout.yaml` 的
   `items` 里没有它),但会进 sqlite 时序,`/api/history` 里能对照 `reqs_5m` 复盘。
 
-`reqs_by_model` 的五个槽是 `27b` / `flashnext` / 4000 / `emb` / `other`(v2.21 起;之前四槽),按
-`is_emb` → 4000 的模式 → `%27b%` → `%flashnext%` → 兜底的顺序判,匹配的是 `model` 列(实际部署名),
+`reqs_by_model` 的五个槽是 `27b` / 4001 / 4000 / `emb` / `other`(v2.21 起;之前四槽),按
+`is_emb` → 4000 的模式 → 4001 的模式 → `%27b%` → 兜底的顺序判,匹配的是 `model` 列(实际部署名),
 不是客户端请求的别名。第三槽是 litellm 4000 那个实例的模型,它的 SQL LIKE 模式与上标来自 agent 的环境变量
 `LITELLM_4000_LIKE` / `LITELLM_4000_LABEL`(只接受 `[A-Za-z0-9._%-]`;模式为空时该槽恒为 0),换模型、换后端
 机器都只改 env、不改脚本。v2.32 前按机器命名(`LITELLM_M110_LIKE` / `LITELLM_M110_LABEL`,4000 当时接 m110);
 新名未设时旧名仍然生效。
+第二槽是 litellm 4001 那个实例(m25)的模型,v2.37.1 起同样来自 env:`LITELLM_4001_LIKE` / `LITELLM_4001_LABEL`。
+没设时是 `%flashnext%` / `flashnext`,即 v2.37.0 前写死的那条,所以老机器的 env 不用改;设成空串则该槽恒为 0。
+它排在 `%27b%` 之前判:2026-11-04 前 m25 的部署名 `qwen38-27b-q8-shared256k` 带 27b,一直被算进 m26 的 `27b` 槽。
+网关机(m24)从 2026-11-04 起设 `%flashnext-q5-single-256k%` / `flash-q5`(m25 换成 Strata)。
 `other` 槽是 v2.11 补的:此前 SQL 里算了却不发,全库请求数第一的 chat 模型
 `qwen3.6-27b-main-128k` 整个落在里面、卡上完全看不到(2026-07-13 那天 226 次请求就是
 这么消失的)。`27b` 的模式用 `%27b%` 而不是写死的完整名,换个小版本号的部署名不会再静默

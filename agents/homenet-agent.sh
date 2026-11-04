@@ -44,6 +44,19 @@ LITELLM_STALE="${LITELLM_STALE:-180}"   # 缓存超过此秒数即丢弃,字段�
 LITELLM_4000_LIKE="$(printf '%s' "${LITELLM_4000_LIKE:-${LITELLM_M110_LIKE:-}}" | tr -cd 'A-Za-z0-9._%-')"
 LITELLM_4000_LABEL="$(printf '%s' "${LITELLM_4000_LABEL:-${LITELLM_M110_LABEL:-4000}}" | tr -cd 'A-Za-z0-9._-')"
 [ -n "$LITELLM_4000_LABEL" ] || LITELLM_4000_LABEL=4000
+# by_model 第二槽(v2.37.1):litellm 4001 那个实例(m25)的模型,和第三槽一样放进 env —— m25 的模型换过好几次
+# (35b → flashnext → 27b q8 → 2026-11-04 Strata 的 flashnext-q5-single-256k)。排在 %27b% 之前判,
+# m25 的部署名带 27b 时(像 11-04 前的 qwen38-27b-q8-shared256k)不会再被算进 m26 的 27b 槽。
+#   LITELLM_4001_LIKE   SQL LIKE 模式,默认 %flashnext%(= v2.37.0 前写死的那条);设成空串则该槽恒为 0
+#   LITELLM_4001_LABEL  卡上的上标,默认 flashnext
+# 字符白名单同 4000。
+if [ -n "${LITELLM_4001_LIKE+x}" ]; then
+  LITELLM_4001_LIKE="$(printf '%s' "$LITELLM_4001_LIKE" | tr -cd 'A-Za-z0-9._%-')"
+else
+  LITELLM_4001_LIKE='%flashnext%'
+fi
+LITELLM_4001_LABEL="$(printf '%s' "${LITELLM_4001_LABEL:-flashnext}" | tr -cd 'A-Za-z0-9._-')"
+[ -n "$LITELLM_4001_LABEL" ] || LITELLM_4001_LABEL=flashnext
 
 URL="${HUB_URL%/}/api/push/${AGENT_ID}"
 
@@ -327,8 +340,8 @@ UNION ALL
 SELECT 'M|'||tag||'|'||reqs::text FROM (
   SELECT CASE WHEN is_emb              THEN 'emb'
               WHEN model LIKE '__4000_LIKE__' THEN 'i4000'
+              WHEN model LIKE '__4001_LIKE__' THEN 'i4001'
               WHEN model LIKE '%27b%'  THEN '27b'
-              WHEN model LIKE '%flashnext%' THEN 'flashnext'
               ELSE 'other' END AS tag,
          COUNT(*) AS reqs
   FROM llm GROUP BY 1
@@ -344,7 +357,8 @@ llm_collect() {
   [ -n "$LITELLM_PG_DSN" ] || return 0      # 未启用则整段跳过(主循环也有守卫,这里保证函数自洽)
   # 模式为空时换成一个不可能匹配的值,该槽恒为 0
   local i4000_like="${LITELLM_4000_LIKE:-__no_4000_model__}"
-  raw=$(llm_sql | sed "s/__4000_LIKE__/${i4000_like}/" | timeout 6 docker exec -i "$LITELLM_DB_CONTAINER" \
+  local i4001_like="${LITELLM_4001_LIKE:-__no_4001_model__}"
+  raw=$(llm_sql | sed -e "s/__4000_LIKE__/${i4000_like}/" -e "s/__4001_LIKE__/${i4001_like}/" | timeout 6 docker exec -i "$LITELLM_DB_CONTAINER" \
           psql "$LITELLM_PG_DSN" -tAq 2>/dev/null) || raw=""
   stats=$(printf '%s\n' "$raw" | grep '^S|' | head -1)
   if [ -n "$stats" ]; then
@@ -358,15 +372,16 @@ llm_collect() {
     if llm_isnum "$ra"; then
       llm_isnum "$rt" || rt=0
       out="$out\"reqs_today\":$rt,"
-      # 五个槽位固定顺序 27b/flashnext/4000(v2.32 前叫 m110)/emb/other。桶内没有该类的请求记 0(而非缺失),避免小格错位。
+      # 五个槽位固定顺序 27b/4001(v2.37.1 前写死叫 flashnext)/4000(v2.32 前叫 m110)/emb/other。
+      # 桶内没有该类的请求记 0(而非缺失),避免小格错位。
       m1=$(printf '%s\n' "$raw" | awk -F'|' '$1=="M" && $2=="27b"{print $3; exit}')
-      m2=$(printf '%s\n' "$raw" | awk -F'|' '$1=="M" && $2=="flashnext"{print $3; exit}')
+      m2=$(printf '%s\n' "$raw" | awk -F'|' '$1=="M" && $2=="i4001"{print $3; exit}')
       m3=$(printf '%s\n' "$raw" | awk -F'|' '$1=="M" && $2=="i4000"{print $3; exit}')
       m4=$(printf '%s\n' "$raw" | awk -F'|' '$1=="M" && $2=="emb"{print $3; exit}')
       m5=$(printf '%s\n' "$raw" | awk -F'|' '$1=="M" && $2=="other"{print $3; exit}')
       llm_isnum "$m1" || m1=0; llm_isnum "$m2" || m2=0; llm_isnum "$m3" || m3=0
       llm_isnum "$m4" || m4=0; llm_isnum "$m5" || m5=0
-      out="$out\"by_model\":{\"m1\":$m1,\"m1_label\":\"27b\",\"m2\":$m2,\"m2_label\":\"flashnext\",\"m3\":$m3,\"m3_label\":\"$LITELLM_4000_LABEL\",\"m4\":$m4,\"m4_label\":\"emb\",\"m5\":$m5,\"m5_label\":\"other\"},"
+      out="$out\"by_model\":{\"m1\":$m1,\"m1_label\":\"27b\",\"m2\":$m2,\"m2_label\":\"$LITELLM_4001_LABEL\",\"m3\":$m3,\"m3_label\":\"$LITELLM_4000_LABEL\",\"m4\":$m4,\"m4_label\":\"emb\",\"m5\":$m5,\"m5_label\":\"other\"},"
     fi
   fi
   # 近 5 分钟入站 LLM 请求:走访问日志,天然不含 litellm→后端的健康探测(那些不是入站 HTTP)。
