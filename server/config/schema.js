@@ -225,6 +225,9 @@ const targetsSchema = {
                 id: { type: 'string', pattern: '^[a-zA-Z0-9_]+$' },
                 // v2.32 comfyui: the ComfyUI server's base URL (read-only GETs + a listening /ws)
                 url: { type: 'string', pattern: '^https?://[^\\s]+$' },
+                // v2.42 comfyui: ComfyUI here runs only while its owner opens it by hand (m110). With its machine up
+                // and no ComfyUI process the column is grey 未运行 / Not running, not red; nothing restarts it.
+                on_demand: { type: 'boolean' },
                 endpoints: { type: 'array', items: { type: 'string' } },         // chat host:port
                 // v2.25: where the live state is read (inference_live target): llama.cpp
                 // /slots or Strata /status; key_env names the .env variable with Strata's key

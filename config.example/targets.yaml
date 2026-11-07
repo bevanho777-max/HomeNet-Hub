@@ -359,6 +359,10 @@ targets:
   # elapsed time and no step count. A node that does not answer is grey "Off", never red.
   # Open the ComfyUI port to the hub's address only (Windows: an inbound rule for TCP 8188
   # with RemoteAddress = the hub); the hub needs nothing else on the machine.
+  # v2.41: with a Windows agent on the machine of the same id, a node that does not answer while
+  # its machine is up is yellow "Unreachable" if ComfyUI still runs and red "Not running" if not.
+  # v2.42: `on_demand: true` = ComfyUI there runs only when its owner opens it by hand, so "not
+  # running" is its normal state: grey instead of red. The hub never starts anything.
   - id: comfy_example
     name: "ComfyUI 节点"
     name_en: "ComfyUI Nodes"
@@ -369,7 +373,7 @@ targets:
       timeout: "1500ms"
     nodes:
       - { id: gpu_a, url: "http://gpu-node-1.example.local:8188" }
-      - { id: laptop, url: "http://laptop.example.local:8188" }
+      - { id: laptop, url: "http://laptop.example.local:8188", on_demand: true }
 
   # v2.24: ALL usage for the Token Usage card (point the layout's token card at this
   # target instead of a `type: sql` one). The inference servers' own counters (from the

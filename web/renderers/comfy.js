@@ -9,7 +9,8 @@
 // A node that does not answer is grey and says 未开机 (the ComfyUI machines are switched off
 // or asleep a lot) while its machine is off. Today's figures come from the hub's own job table,
 // so they stay on the card, greyed, while the node is off. v2.41: while the machine is up, its
-// agent says whether ComfyUI still runs -- yellow 连线中断 if it does, red 未运行 if not (comfyState).
+// agent says whether ComfyUI still runs -- yellow 连线中断 if it does, red 未运行 if not (comfyState);
+// v2.42: grey 未运行 for an `on_demand` node (m110), where not running is the normal state.
 import { card, esc } from './common.js';
 import { cv, t } from '../i18n.js';
 
@@ -64,19 +65,24 @@ export function comfyCutTitle(machine, c, port, error) {
   return t('comfy_cut_title', machine, port ?? c?.cmd_port ?? '?', error || '', c?.pid ?? '?', since, listenText(c));
 }
 
-// 'busy' | 'idle' | 'off' | 'wait' (no reading yet) | v2.41 'cut' | 'down'
+// 'busy' | 'idle' | 'off' | 'wait' (no reading yet) | v2.41 'cut' | 'down' | v2.42 'stopped'
 // v2.41: a node that does not answer is judged by its machine's agent (the machine target with the node's id,
 // extra.comfyui): a ComfyUI process still runs -> 'cut' 连线中断 / Unreachable (yellow: m136 11-03 17:02,
 // asyncio's accept loop died on WinError 64 and closed the 8188 listener while the process kept running);
 // the machine is up and no ComfyUI runs -> 'down' 未运行 / Not running (red); the machine is off (or its
 // agent does not report ComfyUI) -> 'off', grey 未开机 as before.
+// v2.42: a node configured `on_demand: true` (m110: ComfyUI runs only while Bevan opens it himself, nothing
+// starts it) is 'stopped' instead of 'down' -- the same 未运行, grey, because that is its normal state.
 export function comfyState(n, m = null) {
   if (!n?.checked) return 'wait';
   if (n.reachable) return n.job || n.running > 0 ? 'busy' : 'idle';
   const c = comfyInfo(m);
   if (!c) return 'off';
-  return Number(c.procs) > 0 ? 'cut' : 'down';
+  if (Number(c.procs) > 0) return 'cut';
+  return n.on_demand ? 'stopped' : 'down';
 }
+// states in which the node does not answer (no queue / job to show; the GPU line is the last one seen)
+const NOT_ANSWERING = new Set(['off', 'cut', 'down', 'stopped']);
 
 function statusCell(state, n, machine, m) {
   const lat = { sub: t('comfy_latency', n.latency_ms ?? '—'), subShort: `${n.latency_ms ?? '—'} ms` };
@@ -94,12 +100,15 @@ function statusCell(state, n, machine, m) {
   if (state === 'down') {
     return cell(t('comfy_status'), t('comfy_down'), { cls: 'lv-danger', sub: t('comfy_down_sub'), subShort: t('abbr_comfy_noproc'), title: t('comfy_down_title', machine) });
   }
+  if (state === 'stopped') {
+    return cell(t('comfy_status'), t('comfy_down'), { cls: 'node-idle-text', sub: t('comfy_stopped_sub'), subShort: t('abbr_comfy_stopped'), title: t('comfy_stopped_title', machine) });
+  }
   return cell(t('comfy_status'), '—', { sub: t('comfy_checking') });
 }
 
 function queueCell(state, n) {
-  // (off / cut / down: when the hub last reached it -- since this hub started)
-  if (state === 'off' || state === 'cut' || state === 'down') return cell(t('comfy_queue'), '—', n.seen_at ? { sub: t('comfy_seen', hm(n.seen_at)), subShort: hm(n.seen_at) } : { sub: t('comfy_never'), subShort: t('abbr_comfy_never') });
+  // (not answering: when the hub last reached it -- since this hub started)
+  if (NOT_ANSWERING.has(state)) return cell(t('comfy_queue'), '—', n.seen_at ? { sub: t('comfy_seen', hm(n.seen_at)), subShort: hm(n.seen_at) } : { sub: t('comfy_never'), subShort: t('abbr_comfy_never') });
   if (state !== 'busy' && state !== 'idle') return cell(t('comfy_queue'), '—', { sub: '—' });
   const r = n.running ?? 0, k = n.pending ?? 0;
   return cell(t('comfy_queue'), t('comfy_queue_val', r, k), {
@@ -110,7 +119,7 @@ function queueCell(state, n) {
 
 function progressCell(state, n) {
   const j = n.job;
-  if (state !== 'busy' || !j) return cell(t('comfy_progress'), '—', { sub: state === 'idle' || state === 'off' || state === 'cut' || state === 'down' ? t('comfy_no_job') : '—', labelShort: t('abbr_comfy_progress') });
+  if (state !== 'busy' || !j) return cell(t('comfy_progress'), '—', { sub: state === 'idle' || NOT_ANSWERING.has(state) ? t('comfy_no_job') : '—', labelShort: t('abbr_comfy_progress') });
   const el = (j.exact ? '' : '≥') + dur(j.elapsed_s);
   if (j.step != null && j.steps) {
     return cell(t('comfy_progress'), t('comfy_step', j.step, j.steps), {
@@ -151,13 +160,13 @@ export function renderComfy(gc, resolve) {
     const n = view?.nodes?.[col.node] || null;
     const mach = resolve(col.node)?.snap || null;     // v2.41 the machine of the same id (its agent's extra.comfyui)
     const state = comfyState(n, mach);
-    const stale = state === 'off' || state === 'cut' || state === 'down';
+    const stale = NOT_ANSWERING.has(state);
     const name = cv(col, 'name') || col.node;
     const sys = n?.system || {};
     const ver = sys.version ? t('comfy_version', sys.version) : 'ComfyUI';
     const gpu = [sys.gpu, sys.vram_total_gb != null ? `${sys.vram_total_gb} GB` : null].filter(Boolean).join(' · ') || '—';
     const gpuTitle = sys.gpu ? t('comfy_gpu_title', sys.gpu, sys.vram_used_gb ?? '—', sys.vram_total_gb ?? '—') : '';
-    const colCls = state === 'off' ? 'node-idle' : state === 'busy' ? 'node-online node-busy' : state === 'cut' || state === 'down' ? `node-online node-${state}` : 'node-online';
+    const colCls = state === 'off' || state === 'stopped' ? 'node-idle' : state === 'busy' ? 'node-online node-busy' : state === 'cut' || state === 'down' ? `node-online node-${state}` : 'node-online';
     // (cells flow down the columns: status / queue, progress / last, today / average)
     const cells = statusCell(state, n || {}, col.node, mach) + queueCell(state, n || {})
       + progressCell(state, n || {}) + lastCell(n || {})

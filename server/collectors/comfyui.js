@@ -214,6 +214,7 @@ export class ComfyCollector {
       // `base` = as configured; `url` = what is probed (base with the followed port, see poll)
       if (old && old.base === url) next.set(n.id, old);
       else { if (old) this._closeWs(old); next.set(n.id, { id: n.id, base: url, url, st: freshState() }); }
+      next.get(n.id).onDemand = n.on_demand === true;     // v2.42 (a hot reload may flip it on a kept node)
     }
     for (const [id, n] of this.nodes) if (!next.has(id)) this._closeWs(n);
     this.nodes = next;
@@ -392,6 +393,7 @@ export class ComfyCollector {
       nodes[id] = {
         port: portOf(n.url),
         followed: n.url !== n.base,
+        ...(n.onDemand ? { on_demand: true } : {}),
         reachable: st.reachable === true,
         checked: st.reachable !== null,
         error: st.err,

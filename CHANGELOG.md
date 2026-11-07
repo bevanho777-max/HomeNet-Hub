@@ -49,6 +49,26 @@ on screen is the one from `package.json`, and this file is what needs fixing.
 
 ---
 
+## v2.42.0 — 2026-11-08
+
+**ComfyUI 节点可设 `on_demand: true`(m110):这台的 ComfyUI 只在主人自己打开时运行,机器在线、没有 ComfyUI 进程时显示灰色
+「未运行 / Not running」(第二行「需手动打开」),不再是红色;开了但连不上照旧黄色「连线中断」,机器关着照旧灰色「未开机」。**
+
+*Rebuild required — `server/`、`web/` 都改了。agent 没改。`targets.yaml` 的 ComfyUI 节点 m110 加 `on_demand: true`
+(要在新镜像跑起来之后再加:旧版 schema 不认这个键,热重载会被拒、保留旧配置)。*
+
+- **起因(2026-11-08)**:m110 是 Bevan 的日常主力机,ComfyUI 只在他自己打开时才运行,任何程序都不得在 m110 上自动启动或
+  重启 ComfyUI。v2.41 起机器在线而没有 ComfyUI 进程一律红色「未运行」,m110 平常就是这个状态,红色是误报。
+  - 同日只读核查 m110:登录时拉起 ComfyUI 的排程任务 `\ComfyUI-5090`(LogonTrigger,`comfyui_5090_run_once.ps1`)已停用(没删除);
+    其他排程任务、启动文件夹、Run 键、服务、WMI 订阅、`HomeNetAgent` 与它每分钟的保活触发器、`agent.env.ps1` 都不会启动 ComfyUI。
+    hub 与 agent 本来就只读、不做任何自动处理。
+- **`server/config/schema.js`**:comfyui 目标的节点多一个可选的 `on_demand`(布尔)。
+- **`server/collectors/comfyui.js`**:节点 view 带 `on_demand: true`(热重载改这个键不会重连节点)。
+- **`web/renderers/comfy.js`**:新状态 `stopped` —— `on_demand` 的节点、机器在线、`extra.comfyui.procs` = 0 → 灰色「未运行」,
+  title 说明这台的 ComfyUI 只在手动打开时运行、不会被自动启动、不算故障;列同「未开机」一样是灰的。
+  没设 `on_demand` 的节点(m136)不变:没有进程 = 红色。
+- `config.example/targets.yaml`、`docs/AGENT_PROTOCOL.md` 同步。
+
 ## v2.41.0 — 2026-11-05
 
 **ComfyUI 的端口自动跟随、「连线中断」:Windows agent 上报 ComfyUI 的进程和实际监听的端口,hub 探测跟着那个端口走;
