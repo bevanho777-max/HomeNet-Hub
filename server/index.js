@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 
 import { ConfigStore } from './config/watch.js';
 import { publicConfig } from './config/loader.js';
+import { nodeState, testingPorts } from '../web/renderers/node_state.js';
 import { VERSION } from './version.js';
 import { CredStore, validateCredential, CRED_TYPES } from './store/cred_store.js';
 import { openVault } from './vault.js';
@@ -568,6 +569,21 @@ app.get('/api/snapshot', VIEW, async () => {
   // v2.31: a refused push from another host, shown on that target's card
   for (const [id, a] of pushBindings.alerts()) if (out[id]) out[id].push_alert = a;
   return out;
+});
+
+// v2.44: the state the board shows for every service that names its `machine` (online / idle / testing / cut /
+// down), computed with the board's own rules (web/renderers/node_state.js). health-lite asks this to skip a
+// node that is 测试中 (m25 while Bevan tests Strata) instead of keeping a second copy of the rules.
+app.get('/api/node-states', VIEW, async () => {
+  const cfg = effective.get();
+  const ts = (cfg.targets.targets || []).filter((t) => t.enabled !== false && t.machine);
+  const snap = snapshot.toJSON([...new Set(ts.flatMap((t) => [t.id, t.machine]))]);
+  const targets = {};
+  for (const t of ts) {
+    const m = snap[t.machine] || null;
+    targets[t.id] = { machine: t.machine, state: nodeState(t, snap[t.id] || null, m), testing_ports: testingPorts(m) };
+  }
+  return { at: Date.now(), targets };
 });
 
 // v2.25: the live inference state on its own, for the nodes card and the Token Usage

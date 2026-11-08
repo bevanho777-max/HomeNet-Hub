@@ -49,6 +49,27 @@ on screen is the one from `package.json`, and this file is what needs fixing.
 
 ---
 
+## v2.44.0 — 2026-11-08
+
+**「OpenClaw」灯改探 OpenClaw gateway 本身(18789 的 `/readyz`),gateway 停了就是红色;原来那盏查的是 3099 —— ESP32 面板的后端,
+改名「ESP32 面板 / ESP32 Panel」另成一灯。新的只读接口 `GET /api/node-states`:用面板自己的规则给出各推理目标的状态
+(在线 / 未开机 / 测试中 / 连线中断 / 故障),每日健康检查 health-lite 据此跳过「测试中」的节点。**
+
+*Rebuild required — `server/`、`web/` 都改了。agent 没改。`targets.yaml` 加 `svc_openclaw`、`svc_api` 改名,
+`layout.yaml` 的状态灯列表加 `svc_openclaw`(配置热重载,新目标的 schema 早已支持)。*
+
+- **起因(2026-11-08)**:OpenClaw gateway 从 11-04 05:02 起停了 3.5 天(升级后要 `openclaw doctor --fix`),顶部「OpenClaw」灯一直是绿的
+  —— 它查的是 `192.168.1.24:3099/api/dashboard`(`~/workspace/projects/esp32-dashboard`,ESP32 面板的后端),状态取它回报的
+  `modules.openclaw.status`。
+- **`svc_openclaw`「OpenClaw」**:`http://192.168.1.24:18789/readyz`(OpenClaw 自己的就绪检查:200 `{"ready":true}` = 就绪,503 = 没好,
+  连不上 = 没在跑;hub 的 http 采集遇到非 2xx 或连不上就判离线 → 红)。验证:预览里把它模拟成离线,灯变红(截图见私有仓 BACKLOG 55),
+  没有停正式的 gateway。
+- **`svc_api` 改名「ESP32 面板」**:灯只表示 3099 这个服务自己活着,不再取它回报的 OpenClaw 状态;procs / sessions / skills 照记历史。
+- **`web/renderers/node_state.js`(新)**:`nodeState` / `strataAlive` / `testingPorts` 从 `nodes.js` 原样搬出(不 import 任何东西),
+  面板(`nodes.js`、`app.js`)与服务端共用一份规则。
+- **`server/index.js`**:`GET /api/node-states`(VIEW 权限)—— 每个写了 `machine` 的目标:`{ machine, state, testing_ports }`。
+  health-lite(私有仓 `scripts/openclaw-model-health-lite`)把 hub 判为 `testing` 的后端记成「测试中、略过」:不算失败、不发告警。
+
 ## v2.43.0 — 2026-11-08
 
 **ComfyUI 状态改版 + m136 看门狗:ComfyUI 不在时一律灰色 —— m136 有「手动停止」标记时是「已手动停止 / Stopped by hand」,
