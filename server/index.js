@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 
 import { ConfigStore } from './config/watch.js';
 import { publicConfig } from './config/loader.js';
-import { nodeState, testingPorts } from '../web/renderers/node_state.js';
+import { healthSkip, liveSlots, machineUp, nodeState, testingPorts } from '../web/renderers/node_state.js';
 import { VERSION } from './version.js';
 import { CredStore, validateCredential, CRED_TYPES } from './store/cred_store.js';
 import { openVault } from './vault.js';
@@ -574,16 +574,38 @@ app.get('/api/snapshot', VIEW, async () => {
 // v2.44: the state the board shows for every service that names its `machine` (online / idle / testing / cut /
 // down), computed with the board's own rules (web/renderers/node_state.js). health-lite asks this to skip a
 // node that is 测试中 (m25 while Bevan tests Strata) instead of keeping a second copy of the rules.
+// v2.45 `nodes`: every column of the board's nodes card (node -> its probe target, the machine of the same id and
+// the card's live view -- what the column shows), with the slots in use (liveSlots: the 「N/M」, full = all
+// taken) and `skip`, why health-lite leaves the node out: 'testing' 测试中, 'off' 未开机 / 无服务 (grey, e.g. the m133
+// laptop asleep), 'busy' 忙碌 (every slot taken, e.g. m26 1/1 under a long request) -- or null.
 app.get('/api/node-states', VIEW, async () => {
   const cfg = effective.get();
-  const ts = (cfg.targets.targets || []).filter((t) => t.enabled !== false && t.machine);
-  const snap = snapshot.toJSON([...new Set(ts.flatMap((t) => [t.id, t.machine]))]);
+  const all = cfg.targets.targets || [];
+  const ts = all.filter((t) => t.enabled !== false && t.machine);
+  const cols = (cfg.layout?.grid || []).filter((c) => c.type === 'nodes')
+    .flatMap((c) => (c.nodes || []).map((col) => ({ node: col.node, probe: col.probe, live: c.live || null })));
+  const ids = new Set(ts.flatMap((t) => [t.id, t.machine]));
+  for (const c of cols) for (const id of [c.node, c.probe, c.live]) if (id) ids.add(id);
+  const snap = snapshot.toJSON([...ids]);
   const targets = {};
   for (const t of ts) {
     const m = snap[t.machine] || null;
     targets[t.id] = { machine: t.machine, state: nodeState(t, snap[t.id] || null, m), testing_ports: testingPorts(m) };
   }
-  return { at: Date.now(), targets };
+  // the live view as the board takes it: the newer of the pushed one (SSE) and the one in the snapshot
+  const liveOf = (id) => {
+    const a = id ? snap[id]?.extra?.live || null : null;
+    if (!a || !liveLast) return a || liveLast;
+    return (liveLast.at || 0) >= (a.at || 0) ? liveLast : a;
+  };
+  const nodes = {};
+  for (const c of cols) {
+    const m = snap[c.node] || null;
+    const state = nodeState(all.find((t) => t.id === c.probe) || null, snap[c.probe] || null, m);
+    const slots = liveSlots(state, liveOf(c.live)?.nodes?.[c.node] || null);
+    nodes[c.node] = { probe: c.probe, state, machine_online: machineUp(m), testing_ports: testingPorts(m), slots, skip: healthSkip(state, slots) };
+  }
+  return { at: Date.now(), targets, nodes };
 });
 
 // v2.25: the live inference state on its own, for the nodes card and the Token Usage

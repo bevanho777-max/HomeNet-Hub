@@ -49,6 +49,28 @@ on screen is the one from `package.json`, and this file is what needs fixing.
 
 ---
 
+## v2.45.0 — 2026-11-09
+
+**`GET /api/node-states` 多一个 `nodes`:推理节点卡每一栏(m133 / m25 / m26)的状态、在用槽位与 `skip` —— 每日健康检查
+health-lite 据此把面板上「未开机 / 无服务」(灰,例如 m133 笔电睡眠)和「忙碌」(在线、槽位全满,例如 m26 1/1 被长请求占着)的
+节点记为略过,和「测试中」一样不算失败、不告警。判断都在 `web/renderers/node_state.js`,面板与服务端共用。**
+
+*Rebuild required — `server/`、`web/` 都改了。agent、config 没改。*
+
+- **起因**:health-lite 两种误报 —— m133 是笔电,睡眠(modern standby)时 4000 的生成请求逾时;m26 只有一个槽,
+  OpenClaw 的长请求占着时 4002 的健康请求排队到逾时。面板对这两种情况本来就不显示故障(灰色「未开机 / 无服务」、
+  青色「推理中 1/1」)。
+- **`node_state.js`**:`machineUp`(机器的 agent 在线、没过期;`strataAlive` / `testingPorts` 改用它,规则不变);
+  `nodeBusy`(面板的「推理中」,从 `nodes.js` 原样搬出,`nodes.js` 改用它);`liveSlots(state, live)` → `{ used, max, queued, full }`
+  (就是面板显示的「N/M」,`full` = 槽位全满);`healthSkip(state, slots)` → `'testing'` / `'off'`(state `idle`,即灰色
+  「未开机 / 无服务」,只有 `always_on: false` 的机器)/ `'busy'` / `null`。常开机器连不上(红色故障)不略过。
+- **`server/index.js`**:`/api/node-states` 原来的 `targets` 不变;新增 `nodes`,按布局里 `type: nodes` 卡的每一栏
+  (node → probe 目标、同名机器、卡的 `live`)计算,live 取推送(SSE)与快照中较新的一份,和面板一样:
+  `{ probe, state, machine_online, testing_ports, slots, skip }`。m26(probe 目标 `inference`,没写 `machine`)也在里面。
+- health-lite(私有仓 `scripts/openclaw-model-health-lite`):检查前按 `skip` 略过(TESTING / OFF / BUSY);逾时或连不上之后
+  再问一次 hub,此刻是这三种之一也照样略过;4001 有备援,三台都略过才略过。模拟三轮验证过(检查前未开机 + 忙碌、
+  逾时后改判忙碌、逾时后不忙仍是失败)。
+
 ## v2.44.0 — 2026-11-08
 
 **「OpenClaw」灯改探 OpenClaw gateway 本身(18789 的 `/readyz`),gateway 停了就是红色;原来那盏查的是 3099 —— ESP32 面板的后端,

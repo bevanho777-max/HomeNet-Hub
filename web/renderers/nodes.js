@@ -31,7 +31,7 @@ function hm(sec) {
 }
 
 // node state rules: ./node_state.js (v2.44, shared with the hub's /api/node-states)
-import { nodeState, strataAlive, testingPorts } from './node_state.js';
+import { nodeBusy, nodeState, strataAlive, testingPorts } from './node_state.js';
 export { nodeState, strataAlive, testingPorts };
 
 const STATE_CLASS = { online: 'lv-ok', idle: 'node-idle-text', testing: 'lv-cool', cut: 'lv-warn', down: 'lv-danger' };
@@ -256,7 +256,7 @@ export function renderNodes(gc, resolve) {
     const state = nodeState(probeT, probeS, mach);
     // v2.25 live state of this node (inference_live target named by the card's `live`)
     const lv = gc.live ? resolve(gc.live).snap?.extra?.live?.nodes?.[col.node] || null : null;
-    const busy = state === 'online' && lv?.reachable && lv.busy > 0;
+    const busy = nodeBusy(state, lv);
     const name = cv(col, 'name') || col.node;
 
     // which instance(s) route here, as discovered from litellm itself (not configured).
