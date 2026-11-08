@@ -49,6 +49,33 @@ on screen is the one from `package.json`, and this file is what needs fixing.
 
 ---
 
+## v2.43.0 — 2026-11-08
+
+**ComfyUI 状态改版 + m136 看门狗:ComfyUI 不在时一律灰色 —— m136 有「手动停止」标记时是「已手动停止 / Stopped by hand」,
+没有时是「未运行 / Not running」;进程在但连不上照旧黄色「连线中断」;只有 m136 的看门狗超过重启上限仍修不好时,才是红色
+「自动修复失败 / Auto-repair failed」。ComfyUI 节点卡与顶部「ComfyUI · 136」灯一致。m110 维持 v2.42 的规则。**
+
+*Rebuild required — `server/` 没改,`web/` 改了。Windows agent 要换成这一版(`extra.comfyui` 多 `manual_stop`、`watchdog`,
+只在 `agent.env.ps1` 设了 `$ComfyStopMarker` / `$ComfyWatchdogStatus` 的机器上报 —— 只有 m136)。Linux / NAS agent 没改。*
+
+- **m136 看门狗**(私有仓 `m136/comfy-watchdog.ps1`,装在 m136 的 `E:\Ai_server\comfyui_mcp\scripts`,排程任务
+  `\ComfyUI-Watchdog-136` 每分钟,Yang、交互登录、受限权限 —— 和桌面「启动 ComfyUI」同一个使用者与会话):
+  - 只在「ComfyUI 进程在、同一个 PID 连续 5 分钟没监听任何端口、这 5 分钟 GPU 都 < 5 %、没有手动停止标记」时动手:
+    结束卡住的 python,等旧的 `comfy-run-once.ps1` 启动器退出(它握着 mutex `Local\ComfyUI-5090-8188`;20 秒不退就结束它),
+    再照 `start-with-status.ps1` 的方式(同参数、同工作目录)跑 `comfy-run-once.ps1`;
+  - 进程不在一律不动(有没有标记都一样);1 小时内最多自动重启 2 次,再要第 3 次就停手(重启后没有进程也算),
+    直到 ComfyUI 恢复监听、出现手动停止标记或换了进程;
+  - 每次动作一行日志(时间、原因、旧 PID、新 PID):`comfyui_mcp\logs\comfy-watchdog.log`;
+    状态 `comfy-watchdog-status.json` 由 agent 读给 hub。
+  - 验证:模拟 7 种情况全过(卡住无标记 → 第 5 分钟重启;有标记、进程不在(有 / 无标记)、在监听 → 不动;
+    GPU 忙 → 等满 5 分钟安静才重启;连续卡住 → 重启 2 次后第 3 次停手);另用假进程(只 sleep 的 python、假的
+    `comfy-run-once`)经排程任务实测:结束卡住进程、旧启动器退出放锁、新进程拉起,任务结束后新进程仍在。真的 ComfyUI 没碰。
+- **Windows agent(`agents/homenet-agent.ps1`)**:`extra.comfyui.manual_stop`(标记文件在不在)、`extra.comfyui.watchdog`
+  (`state` / `age_s` / `restarts_1h` / `last_restart` / `gave_up_at` / `reason`),见 `docs/AGENT_PROTOCOL.md`。
+- **`web/renderers/comfy.js`**:新的 `comfyDownState`(节点卡与状态灯共用):`failed`(看门狗放弃、状态 5 分钟内)→ 红;
+  进程在 → 黄;`manual` → 灰「已手动停止」;其余 → 灰「未运行」。v2.41 的红色 `down` 拿掉。
+- **`web/app.js`**:`process: comfyui` 的灯走同一套判断;旧 agent(不报 `extra.comfyui`)照旧红。
+
 ## v2.42.0 — 2026-11-08
 
 **ComfyUI 节点可设 `on_demand: true`(m110):这台的 ComfyUI 只在主人自己打开时运行,机器在线、没有 ComfyUI 进程时显示灰色

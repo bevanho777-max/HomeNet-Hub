@@ -9,8 +9,8 @@
 // A node that does not answer is grey and says 未开机 (the ComfyUI machines are switched off
 // or asleep a lot) while its machine is off. Today's figures come from the hub's own job table,
 // so they stay on the card, greyed, while the node is off. v2.41: while the machine is up, its
-// agent says whether ComfyUI still runs -- yellow 连线中断 if it does, red 未运行 if not (comfyState);
-// v2.42: grey 未运行 for an `on_demand` node (m110), where not running is the normal state.
+// agent says whether ComfyUI still runs -- yellow 连线中断 if it does (comfyState); v2.43: no process is grey
+// (已手动停止 with m136's stop marker, else 未运行); red only 自动修复失败, when m136's watchdog gave up.
 import { card, esc } from './common.js';
 import { cv, t } from '../i18n.js';
 
@@ -65,24 +65,47 @@ export function comfyCutTitle(machine, c, port, error) {
   return t('comfy_cut_title', machine, port ?? c?.cmd_port ?? '?', error || '', c?.pid ?? '?', since, listenText(c));
 }
 
-// 'busy' | 'idle' | 'off' | 'wait' (no reading yet) | v2.41 'cut' | 'down' | v2.42 'stopped'
+// 'busy' | 'idle' | 'off' | 'wait' (no reading yet) | v2.41 'cut' | v2.42 'stopped' | v2.43 'manual' | 'failed'
 // v2.41: a node that does not answer is judged by its machine's agent (the machine target with the node's id,
 // extra.comfyui): a ComfyUI process still runs -> 'cut' 连线中断 / Unreachable (yellow: m136 11-03 17:02,
 // asyncio's accept loop died on WinError 64 and closed the 8188 listener while the process kept running);
-// the machine is up and no ComfyUI runs -> 'down' 未运行 / Not running (red); the machine is off (or its
-// agent does not report ComfyUI) -> 'off', grey 未开机 as before.
+// the machine is off (or its agent does not report ComfyUI) -> 'off', grey 未开机 as before.
 // v2.42: a node configured `on_demand: true` (m110: ComfyUI runs only while Bevan opens it himself, nothing
-// starts it) is 'stopped' instead of 'down' -- the same 未运行, grey, because that is its normal state.
+// starts it) with no ComfyUI process is 'stopped', grey 未运行.
+// v2.43 (Bevan 11-08): no process is grey everywhere -- 'manual' 已手动停止 when the stop marker is there (m136's
+// agent reports it: manual_stop), else 'stopped' 未运行 (v2.41's red 'down' is gone). Red only as 'failed'
+// 自动修复失败: the m136 watchdog (comfy-watchdog.ps1) gave up -- 2 restarts in an hour did not fix it, or a restart
+// left no process -- and its status is fresh. comfyDownState is shared with the 「ComfyUI · 136」 pill (web/app.js).
+const WD_FRESH_S = 300;
+function watchdogGaveUp(c) {
+  const w = c?.watchdog;
+  return !!w && w.state === 'gave-up' && Number(w.age_s) >= 0 && Number(w.age_s) <= WD_FRESH_S;
+}
+/** a ComfyUI that does not answer, from its machine's extra.comfyui: 'failed' | 'cut' | 'manual' | 'stopped' */
+export function comfyDownState(c, onDemand = false) {
+  if (watchdogGaveUp(c)) return 'failed';
+  if (Number(c?.procs) > 0) return 'cut';
+  if (!onDemand && c?.manual_stop === true) return 'manual';
+  return 'stopped';
+}
 export function comfyState(n, m = null) {
   if (!n?.checked) return 'wait';
   if (n.reachable) return n.job || n.running > 0 ? 'busy' : 'idle';
   const c = comfyInfo(m);
   if (!c) return 'off';
-  if (Number(c.procs) > 0) return 'cut';
-  return n.on_demand ? 'stopped' : 'down';
+  return comfyDownState(c, !!n.on_demand);
+}
+/** titles for the grey / red states, for the node card and the pill */
+export function comfyDownTitle(state, machine, c, onDemand = false) {
+  if (state === 'manual') return t('comfy_manual_title', machine);
+  if (state === 'failed') {
+    const w = c?.watchdog || {};
+    return t('comfy_failed_title', machine, Number(w.restarts_1h) || 0, Number(w.gave_up_at) > 0 ? hm(Number(w.gave_up_at) * 1000) : '?', w.reason || '');
+  }
+  return onDemand ? t('comfy_stopped_title', machine) : t('comfy_notrun_title', machine);
 }
 // states in which the node does not answer (no queue / job to show; the GPU line is the last one seen)
-const NOT_ANSWERING = new Set(['off', 'cut', 'down', 'stopped']);
+const NOT_ANSWERING = new Set(['off', 'cut', 'stopped', 'manual', 'failed']);
 
 function statusCell(state, n, machine, m) {
   const lat = { sub: t('comfy_latency', n.latency_ms ?? '—'), subShort: `${n.latency_ms ?? '—'} ms` };
@@ -97,11 +120,18 @@ function statusCell(state, n, machine, m) {
     const c = comfyInfo(m);
     return cell(t('comfy_status'), t('node_cut'), { cls: 'lv-warn', ...cutSub(c, n.port), title: comfyCutTitle(machine, c, n.port, n.error) });
   }
-  if (state === 'down') {
-    return cell(t('comfy_status'), t('comfy_down'), { cls: 'lv-danger', sub: t('comfy_down_sub'), subShort: t('abbr_comfy_noproc'), title: t('comfy_down_title', machine) });
-  }
   if (state === 'stopped') {
-    return cell(t('comfy_status'), t('comfy_down'), { cls: 'node-idle-text', sub: t('comfy_stopped_sub'), subShort: t('abbr_comfy_stopped'), title: t('comfy_stopped_title', machine) });
+    // (m110 on_demand: 需手动打开; elsewhere: no process, no marker)
+    const sub = n.on_demand ? { sub: t('comfy_stopped_sub'), subShort: t('abbr_comfy_stopped') } : { sub: t('comfy_down_sub'), subShort: t('abbr_comfy_noproc') };
+    return cell(t('comfy_status'), t('comfy_down'), { cls: 'node-idle-text', ...sub, title: comfyDownTitle(state, machine, null, !!n.on_demand) });
+  }
+  if (state === 'manual') {
+    return cell(t('comfy_status'), t('comfy_manual'), { cls: 'node-idle-text', short: t('abbr_comfy_manual'), sub: t('comfy_manual_sub'), subShort: t('abbr_comfy_manual_sub'), title: comfyDownTitle(state, machine) });
+  }
+  if (state === 'failed') {
+    const c = comfyInfo(m), w = c?.watchdog || {};
+    const sub = w.reason === 'limit' ? { sub: t('comfy_failed_sub_limit', Number(w.restarts_1h) || 0), subShort: t('abbr_comfy_failed_limit') } : { sub: t('comfy_failed_sub_noproc'), subShort: t('abbr_comfy_failed_noproc') };
+    return cell(t('comfy_status'), t('comfy_failed_state'), { cls: 'lv-danger', short: t('abbr_comfy_failed_state'), ...sub, title: comfyDownTitle(state, machine, c) });
   }
   return cell(t('comfy_status'), '—', { sub: t('comfy_checking') });
 }
@@ -166,7 +196,7 @@ export function renderComfy(gc, resolve) {
     const ver = sys.version ? t('comfy_version', sys.version) : 'ComfyUI';
     const gpu = [sys.gpu, sys.vram_total_gb != null ? `${sys.vram_total_gb} GB` : null].filter(Boolean).join(' · ') || '—';
     const gpuTitle = sys.gpu ? t('comfy_gpu_title', sys.gpu, sys.vram_used_gb ?? '—', sys.vram_total_gb ?? '—') : '';
-    const colCls = state === 'off' || state === 'stopped' ? 'node-idle' : state === 'busy' ? 'node-online node-busy' : state === 'cut' || state === 'down' ? `node-online node-${state}` : 'node-online';
+    const colCls = state === 'off' || state === 'stopped' || state === 'manual' ? 'node-idle' : state === 'busy' ? 'node-online node-busy' : state === 'cut' ? 'node-online node-cut' : state === 'failed' ? 'node-online node-down' : 'node-online';
     // (cells flow down the columns: status / queue, progress / last, today / average)
     const cells = statusCell(state, n || {}, col.node, mach) + queueCell(state, n || {})
       + progressCell(state, n || {}) + lastCell(n || {})

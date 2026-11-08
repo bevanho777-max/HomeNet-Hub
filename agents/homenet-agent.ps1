@@ -19,6 +19,8 @@ $ClaudeRefreshLoops = 15
 $NetIface  = ""         # pin the NIC by adapter name; empty = auto-detect default route
 $NetRetryLoops = 15     # while no NIC is available, re-probe every N loops (~30s at 2s)
 $ComfyEveryLoops = 5    # v2.41: re-read ComfyUI's processes / listening ports every N loops (~10s at 2s)
+$ComfyStopMarker = ""      # v2.43: ComfyUI's "stopped by hand" marker file; set on m136 only (empty = not reported)
+$ComfyWatchdogStatus = ""  # v2.43: status file of the m136 ComfyUI watchdog (comfy-watchdog.ps1); m136 only
 $DumpPayload = $false   # set $true to write each payload to last-payload.json for debugging
 
 $EnvFile = Join-Path $PSScriptRoot "agent.env.ps1"
@@ -181,17 +183,41 @@ function Get-GpusJson {
 }
 
 # v2.41 ComfyUI on this machine, as the "comfyui":{...} member of extra -- always sent (procs 0 when none),
-# so the hub can tell "the agent looked and ComfyUI is not running" (red) from an older agent that does
+# so the hub can tell "the agent looked and ComfyUI is not running" (grey since v2.43) from an older agent that does
 # not look at all. A ComfyUI server = a python process running ComfyUI's main.py (portable, a venv, or
 # the desktop app's bundled copy: ...\ComfyUI\main.py). listen = the TCP ports those processes actually
 # listen on (Get-NetTCPConnection), so the hub probes the port in use -- 8188 portable, 8000 desktop,
 # whatever --port says -- and says Unreachable (yellow) while a ComfyUI process runs but does
 # not answer: m136 11-03 17:02, asyncio's accept loop died on WinError 64 and closed the 8188 listener
 # while the process kept running. cmd_port = --port from the command line; pid / since = the oldest one.
+# v2.43 (m136, files named in agent.env.ps1): manual_stop = the "stopped by hand" marker exists (the desktop stop
+# writes it, the desktop start removes it) -> the hub shows grey "stopped by hand"; watchdog = the status the ComfyUI
+# watchdog writes every minute (state ok / no-process / manual-stop / stuck / restarted / gave-up, restarts in the last
+# hour, age_s since it wrote it) -> red "auto-repair failed" while it has given up. Returns ',"manual_stop":..' or ''.
+function Get-ComfyWatch {
+  $parts = @()
+  if ($ComfyStopMarker) { $parts += ('"manual_stop":' + $(if (Test-Path -LiteralPath $ComfyStopMarker) { 'true' } else { 'false' })) }
+  if ($ComfyWatchdogStatus -and (Test-Path -LiteralPath $ComfyWatchdogStatus)) {
+    try {
+      $w = Get-Content -LiteralPath $ComfyWatchdogStatus -Raw | ConvertFrom-Json
+      $age = [int64]([DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - [int64]$w.updated)
+      $wd = '"state":"{0}","age_s":{1},"restarts_1h":{2}' -f (([string]$w.state) -replace '[^a-z-]', ''), $age, [int]$w.restarts_1h
+      if ($w.last_restart) { $wd += ',"last_restart":' + [int64]$w.last_restart }
+      if ($w.gave_up_at) { $wd += ',"gave_up_at":' + [int64]$w.gave_up_at }
+      $reason = ([string]$w.reason) -replace '[^a-z-]', ''
+      if ($reason) { $wd += ',"reason":"' + $reason + '"' }
+      $parts += ('"watchdog":{' + $wd + '}')
+    } catch { }
+  }
+  if ($parts.Count) { return (',' + ($parts -join ',')) }
+  return ''
+}
+
 function Get-ComfyExtra {
+  $watch = Get-ComfyWatch
   $procs = @(Get-CimInstance Win32_Process -Filter "Name='python.exe' OR Name='pythonw.exe'" |
     Where-Object { $_.CommandLine -match '(?i)[\\/]ComfyUI[\\/]main\.py' } | Sort-Object CreationDate)
-  if (-not $procs.Count) { return '"comfyui":{"procs":0,"listen":[]}' }
+  if (-not $procs.Count) { return ('"comfyui":{"procs":0,"listen":[]' + $watch + '}') }
   $seen = @{}; $list = @(); $cmdPort = 0
   foreach ($p in $procs) {
     if (-not $cmdPort -and $p.CommandLine -match '--port[= ]+"?(\d{2,5})') { $cmdPort = [int]$matches[1] }
@@ -207,7 +233,7 @@ function Get-ComfyExtra {
   $since = [DateTimeOffset]::new($first.CreationDate.ToUniversalTime()).ToUnixTimeSeconds()
   $tail = ''
   if ($cmdPort) { $tail = ',"cmd_port":' + $cmdPort }
-  return ('"comfyui":{{"procs":{0},"listen":[{1}],"pid":{2},"since":{3}{4}}}' -f $procs.Count, ($list -join ','), [int]$first.ProcessId, $since, $tail)
+  return ('"comfyui":{{"procs":{0},"listen":[{1}],"pid":{2},"since":{3}{4}{5}}}' -f $procs.Count, ($list -join ','), [int]$first.ProcessId, $since, $tail, $watch)
 }
 
 # Claude Max window: same self-recorded start algorithm as claude-report.ps1
