@@ -49,6 +49,13 @@ on screen is the one from `package.json`, and this file is what needs fixing.
 
 ---
 
+## v2.47.1 — 2026-11-10
+
+**修正 v2.47.0 旧口径搬迁漏掉的请求数:请求计数器还不存在的日子(m26 10-13 – 10-20,计数器 10-21 才开始),Token Usage 卡当时用的是
+LiteLLM 的请求数(例:10-20 的 52 笔),账本却没有这一项 —— Token 卡那几天的请求数变成 0。现在照搬当时的数;生产上那 7 个节点日删掉后由启动回填重建。**
+
+*Rebuild required — `server/` 改了。*
+
 ## v2.47.0 — 2026-11-10
 
 **推理节点的用量改成单一来源:每台每个北京日的 tokens / 请求数只算一次、存一份(`node_day`),Token Usage 卡(这台的部分)、推理节点卡(今天)、

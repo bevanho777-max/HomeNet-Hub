@@ -217,7 +217,8 @@ export class NodeLedger {
         if (!pre) f.net = sum(mine, 'net');
       } else {
         f[tokKey] += sum(mine.filter((r) => !r.cov_tok), 'tokens');
-        if (typeof f[reqKey] === 'number') f[reqKey] += sum(mine.filter((r) => !r.cov_req), 'requests');
+        // (a day before the request counter existed -- m26 until 10-21 --: the card counted LiteLLM's requests)
+        f[reqKey] = (typeof f[reqKey] === 'number' ? f[reqKey] : 0) + sum(mine.filter((r) => !r.cov_req), 'requests');
         if (!pre && typeof f.net === 'number') f.net += sum(mine.filter((r) => !r.cov_tok), 'net');
       }
       if (mine.length || type === 'chat') { f[`${pre}ll_tokens`] = sum(mine, 'tokens'); f[`${pre}ll_reqs`] = sum(mine, 'requests'); }
