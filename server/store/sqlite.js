@@ -217,6 +217,28 @@ export class Tsdb {
     this._qMetaGet = this.db.prepare('SELECT v FROM tsdb_meta WHERE k = ?');
     this._qMetaSet = this.db.prepare('INSERT OR REPLACE INTO tsdb_meta (k, v) VALUES (?, ?)');
     this._lastWrite = new Map(); // "target|metric" -> ts(sec)
+    // v2.46 samples that carry their own time (one inference request each, written when the hub
+    // learns of it -- possibly days later, from a server's own log): raw above the purge
+    // watermark (the rollup folds them in like any other row), merged straight into their 5m
+    // bucket below it (raw there is never read again, and never rolled up)
+    this._insAt = this.db.transaction((raw, agg) => {
+      for (const r of raw) this._ins.run(r[0], r[1], r[2], r[3]);
+      for (const r of agg) this._q5mMerge.run({ ts: r[0], t: r[1], m: r[2], v: r[3], b: Math.floor(r[0] / BUCKET_SEC) * BUCKET_SEC });
+    });
+    // (SET reads the row as it was, so the tmin / tmax tests see the old extremes)
+    this._q5mMerge = this.db.prepare(`
+      INSERT INTO metrics_5m (target, metric, bucket, vmin, vmax, vavg, n, tmin, tmax)
+      VALUES (:t, :m, :b, :v, :v, :v, 1, :ts, :ts)
+      ON CONFLICT (target, metric, bucket) DO UPDATE SET
+        tmin = CASE WHEN excluded.vmin < vmin THEN excluded.tmin ELSE tmin END,
+        vmin = MIN(vmin, excluded.vmin),
+        tmax = CASE WHEN excluded.vmax > vmax THEN excluded.tmax ELSE tmax END,
+        vmax = MAX(vmax, excluded.vmax),
+        vavg = (vavg * n + excluded.vavg) / (n + 1),
+        n = n + 1
+    `);
+    this._qLastRaw = this.db.prepare('SELECT ts, value FROM metrics WHERE target = ? AND metric = ? ORDER BY ts DESC LIMIT 1');
+    this._qLast5m = this.db.prepare('SELECT tmax AS ts, vmax AS value FROM metrics_5m WHERE target = ? AND metric = ? ORDER BY bucket DESC LIMIT 1');
 
     // B22: two cursors, one day apart.
     //   _aggWm   — everything below this has been folded into the 5m tier.
@@ -318,6 +340,29 @@ export class Tsdb {
     return keep.length;
   }
 
+  /**
+   * v2.46 rows that carry their own time: [[tsSec, target, metric, value], ...]. Not
+   * downsampled (each is one event). Older than the aggregate tier's retention: dropped.
+   * Returns how many were written.
+   */
+  recordAt(rows) {
+    const now = Math.floor(Date.now() / 1000);
+    const floor = now - AGG_RETENTION_DAYS * 86400 + BUCKET_SEC;
+    const raw = [], agg = [];
+    for (const r of rows || []) {
+      const ts = Math.floor(Number(r[0]));
+      if (!Number.isFinite(ts) || ts < floor || ts > now + 300 || typeof r[3] !== 'number' || !Number.isFinite(r[3])) continue;
+      (this._purgeWm && ts < this._purgeWm ? agg : raw).push([ts, r[1], r[2], r[3]]);
+    }
+    if (raw.length || agg.length) this._insAt(raw, agg);
+    return raw.length + agg.length;
+  }
+
+  /** v2.46 the newest sample of a series ({ ts, value }), or null */
+  lastPoint(target, metric) {
+    return this._qLastRaw.get(target, metric) || this._qLast5m.get(target, metric) || null;
+  }
+
   // Bucket width for the requested window, or 0 when the window is already coarse
   // enough that bucketing would not drop a single point.
   _bucketWidth(sinceSec) {
@@ -356,6 +401,11 @@ export class Tsdb {
     }
     const rawFrom = Math.max(sinceSec, this._purgeWm);
     Tsdb._expand(this._qBucket.all({ w, t: target, m: metric, s: rawFrom }), out);
+    // v2.46 a bucketed series ends on its true newest sample (not on the last bucket's min or
+    // max): a line's last point -- and the legend's figure -- is the value the card shows
+    const last = this._qLastRaw.get(target, metric);
+    const tail = out[out.length - 1];
+    if (last && last.ts >= sinceSec && (!tail || last.ts > tail.ts || (last.ts === tail.ts && last.value !== tail.value))) out.push(last);
     return out;
   }
 

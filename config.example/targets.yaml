@@ -263,6 +263,10 @@ targets:
       instances:
         - { port: 4000, url: "http://litellm:4000", serves: [gpu_a] }
         - { port: 4001, url: "http://litellm-b:4001", serves: [gpu_b], public: "lm2" }   # the public entry
+        # v2.46: an instance's FALLBACKS are read from LiteLLM itself (GET /router/settings,
+        # router_settings.fallbacks, in the order it tries them): a node reached only through the
+        # n-th fallback model shows "litellm 4001 fallback n" -- reorder them in LiteLLM and the card
+        # follows. (`fallback: [node, ...]` here is used only while those settings cannot be read.)
     nodes:
       - id: gpu_a
         endpoints: ["192.0.2.10:8080"]
@@ -280,7 +284,8 @@ targets:
       # v2.29: or let the hub FIND the engine (server/engine.js) -- candidate ports asked in order
       # (/v1/status = Strata, /slots or /props = llama.cpp) at start and every 3 min; live, the
       # counters and Prometheus (http_sd_configs -> /api/prom/sd/<job>) follow what answers.
-      # `logs` = llama-log-exporter.py's port (llama.cpp has no request counter of its own);
+      # `logs` = llama-log-exporter.py's port (llama.cpp has no request counter of its own; v2.46: its
+  # /requests is also where the hub reads each finished request's own Prefill / Decode timings);
       # `prom_labels` = the labels the node's series carry (keep those of an old static job).
       # Explicit `counters` kinds still win (here: the embedding server, not the node's engine).
       - id: gpu_b
@@ -298,8 +303,10 @@ targets:
   # card the moment a request is in flight, live prefill / decode speed, and the Token
   # Usage header's "Generating X t/s". One small GET per node per poll, `timeout` each,
   # exponential backoff (to 30 s) while a node does not answer. Pushed to the browsers over
-  # Server-Sent Events (/api/live/stream; /api/live is the polling fallback); not written to
-  # the history -- that stays on the Prometheus targets. Point the nodes card at it with
+  # Server-Sent Events (/api/live/stream; /api/live is the polling fallback). v2.46: it also
+  # writes every FINISHED request's Prefill / Decode into the history (<node>_prefill /
+  # <node>_decode of this target, one point per request, as the server recorded it) -- the nodes
+  # card's "Last" figure and the node detail's speed charts. Point the nodes card at it with
   # `live: <this id>` in layout.yaml.
   - id: live_example
     name: "Inference nodes (live)"

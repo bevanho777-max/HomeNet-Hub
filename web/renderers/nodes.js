@@ -3,7 +3,9 @@
 //
 // Each column is assembled from three sources, all of which already exist on the hub:
 //   probe  (http target)      → status, latency, the model ID the node itself reports
-//   speed  (prometheus target)→ prefill / decode with measurement age (normalize.js freshness)
+//   live   (inference_live)   → prefill / decode: v2.46 the big figure is the request running now,
+//                               「上次」/ Last beside it the newest FINISHED request's, as the server
+//                               recorded it (server/collectors/live.js) -- the detail chart's last point
 //   meta   (inference_nodes)  → today's requests / tokens for this node, and the litellm
 //                               instance port(s) that actually route to it
 //
@@ -75,45 +77,72 @@ const labelShortOf = (label) => { for (const [k, a] of Object.entries(LABEL_SHOR
 // v2.29: `subShort2` = a still shorter second line ("10-23 11:40" for "10-23 11:40 · 44.3": the
 // number goes to the title); `title` / `itemCls` on the cell itself. v2.31: `short2` likewise
 // for the value ("推理 1/2" -> "推理": the 1000px two-column board cut even the short form).
-function cell(label, value, { cls = '', sub = '', short = null, short2 = null, subShort = null, subShort2 = null, labelShort = labelShortOf(label), title = '', itemCls = '' } = {}) {
+// v2.46 `last`: { text, forms: [shorter, ...] } -- a small figure on the value line, right of the
+// value (the Prefill / Decode cells' 「上次 xx」); fit.js shrinks it, then takes its shorter forms.
+function cell(label, value, { cls = '', sub = '', short = null, short2 = null, subShort = null, subShort2 = null, labelShort = labelShortOf(label), title = '', itemCls = '', last = null } = {}) {
   const ds = (x, n = '') => (x != null && x !== '' ? ` data-short${n}="${esc(x)}"` : '');
-  return `<div class="item${itemCls ? ` ${itemCls}` : ''}"${title ? ` title="${esc(title)}"` : ''}><span class="label fit"${ds(labelShort)}>${esc(label)}</span>`
+  const lf = last ? [...new Set((last.forms || []).filter((f) => f && f !== last.text))] : [];
+  return `<div class="item${itemCls ? ` ${itemCls}` : ''}${last ? ' has-last' : ''}"${title ? ` title="${esc(title)}"` : ''}><span class="label fit"${ds(labelShort)}>${esc(label)}</span>`
     + `<span class="value fit${cls ? ` ${cls}` : ''}"${ds(short)}${short2 && short2 !== short ? ds(short2, '2') : ''}>${value}</span>`
+    + (last ? `<span class="vlast fit"${ds(lf[0])}${ds(lf[1], '2')}${ds(lf[2], '3')}>${esc(last.text)}</span>` : '')
     + (sub ? `<span class="sub fit"${ds(subShort)}${subShort2 && subShort2 !== subShort ? ds(subShort2, '2') : ''}>${esc(sub)}</span>` : '') + '</div>';
 }
 
 const fmt1 = (x) => (x == null ? '—' : (Math.round(x * 10) / 10).toFixed(1));
 
-// v2.25: the live state (read from the server itself every 2 s, pushed to the browser).
-// While a request runs: prefill / decode as they happen. Afterwards: the newer of the live
-// "last" reading and the Prometheus one, with the same freshness rule as before.
-function liveSpeedCells(lv) {
-  const decoding = lv.phase === 'decode';
-  const preVal = lv.prefill_tps != null ? fmt1(lv.prefill_tps) : '—';
-  const preSub = !decoding
-    ? (lv.prefill_read ? t('node_prefill_read', Number(lv.prefill_read).toLocaleString('en-US')) : t('node_prefilling'))
-    : (lv.prefill_tps != null ? t(lv.prefill_exact ? 'node_this_req' : 'node_estimate') : t('node_prefill_after'));
-  const decVal = lv.decode_tps != null ? fmt1(lv.decode_tps) : '—';
-  const decSub = decoding ? (lv.decoding > 1 ? t('node_parallel', lv.decoding) : t('node_live')) : t('node_wait_decode');
-  return cell(t('node_prefill'), preVal, { cls: lv.prefill_tps != null ? 'lv-cool' : '', sub: preSub })
-    + cell(t('node_decode'), decVal, { cls: lv.decode_tps != null ? 'lv-cool' : '', sub: decSub });
+// v2.46 Prefill / Decode, one rule for every node. The big figure is live only: the request
+// running now (Prefill: this request's own -- llama.cpp measures it from the server's counters,
+// Strata reports it once the request decodes; Decode: the rate right now), else "—". Beside it,
+// small, 「上次 xx」/ Last xx: the newest FINISHED request's figure as the server recorded it (live.js
+// done_prefill / done_decode, kept across restarts) -- the very point the detail chart ends on --
+// shown whether or not a request is running and however long ago it was. The second line: while a
+// request runs, what the big figure is (本次 / 实时 / 预填中 ...); otherwise when the 「上次」 request ended.
+// (v2.25-v2.45 waited for a request to END before showing a Prefill: m25, never idle, showed "—".)
+function lastOf(rec, what) {
+  const v = rec ? fmt1(rec.tps) : '—';
+  const r = rec ? String(Math.round(rec.tps)) : '—';
+  return {
+    text: t('node_last_val', v),
+    // shorter (fit.js takes up to three): the whole number, then the short label, then the number
+    // alone -- 10,000 and up as 23.5K (the title has it all)
+    forms: [t('node_last_val', r), t('abbr_last_val', r), rec && rec.tps >= 9999.5 ? compact(rec.tps) : r],
+    title: rec ? t('node_last_title', what, v, hm(rec.at / 1000), rec.exact !== false) : t('node_last_title_none', what),
+  };
 }
+const whenOf = (rec) => (rec ? hm(rec.at / 1000) : t('node_no_rec'));
 
-// v2.26: a node with several concurrent streams (Strata "parallel", llama.cpp -np): Decode
-// is the sum of the streams' live rates, labelled as a total, with the per-stream average
-// under it; Prefill is the most recent prefill, with the streams prefilling now named.
-function multiSpeedCells(lv) {
-  const lp = lv.last_prefill;
-  const preVal = lp ? fmt1(lp.tps) : '—';
-  const list = lv.prefilling?.length ? lv.prefilling.map((n) => `#${n}`).join(' ') : '';
-  const preSub = list ? t('node_prefilling_n', list) : (lp ? t('measured_at', hm(lp.at / 1000)) : t('node_prefill_after'));
-  const decVal = lv.decode_tps != null ? fmt1(lv.decode_tps) : '—';
-  // v2.27: "Σ · per stream" only while two or more streams decode -- with one, the total
-  // and the per-stream average are the same number
-  const decSub = lv.decode_tps != null ? ((lv.decoding || 0) >= 2 ? t('node_total_avg', fmt1(lv.decode_avg)) : t('node_live'))
-    : (lv.decoding ? t('node_live') : t('node_wait_decode'));
-  return cell(t('node_prefill'), preVal, { sub: preSub, subShort: list ? t('abbr_prefilling_n', list) : null })
-    + cell(t('node_decode'), decVal, { cls: lv.decode_tps != null ? 'lv-cool' : '', sub: decSub });
+function speedCells(col, lv, live) {
+  const preL = lastOf(lv?.done_prefill, 'Prefill'), decL = lastOf(lv?.done_decode, 'Decode');
+  const mk = (label, value, { cls = '', sub, subShort = null }, L) => cell(label, value, { cls, sub, subShort, last: L, title: L.title });
+  if (!lv) {
+    const note = cv(col, 'speed_note') || t('node_no_speed_src');
+    return mk(t('node_prefill'), '—', { sub: note }, preL) + mk(t('node_decode'), '—', { sub: note }, decL);
+  }
+  // idle, switched off, unreachable: no live figure, the last finished request beside the dash
+  if (!live || !(lv.busy > 0)) {
+    return mk(t('node_prefill'), '—', { sub: whenOf(lv.done_prefill) }, preL)
+      + mk(t('node_decode'), '—', { sub: whenOf(lv.done_decode) }, decL);
+  }
+  const decoding = lv.phase === 'decode' || (lv.decoding || 0) > 0;
+  let pre, preSub, preShort = null;
+  if (Number(lv.max_streams) > 1) {
+    // several streams: the newest prefill among the ones running, the streams prefilling named
+    pre = lv.prefill_now;
+    const list = lv.prefilling?.length ? lv.prefilling.map((n) => `#${n}`).join(' ') : '';
+    preSub = list ? t('node_prefilling_n', list) : (pre != null ? t('node_this_req') : t('node_prefill_after'));
+    preShort = list ? t('abbr_prefilling_n', list) : null;
+  } else {
+    pre = lv.prefill_tps;
+    preSub = !decoding
+      ? (lv.prefill_read ? t('node_prefill_read', Number(lv.prefill_read).toLocaleString('en-US')) : t('node_prefilling'))
+      : (pre != null ? t(lv.prefill_exact ? 'node_this_req' : 'node_estimate') : t('node_prefill_after'));
+  }
+  const dec = lv.decode_tps;
+  const decSub = dec != null
+    ? ((lv.decoding || 0) >= 2 ? (Number(lv.max_streams) > 1 ? t('node_total_avg', fmt1(lv.decode_avg)) : t('node_parallel', lv.decoding)) : t('node_live'))
+    : (decoding ? t('node_live') : t('node_wait_decode'));
+  return mk(t('node_prefill'), pre != null ? fmt1(pre) : '—', { cls: pre != null ? 'lv-cool' : '', sub: preSub, subShort: preShort }, preL)
+    + mk(t('node_decode'), dec != null ? fmt1(dec) : '—', { cls: dec != null ? 'lv-cool' : '', sub: decSub }, decL);
 }
 
 const nfmt = (x) => Number(x).toLocaleString('en-US');
@@ -168,43 +197,6 @@ function streamsBar(lv, online) {
   return `<div class="node-streams" data-m="${M}" style="--m:${M};--mc:${mc}">${streams.map(streamCell).join('')}</div>`;
 }
 
-function speedCells(speedSnap, col, speedTarget, lv = null) {
-  if (lv?.reachable && lv.busy > 0) return (lv.max_streams > 1 ? multiSpeedCells : liveSpeedCells)(lv);
-  // a request the live reader saw end, newer than the last Prometheus measurement
-  const L = lv?.last;
-  const promAt = Math.max(Number(speedSnap?.metrics?.prefill_speed?.at) || 0, Number(speedSnap?.metrics?.decode_speed?.at) || 0);
-  if (L && L.at / 1000 >= promAt) {
-    // a multi-stream node's Prefill is the most recent prefill of ANY stream (the last
-    // request to end may have read a fully cached prompt, with no prefill of its own)
-    const P = lv.max_streams > 1 && lv.last_prefill ? { v: lv.last_prefill.tps, at: lv.last_prefill.at / 1000, expired: lv.last_prefill.expired }
-      : { v: L.prefill, at: L.at / 1000, expired: L.expired };
-    const at = L.at / 1000;
-    const pre = !P.expired ? cell(t('node_prefill'), fmt1(P.v), { sub: t('measured_at', hm(P.at)) })
-      : cell(t('node_prefill'), '—', { sub: t('node_sub_last', hm(P.at), fmt1(P.v)), subShort: t('abbr_last', hm(P.at), fmt1(P.v)), subShort2: hm(P.at) });
-    const dec = !L.expired ? cell(t('node_decode'), fmt1(L.decode), { sub: t('measured_at', hm(at)) })
-      : cell(t('node_decode'), '—', { sub: t('node_sub_last', hm(at), fmt1(L.decode)), subShort: t('abbr_last', hm(at), fmt1(L.decode)), subShort2: hm(at) });
-    return pre + dec;
-  }
-  const pp = speedSnap?.metrics?.prefill_speed, tg = speedSnap?.metrics?.decode_speed;
-  const both = (sub) => cell(t('node_prefill'), '—', { sub }) + cell(t('node_decode'), '—', { sub });
-  if (!col.speed) return both(cv(col, 'speed_note') || t('node_no_speed_src'));
-  if (!speedSnap || speedSnap.online === false) return both(t('node_speed_unavailable'));
-  const expired = pp?.expired && tg?.expired;
-  const ats = [pp?.at, tg?.at].filter((a) => typeof a === 'number');
-  const at = ats.length ? Math.max(...ats) : null;
-  if (expired || (!pp && !tg)) {
-    // Nothing fresh: the value is a dash and the second line says what the last reading
-    // was and when -- each cell its own number.
-    if (at == null) return both(t('measured_none', speedTarget?.freshness?.lookback));
-    const lastOf = (m) => (m?.last != null ? m.last : '—');
-    return cell(t('node_prefill'), '—', { sub: t('node_sub_last', hm(at), lastOf(pp)), subShort: t('abbr_last', hm(at), lastOf(pp)), subShort2: hm(at) })
-      + cell(t('node_decode'), '—', { sub: t('node_sub_last', hm(at), lastOf(tg)), subShort: t('abbr_last', hm(at), lastOf(tg)), subShort2: hm(at) });
-  }
-  const v = (m) => (m && !m.expired ? esc(m.display) : '—');
-  const sub = at ? t('measured_at', hm(at)) : '—';
-  return cell(t('node_prefill'), v(pp), { sub }) + cell(t('node_decode'), v(tg), { sub });
-}
-
 // v2.29 the engine found on the node, for the column's title
 function engineTitle(e) {
   if (!e) return '';
@@ -251,7 +243,6 @@ export function renderNodes(gc, resolve) {
   const anyMulti = (gc.nodes || []).some((c) => Number(liveOf(c.node)?.max_streams) > 1);
   const cols = (gc.nodes || []).map((col, idx) => {
     const { target: probeT, snap: probeS } = resolve(col.probe);
-    const { target: speedT, snap: speedS } = col.speed ? resolve(col.speed) : { target: null, snap: null };
     const mach = resolve(col.node)?.snap || null;          // v2.39: the machine of the same id (its agent)
     const state = nodeState(probeT, probeS, mach);
     // v2.25 live state of this node (inference_live target named by the card's `live`)
@@ -263,13 +254,20 @@ export function renderNodes(gc, resolve) {
     // "litellm 4002" = the route the architecture intends; a live route to an instance
     // that is not meant to serve this node is struck through and marked "to be removed";
     // an intended route that is not live yet is greyed "not connected".
+    // v2.46 a fallback route says which fallback it is, in the order the instance's own
+    // router_settings.fallbacks gives (server/collectors/nodes.js): "litellm 4000 · 4001 备援1" --
+    // after another route its "litellm" is left out, the port and the order are what matter.
     const route = meta?.extra?.nodes?.[col.node];
     let port = '—';
     if (route && Array.isArray(route.routes)) {
-      port = route.routes.length ? route.routes.map((r) => {
+      port = route.routes.length ? route.routes.map((r, k) => {
         const lbl = esc(t('node_litellm_port', r.port));
-        // v2.40 a fallback route (4001 -> m26 while m25's resident instance is off)
-        if (r.live && r.fallback) return `<span class="node-route node-route-fb" title="${esc(t('node_route_fb_title', r.port))}">${lbl} ${esc(t('node_route_fb'))}</span>`;
+        // v2.40 a fallback route (4001 -> m133, then m26, while m25's resident instance is off)
+        if (r.live && r.fallback) {
+          const n = Number(r.fallback_n) || null;
+          const text = `${k > 0 ? esc(String(r.port)) : lbl} ${esc(n ? t('node_route_fb_n', n) : t('node_route_fb'))}`;
+          return `<span class="node-route node-route-fb" title="${esc(n ? t('node_route_fb_n_title', r.port, n) : t('node_route_fb_title', r.port))}">${text}</span>`;
+        }
         if (r.live && r.intended) return `<span class="node-route">${lbl}</span>`;
         if (r.live) return `<span class="node-route-stale"><s>${lbl}</s> ${esc(t('node_route_stale'))}</span>`;
         return `<span class="node-route-pending">${lbl} ${esc(t('node_route_pending'))}</span>`;
@@ -333,7 +331,7 @@ export function renderNodes(gc, resolve) {
     const latSub = iv ? { sub: t('node_sub_probe', iv), subShort: t('abbr_probe', iv), subShort2: iv } : { sub: t('node_sub_probe_any') };
     const cells = statusCell
       + cell(t('node_latency'), lat, latSub)
-      + speedCells(speedS, col, speedT, state === 'online' ? lv : null)
+      + speedCells(col, lv, state === 'online' && !!lv?.reachable)
       + usage('reqs', t('node_reqs'), t('abbr_node_reqs'), reqSub)
       + usage('tokens', t('node_tokens'), t('abbr_node_tokens'), subOf('ll_tokens', 'emb_tokens', 'emb_ll_tokens'));
 

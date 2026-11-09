@@ -617,7 +617,18 @@ for Prometheus; point an `inference_nodes` node's `counters` at it (see
 With `--unit auto` it follows whichever units run a llama-server right now, and with
 `--mirror PORT` it also serves a read-only mirror of a llama-server that only listens on
 127.0.0.1 (`/slots` reduced to numbers, `/metrics` plus the process start time; GET only,
-`--allow` limits the clients).
+`--allow` limits the clients). Since v2.46 it also keeps every finished request's own timings
+(the `prompt eval time` / `eval time` lines llama-server logs as it releases the slot) and serves
+them at `/requests`: with the node's `engine.logs` pointing at it, the hub records each request's
+Prefill / Decode exactly as the server measured it.
+
+**Prefill / Decode (v2.46).** The nodes card's big Prefill / Decode figure is the request running
+now (else "—"); beside it, small, **Last xx** is the newest *finished* request's figure as the
+server itself recorded it — Strata's per-request record (`/metrics` `requests[]`), llama.cpp's
+timing lines via the log exporter — with when it ended on the second line. Every finished
+request is one point of the node detail's Prefill / Decode chart, so the card and the chart show
+the same numbers. The detail opens with a summary line: tokens, tokens via LiteLLM and requests
+over the window shown (Beijing days), and tokens since recording began.
 
 **Engine auto-detection (v2.29).** Instead of naming a node's engine, give it a host and
 candidate ports — `engine: { host, ports: [...], key_env, logs }`. The hub asks each port in

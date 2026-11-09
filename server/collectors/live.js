@@ -39,11 +39,32 @@
 // time between them, over the last ~10 s. A node's decode = the sum over its streams. The
 // value a finished request leaves behind ("last") is the server's own record when there is
 // one (Strata), else the hub's mean over the observed decode.
+//
+// v2.46 every FINISHED request's Prefill / Decode, as the server itself recorded it -- one
+// point per request in the timeseries (<node>_prefill / <node>_decode of this target, at the
+// time the request ended), and the card's 「上次」/ Last (done_prefill / done_decode: the
+// newest point of each). The node modal draws the same points, so the two always agree:
+//   Strata     /metrics requests[] (newest first, the last 12): prompt_read / prompt_ms and
+//              decode_tok_s, ended at time + duration_s. Busy: read every poll; idle: when
+//              /v1/status last_timings says a request ended, and every 30 s.
+//   llama.cpp  the request's own timing lines in the server's log ("prompt eval time = X ms
+//              / N tokens", "eval time = Y ms / M tokens", logged as the slot is released),
+//              served by llama-log-exporter.py on the node (`engine.logs`) at /requests --
+//              every request, also the ones too short for a 2 s poll to see. A llama.cpp
+//              node without the exporter: the hub's own figures at the end of each request
+//              (the exact prefill of a lone request, else the estimate; the mean decode).
+// Prefill counts only a request that read >= 32 prompt tokens (a cached prompt has no
+// meaningful speed); such a request still records its Decode. While a request runs, the
+// card's big figure is that request's own (Strata reports its prefill once it decodes:
+// live.prefill_tok_s_mean); the 「上次」 beside it stays the last finished one.
 const WINDOW_MS = 10000;
 const BACKOFF_MAX_MS = 30000;
 const MIN_PREFILL_TOKENS = 32;      // a (nearly) fully cached prompt has no meaningful speed
 const MAX_STREAMS = 16;             // a sanity cap on what a server may claim
 const IDLE_METRICS_MS = 30000;      // Strata idle: refresh the per-slot view this often
+const REC_RETRY_MS = 30000;         // llama-log-exporter not answering: ask again this much later
+const REC_LIMIT = 20000;            // requests asked of the exporter at once (its whole memory)
+const MIN_DECODE_TOKENS = 2;        // (llama.cpp) one generated token has no rate
 
 const round1 = (x) => (Number.isFinite(x) ? Math.round(x * 10) / 10 : null);
 const int = (x) => { const n = Number(x); return Number.isFinite(n) ? Math.round(n) : null; };
@@ -69,7 +90,7 @@ function freshState() {
   return {
     reachable: null, fails: 0, nextAt: 0, err: null, at: 0,
     maxStreams: 1, tasks: new Map(), held: [], queued: 0,
-    last: null, lastPrefill: null, lastRecAt: 0,
+    last: null, lastRecAt: 0,
   };
 }
 
@@ -91,16 +112,84 @@ function meanRate(readings) {
   return dt > 0 ? (b.n - a.n) / dt : null;
 }
 
+/** v2.46 the prefill of the stream that most recently finished reading its prompt (or reads now) */
+function newestPrefill(tasks) {
+  let best = null;
+  for (const t of tasks) {
+    const v = t.phase === 'prefill' ? (t.pp.length >= 2 ? meanRate(t.pp) : null) : t.prefill;
+    if (v > 0 && (!best || t.first > best.first)) best = { first: t.first, v };
+  }
+  return best ? round1(best.v) : null;
+}
+
 function push(arr, t, n) {
   if (!arr.length || arr[arr.length - 1].n !== n) arr.push({ t, n });
   if (arr.length > 400) arr.splice(0, arr.length - 400);
 }
 
 export class LiveCollector {
-  constructor({ env, engine = null }) {
+  constructor({ env, engine = null, tsdb = null }) {
     this.env = env;
     this.engine = engine;           // v2.29 EngineDetector (nodes with `engine:`)
     this.nodes = new Map();         // node id -> { id, def, st, auto }
+    // v2.46 per node, apart from the reader state (a new engine / port starts that afresh, not
+    // the history): the newest finished request's prefill / decode, the end time of the newest
+    // one recorded, when recording began, the exporter's backoff
+    this.done = new Map();          // node id -> { prefill, decode, recAt, since, recNextAt }
+    this.tsdb = tsdb;
+    this._rows = [];                // records of this poll, written in one go
+  }
+
+  /** v2.46 a node's record state, seeded once from the store (the card's 「上次」 survives a restart) */
+  _done(id) {
+    let d = this.done.get(id);
+    if (d) return d;
+    d = { prefill: null, decode: null, recAt: 0, since: null, recNextAt: 0, dirty: false };
+    const db = this.tsdb, tid = this.target?.id;
+    if (db && tid) {
+      const p = db.lastPoint(tid, `${id}_prefill`), q = db.lastPoint(tid, `${id}_decode`);
+      if (p) d.prefill = { tps: p.value, at: p.ts * 1000, exact: true };
+      if (q) d.decode = { tps: q.value, at: q.ts * 1000, exact: true };
+      d.recAt = Number(db.metaGet?.(`live_rec_at:${id}`)) || Math.max(d.prefill?.at || 0, d.decode?.at || 0);
+      d.since = Number(db.metaGet?.(`live_rec_since:${id}`)) || null;
+    }
+    this.done.set(id, d);
+    return d;
+  }
+
+  /**
+   * v2.46 one finished request: { at (ms, when it ended), prefill, decode (t/s or null), exact }.
+   * Only requests newer than the newest one recorded (the same request is never counted twice,
+   * whichever way it is seen again).
+   */
+  _record(id, { at, prefill = null, decode = null, exact = true }) {
+    const d = this._done(id);
+    if (!(at > d.recAt)) return false;
+    d.recAt = at;
+    d.dirty = true;
+    if (!d.since) d.since = at;
+    const tid = this.target?.id;
+    if (prefill > 0) {
+      d.prefill = { tps: round1(prefill), at, exact };
+      if (tid) this._rows.push([at / 1000, tid, `${id}_prefill`, d.prefill.tps]);
+    }
+    if (decode > 0) {
+      d.decode = { tps: round1(decode), at, exact };
+      if (tid) this._rows.push([at / 1000, tid, `${id}_decode`, d.decode.tps]);
+    }
+    return true;
+  }
+
+  /** write this poll's records and the per-node marks */
+  _flush() {
+    const db = this.tsdb;
+    if (db && this._rows.length) { try { db.recordAt(this._rows); } catch (e) { console.error(`[live] record: ${e?.message || e}`); } }
+    this._rows = [];
+    for (const [id, d] of this.done) {
+      if (!d.dirty) continue;
+      d.dirty = false;
+      try { db?.metaSet?.(`live_rec_at:${id}`, d.recAt); if (d.since) db?.metaSet?.(`live_rec_since:${id}`, d.since); } catch { /* next time */ }
+    }
   }
 
   configure(target, nodesTarget, { timeoutMs = 1000, maxAgeMs = 600000 } = {}) {
@@ -120,6 +209,7 @@ export class LiveCollector {
   async poll() {
     const now = Date.now();
     await Promise.all([...this.nodes.values()].map((n) => this._pollNode(n, now)));
+    this._flush();
     return this.view(now);
   }
 
@@ -133,6 +223,7 @@ export class LiveCollector {
       else n.def = d;
     }
     const { def, st } = n;
+    st.nodeId = n.id;
     if (now < st.nextAt) return;               // backing off
     try {
       if (def.kind === 'llamacpp') await this._llamacpp(def, st, now);
@@ -169,15 +260,9 @@ export class LiveCollector {
       if (!task.decodeSeen) {                     // prefill just ended
         task.decodeSeen = true;
         if (task.prefill == null && task.pp.length >= 2) task.prefill = meanRate(task.pp);
-        if (task.prefill != null) this._setPrefill(st, task.prefill, now, false);
       }
     }
     return task;
-  }
-
-  _setPrefill(st, tps, at, exact) {
-    if (!(tps > 0)) return;
-    if (!st.lastPrefill || at >= st.lastPrefill.at) st.lastPrefill = { tps: round1(tps), at, exact };
   }
 
   /** a stream ended: the server's own record of it when there is one, else our mean */
@@ -189,6 +274,8 @@ export class LiveCollector {
       const pr = Number(rec.prompt_read), pms = Number(rec.prompt_ms);
       if (pr >= MIN_PREFILL_TOKENS && pms > 0) prefill = pr / (pms / 1000);
     }
+    // v2.46 a llama.cpp node without the log exporter: the hub's own figures are the record
+    if (st.selfRecord && st.nodeId) this._record(st.nodeId, { at: now, prefill: task.prefillExact || task.prefill != null ? task.prefill : null, decode, exact: !!task.prefillExact });
     if (decode == null && prefill == null) return;
     if (!st.last || now >= st.last.at) st.last = { prefill: round1(prefill), decode: round1(decode), at: now };
   }
@@ -210,6 +297,7 @@ export class LiveCollector {
     st.held = [];
     st.queued = 0;
     const busy = list.filter((s) => s && s.is_processing);
+    st.selfRecord = !def.logs;
     const metrics = async () => promText(await (await fetch(`${base}/metrics`, { headers, signal: AbortSignal.timeout(this.timeoutMs) })).text());
     const seen = new Set();
     for (const s of busy) {
@@ -233,12 +321,54 @@ export class LiveCollector {
             const m = await metrics();
             const dn = m['llamacpp:prompt_tokens_total'] - task.base['llamacpp:prompt_tokens_total'];
             const ds = m['llamacpp:prompt_seconds_total'] - task.base['llamacpp:prompt_seconds_total'];
-            if (dn >= MIN_PREFILL_TOKENS && ds > 0) { task.prefill = dn / ds; task.prefillExact = true; this._setPrefill(st, task.prefill, now, true); }
+            if (dn >= MIN_PREFILL_TOKENS && ds > 0) { task.prefill = dn / ds; task.prefillExact = true; }
           } catch { /* keep the estimate */ }
         }
       }
     }
     this._endUnseen(st, now, seen);
+    if (def.logs) await this._exporterRecords(def, now);
+  }
+
+  /**
+   * v2.46 llama.cpp: the finished requests' own timings from llama-log-exporter.py (/requests),
+   * newer than the newest one recorded. Never fails the poll: the live view does not depend on
+   * it, and a missing exporter is asked again REC_RETRY_MS later.
+   */
+  async _exporterRecords(def, now) {
+    const d = this._done(def.id);
+    if (now < d.recNextAt) return;
+    try {
+      const q = `since=${(d.recAt / 1000).toFixed(3)}&limit=${REC_LIMIT}${def.logs_unit ? `&unit=${encodeURIComponent(def.logs_unit)}` : ''}`;
+      const j = await getJson(`${def.logs.replace(/\/+$/, '')}/requests?${q}`, {}, Math.max(this.timeoutMs, d.recAt ? 0 : 5000));
+      const rows = Object.values(j?.units || {}).flatMap((u) => (Array.isArray(u?.requests) ? u.requests : []))
+        .filter((r) => Number.isFinite(Number(r?.at))).sort((a, b) => a.at - b.at);
+      for (const r of rows) {
+        const pn = Number(r.prompt_n), pms = Number(r.prompt_ms), gn = Number(r.gen_n), gms = Number(r.gen_ms);
+        this._record(def.id, {
+          at: Number(r.at) * 1000,
+          prefill: pn >= MIN_PREFILL_TOKENS && pms > 0 ? pn / (pms / 1000) : null,
+          decode: gn >= MIN_DECODE_TOKENS && gms > 0 ? gn / (gms / 1000) : null,
+        });
+      }
+      d.recErr = null;
+    } catch (e) {
+      d.recNextAt = now + REC_RETRY_MS;
+      d.recErr = String(e?.name === 'TimeoutError' ? 'timeout' : e?.message || e).slice(0, 80);
+    }
+  }
+
+  /** v2.46 Strata: requests[] (newest first) -> one record each, oldest first */
+  _strataRecords(id, reqs) {
+    const rows = reqs.map((r) => {
+      const t0 = Number(r?.time);
+      const dur = Number.isFinite(Number(r?.duration_s)) ? Number(r.duration_s) : ((Number(r?.prompt_ms) || 0) + (Number(r?.decode_ms) || 0)) / 1000;
+      return { r, at: (t0 + dur) * 1000 };
+    }).filter((x) => Number.isFinite(x.at) && x.at > 0).sort((a, b) => a.at - b.at);
+    for (const { r, at } of rows) {
+      const pr = Number(r.prompt_read), pms = Number(r.prompt_ms), dec = Number(r.decode_tok_s);
+      this._record(id, { at, prefill: pr >= MIN_PREFILL_TOKENS && pms > 0 ? pr / (pms / 1000) : null, decode: dec > 0 ? dec : null });
+    }
   }
 
   // ── Strata ─────────────────────────────────────────────────────────
@@ -246,14 +376,17 @@ export class LiveCollector {
     const base = def.url.replace(/\/+$/, '');
     const key = def.key_env ? this.env[def.key_env] : null;
     const headers = key ? { Authorization: `Bearer ${key}` } : {};
+    st.selfRecord = false;
     if (!st.tasks.size) {
       const v = await getJson(`${base}/v1/status`, headers, this.timeoutMs);
       const M = Number(v?.concurrency?.serving);
       if (M >= 1) st.maxStreams = Math.min(M, MAX_STREAMS);
       this._strataTimings(st, v?.last_timings);
       // idle: /metrics only every 30 s, for what /v1/status lacks -- each idle slot's held
-      // (cached) tokens, shown in the concurrency bar
-      if (!(Number(v?.activity?.in_flight) > 0) && now - (st.idleMetricsAt || 0) < IDLE_METRICS_MS) { st.queued = 0; return; }
+      // (cached) tokens, shown in the concurrency bar -- and (v2.46) as soon as a request ended
+      // that is not recorded yet (its record is in requests[])
+      const ended = Number(v?.last_timings?.at) * 1000 > this._done(def.id).recAt + 1000;
+      if (!(Number(v?.activity?.in_flight) > 0) && !ended && now - (st.idleMetricsAt || 0) < IDLE_METRICS_MS) { st.queued = 0; return; }
     }
     const m = await getJson(`${base}/metrics`, headers, this.timeoutMs);
     st.idleMetricsAt = now;
@@ -290,17 +423,16 @@ export class LiveCollector {
         gen: Number(L.generated) || 0, prompt: int(L.prompt_tokens), read: int(L.prompt_read),
         max: int(L.max_tokens), elapsed: Number.isFinite(Number(L.elapsed_s)) ? Number(L.elapsed_s) : null,
       }, seen);
+      // v2.46 Strata's own prefill speed for the request, once it decodes (it reports no
+      // progress while it reads the prompt, so the hub has nothing to measure it with)
+      const solo = st.tasks.get('solo'), pre = Number(L.prefill_tok_s_mean);
+      if (solo && L.state === 'generating' && pre > 0) { solo.prefill = pre; solo.prefillExact = true; }
     }
     st.queued = (Number(L.queued) || 0) + Math.max(0, running - active);
     // ended streams: match Strata's own record by start time (requests[].time = START)
     this._endUnseen(st, now, seen, (task) => reqs.find((r) => Math.abs(Number(r.time) * 1000 - task.start) < 5000) || null);
-    // the newest finished request's exact prefill
-    const r0 = reqs[0];
-    if (r0) {
-      const pr = Number(r0.prompt_read), pms = Number(r0.prompt_ms);
-      const at = (Number(r0.time) + pms / 1000) * 1000;
-      if (pr >= MIN_PREFILL_TOKENS && pms > 0 && at > st.lastRecAt) { st.lastRecAt = at; this._setPrefill(st, pr / (pms / 1000), at, true); }
-    }
+    // v2.46 every finished request not recorded yet
+    this._strataRecords(def.id, reqs);
   }
 
   /** /v1/status last_timings: the last request's exact figures (also after a hub restart) */
@@ -310,7 +442,6 @@ export class LiveCollector {
     if (at <= st.lastRecAt) return;
     st.lastRecAt = at;
     const pre = Number(lt.prompt_n) >= MIN_PREFILL_TOKENS ? Number(lt.prompt_per_second) : null;
-    if (pre > 0) this._setPrefill(st, pre, at, true);
     const dec = Number(lt.predicted_per_second);
     if ((pre > 0 || dec > 0) && (!st.last || at >= st.last.at)) st.last = { prefill: round1(pre), decode: round1(dec > 0 ? dec : null), at };
   }
@@ -321,11 +452,14 @@ export class LiveCollector {
     let total = 0, anyDecode = false;
     for (const [id, { def, st }] of this.nodes) {
       const engine = this.engine?.has(id) ? this.engine.info(id) : null;
+      // v2.46 the newest finished request's figures, kept whatever the reader's state
+      const d = this._done(id);
+      const done = { done_prefill: d.prefill, done_decode: d.decode, rec_since: d.since, rec_error: d.recErr || null };
       if (!def) {                              // (auto) no engine found on any port yet
         nodes[id] = { kind: null, reachable: null, max_streams: 1, busy: 0, running: 0, queued: 0, phase: null, decoding: 0,
           decode_tps: null, decode_avg: null, prefill_tps: null, prefill_exact: false, prefill_read: null, prefilling: [],
           streams: [{ n: 1, state: 'idle', tps: null, gen: null, max: null, prompt: null, read: null, held: null }],
-          last_prefill: null, last: null, at: null, error: engine?.error || null, engine };
+          last: null, ...done, at: null, error: engine?.error || null, engine };
         continue;
       }
       const M = st.reachable === false ? (st.maxStreams || 1) : st.maxStreams || 1;
@@ -346,7 +480,6 @@ export class LiveCollector {
       if (decode != null) { total += decode; anyDecode = true; }
       const running = tasks.length;
       const lone = running === 1 ? tasks[0] : null;
-      const lp = st.lastPrefill ? { ...st.lastPrefill, expired: now - st.lastPrefill.at > this.maxAgeMs } : null;
       const last = st.last ? { ...st.last, expired: now - st.last.at > this.maxAgeMs } : null;
       nodes[id] = {
         kind: def.kind, reachable: st.reachable, max_streams: M,
@@ -359,7 +492,9 @@ export class LiveCollector {
         prefill_exact: !!(lone && lone.phase === 'decode' && lone.prefillExact),
         prefill_read: lone && lone.phase === 'prefill' ? lone.read ?? null : null,
         prefilling: streams.filter((s) => s.state === 'prefill').map((s) => s.n),
-        streams, last_prefill: lp, last,
+        // (v2.46: the newest prefill among the streams running now, for a multi-stream node)
+        prefill_now: newestPrefill(tasks),
+        streams, last, ...done,
         at: st.at || null, error: st.reachable === false ? st.err : null, engine,
       };
     }

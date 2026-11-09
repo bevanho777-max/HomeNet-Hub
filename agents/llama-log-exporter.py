@@ -49,6 +49,17 @@ service on the public port (m25: a gateway on :8080, llama-server on 127.0.0.1:1
 
   e.g. llama-log-exporter.py --port 9877 --unit auto --mirror 9878 --allow 192.168.1.24
   (the mirror needs to read the server's key file: run it as the user that owns it)
+
+v2.46 -- each finished request's own timings, as llama-server logs them when it releases the
+slot ("prompt eval time = X ms / N tokens" and "eval time = Y ms / M tokens", then "slot
+release"), for the hub's Prefill / Decode history:
+
+  GET /requests[?unit=U][&since=T][&limit=N]
+      {"replayed": true, "units": {"<unit>": {"start": <unix>, "requests": [
+         {"task": 626870, "at": <release, unix>, "prompt_n": 4096, "prompt_ms": 19337.84,
+          "gen_n": 7662, "gen_ms": 212092.5}, ...]}}}
+      oldest first, at > T only, the newest N (default 2000); chat units only. The last
+      REQ_KEEP requests of the unit's current run are kept (the replay rebuilds them).
 """
 import argparse
 import json
@@ -59,9 +70,15 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from collections import deque
+from urllib.parse import parse_qs
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 RELEASE = re.compile(r'slot\s+release:.*\| task (\d+) \| stop processing: n_tokens = (\d+)')
+# v2.46 the request's own timings, logged just before its release line (prompt eval = prefill)
+TIMING = re.compile(r'\| task (\d+) \|\s+(prompt eval|eval) time =\s*([\d.]+) ms /\s*(\d+) tokens')
+REQ_KEEP = 20000                 # finished requests kept per unit (a few days of m26)
+PEND_MAX = 64                    # timing lines whose release never came (a crash): forgotten
 DISCOVER_EVERY = 15
 UPSTREAM_TIMEOUT = 3
 
@@ -200,9 +217,9 @@ OLD_INVOCATIONS = set()         # invocation ids known to be older than the unit
 
 
 def journal(units, extra):
-    # only the release lines when journalctl can filter (a verbose server writes ~10^5
-    # other lines a day; the replay would read them all)
-    cmd = ['journalctl', '-o', 'json', '--no-pager'] + (['-g', r'slot\s+release'] if GREP else []) + extra
+    # only the release and timing lines when journalctl can filter (a verbose server writes
+    # ~10^5 other lines a day; the replay would read them all)
+    cmd = ['journalctl', '-o', 'json', '--no-pager'] + (['-g', r'slot\s+release|eval time ='] if GREP else []) + extra
     for u in units:
         cmd += ['-u', u]
     return subprocess.Popen(cmd, stdout=subprocess.PIPE, text=True, bufsize=1)
@@ -220,7 +237,8 @@ def apply(e, units):
             return
         if inv == show(u, 'InvocationID'):
             # the unit restarted while we were following: its counters start again at 0
-            st.update(inv=inv, requests=0, tokens=0, start=unit_start(u))
+            # (the finished requests of the earlier run stay: they did happen)
+            st.update(inv=inv, requests=0, tokens=0, start=unit_start(u), pend={})
         else:
             OLD_INVOCATIONS.add(inv)                 # an earlier run of the unit, this boot
             return
@@ -229,11 +247,24 @@ def apply(e, units):
     msg = e.get('MESSAGE', '')
     if isinstance(msg, list):
         msg = bytes(msg).decode(errors='replace')
+    t = TIMING.search(msg)
+    if t and not st['embed']:
+        rec = st['pend'].setdefault(t.group(1), {})
+        k = 'prompt' if t.group(2) == 'prompt eval' else 'gen'
+        rec[k + '_ms'] = float(t.group(3))
+        rec[k + '_n'] = int(t.group(4))
+        if len(st['pend']) > PEND_MAX:
+            st['pend'].pop(next(iter(st['pend'])))
+        return
     m = RELEASE.search(msg)
     if m:
         st['requests'] += 1
         if st['embed']:
             st['tokens'] += int(m.group(2))
+        rec = st['pend'].pop(m.group(1), None)
+        if rec:
+            at = int(e.get('__REALTIME_TIMESTAMP', '0')) / 1e6
+            st['done'].append((at, int(m.group(1)), rec.get('prompt_n'), rec.get('prompt_ms'), rec.get('gen_n'), rec.get('gen_ms')))
 
 
 def follow():
@@ -244,7 +275,8 @@ def follow():
         # 1. Replay this boot's journal into a private copy, then swap it in at once. The
         #    counters are never visible half-replayed: a scrape mid-replay would see a value
         #    lower than before and the hub would treat it as a server restart.
-        fresh = {u: {'embed': embed, 'inv': show(u, 'InvocationID') or None, 'start': unit_start(u), 'requests': 0, 'tokens': 0}
+        fresh = {u: {'embed': embed, 'inv': show(u, 'InvocationID') or None, 'start': unit_start(u), 'requests': 0, 'tokens': 0,
+                     'pend': {}, 'done': deque(maxlen=REQ_KEEP)}
                  for u, embed in want.items()}
         cursor = None
         if want:
@@ -326,9 +358,39 @@ class Quiet(BaseHTTPRequestHandler):
         pass
 
 
+def requests_json(query):
+    q = parse_qs(query)
+    unit = (q.get('unit') or [None])[0]
+    try:
+        since = float((q.get('since') or ['0'])[0])
+        limit = max(1, min(REQ_KEEP, int((q.get('limit') or ['2000'])[0])))
+    except ValueError:
+        return None
+    out = {}
+    for u, s in UNITS.items():
+        if s['embed'] or (unit and u != unit):
+            continue
+        rows = [r for r in s['done'] if r[0] > since][-limit:]
+        out[u] = {'start': s['start'], 'requests': [
+            {'task': r[1], 'at': round(r[0], 3), 'prompt_n': r[2], 'prompt_ms': r[3], 'gen_n': r[4], 'gen_ms': r[5]} for r in rows]}
+    return {'replayed': True, 'units': out}
+
+
 class H(Quiet):
     def do_GET(self):
         if not self.allowed():
+            return
+        path, _, query = self.path.partition('?')
+        if path == '/requests':
+            with LOCK:
+                if not STATE['replayed']:
+                    self.send_error(503, 'replaying journal')
+                    return
+                body = requests_json(query)
+            if body is None:
+                self.send_error(400, 'bad since / limit')
+                return
+            self.send(200, json.dumps(body, separators=(',', ':')).encode(), 'application/json')
             return
         if self.path not in ('/metrics', '/'):
             self.send_error(404)

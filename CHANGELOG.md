@@ -49,6 +49,54 @@ on screen is the one from `package.json`, and this file is what needs fixing.
 
 ---
 
+## v2.46.0 — 2026-11-10
+
+**推理节点卡的 Prefill / Decode 改成一套规则(三台一样):大数字只显示正在跑的请求(Prefill = 本次请求的值,Decode = 实时),
+没有就是「—」;右边小字「上次 xx / Last xx」是最近一笔*已完成*请求的值 —— 推理服务器自己的逐笔记录,闲着也照样显示,第二行是那笔
+结束的时间(推理中照旧写「本次 / 实时 / 预填中」)。每笔已完成请求同时是详情里 Prefill / Decode 曲线上的一个点,卡片和曲线用同一个来源、
+数值一致。详情最上面加一行用量摘要;推理节点栏的 litellm 路由标示按 litellm 自己的 fallbacks 顺序显示「4001 备援1 / 备援2」。**
+
+*Rebuild required — `server/`、`web/` 都改了。`agents/llama-log-exporter.py` 改了(多 `/requests`),m26 已换上(2026-11-10 00:37)。
+`config/targets.yaml` 的 4001 实例拿掉写死的 `fallback: [m26]`(新镜像跑起来之后再拿,旧版还靠它)。*
+
+- **起因**:m25 的卡片 Prefill 一直是「—」、第二行「结束后」,详情 1d 的 Prefill 曲线却有数(199 t/s)。
+  - 卡片(v2.25–v2.45):有请求在跑时只显示*这一笔*的 Prefill;Strata 单请求路径读提示词时不报进度(`live.prompt_read` = null),
+    hub 量不到,要等请求结束才在 `requests[]` 里看到精确值 —— 而 m25 的请求一笔接一笔(每笔约 12–15 秒),卡片永远停在「推理中」,
+    所以永远是「—」。另外,同一条单请求路径上前后两笔衔接时,上一笔被当作「计数器倒退」结束,没对上 Strata 的记录,连「最后」值也丢了。
+  - 详情曲线:Prometheus 的 `rate(llamacpp:prompt_tokens_total[5m]) / rate(llamacpp:prompt_seconds_total[5m])`,5 分钟均值,
+    和卡片根本不是同一个数。m133 闲着时卡片显示的「— / 最后 05:05 · 9」也是这个 5 分钟均值。
+- **数据来源(`server/collectors/live.js`)**:每笔*已完成*请求的 Prefill / Decode 都取推理服务器自己的记录,写进时序库
+  (`live` 目标的 `<node>_prefill` / `<node>_decode`,时间 = 请求结束的时刻,一笔一个点),卡片的「上次」= 最后一点(重启后从库里读回):
+  - **Strata(m25、m133)**:`/metrics` 的 `requests[]`(`prompt_read / prompt_ms`、`decode_tok_s`,结束时间 = `time + duration_s`),
+    推理中每次轮询都读;闲着时 `/v1/status` 的 `last_timings` 一变(有请求结束)就读,另外每 30 秒一次。
+  - **llama.cpp(m26)**:llama-server 释放槽位时写进日志的那笔请求的计时(`prompt eval time = X ms / N tokens`、`eval time = Y ms / M tokens`),
+    由 m26 上的 `llama-log-exporter.py` 读日志、在 `/requests` 提供(节点 `engine.logs`);短到 2 秒轮询看不到的请求也有。
+    没有 exporter 的 llama.cpp 节点:请求结束时用 hub 自己量的值(单独跑的请求是计数器差值的精确值,否则估算)。
+  - Prefill 只算实际读了 ≥ 32 个提示词 token 的请求(几乎全命中缓存的请求没有有意义的速度),这种请求照样记 Decode;
+    所以「上次」的 Prefill 和 Decode 可能是不同的两笔,各自的第二行写各自的时间。
+  - 推理中的大数字:Strata 单请求开始生成后,用它自己报的本次 prefill(`live.prefill_tok_s_mean`,原来没用上);
+    llama.cpp 照旧(单独跑时用计数器差值的精确值,预填中按已读进度估算)。
+- **`agents/llama-log-exporter.py`**:日志过滤加上计时行(`-g 'slot\s+release|eval time ='`);每个对话单元保留当前这次运行最近
+  20000 笔已完成请求的计时;`GET /requests[?unit=&since=&limit=]`(JSON,旧的在前)。计数逻辑不变,m26 换版前后
+  `homenet_llama_requests_total` 都是 516 / 195。注意:换版重启时它要重放这次开机以来的日志(m26 约 8 分钟),这段时间 `/metrics` 回 503。
+  hub 第一次读时把 m26 这次运行(11-02 15:55 起)的 513 笔全部补进时序库。
+- **`server/store/sqlite.js`**:`recordAt()` 写自带时间的点(不降采样;比原始层还旧的直接并进 5 分钟层);`lastPoint()`;
+  降采样后的曲线最后一点一定是真实的最后一笔(图例的「最新值」= 卡片的「上次」)。
+- **卡片(`web/renderers/nodes.js`、`tokens.css`)**:「上次 xx」在数值同一行的右边、贴格子右缘,自己一栏;格子尺寸不变、不换行。
+  放不下时 fit.js 先缩字(最小 10px),再依次换「上次 194」→「上 194」→「194」(≥ 1 万写 23.5K);五位数挤在最窄的格子里仍放不下时
+  整个隐藏(格子的 title 里有),不用省略号。title 写这一笔的完整数值、结束时间、来源。卡片不再读 Prometheus 的 `speed*` 目标。
+- **详情曲线(`web/renderers/machine_detail.js`、`chart.js`)**:Prefill / Decode 画逐笔记录,图例一位小数;开始逐笔记录之前的时段
+  画旧的 Prometheus 5 分钟均值(虚线、淡色,「旧 · 5 分钟均值」),下方注明从何时起逐笔记录。`drawMulti` 多 `dash` / `alpha` / `digits` / `min`。
+- **详情顶部摘要(`server/node_usage.js`、`GET /api/node-usage?node=&range=`)**:点推理节点栏(m133 / m25 / m26)或这三台的机器卡打开详情,
+  最上面一行:所选时段的 tokens(服务端计数)、经 LiteLLM 的 tokens、请求数,以及开始记录以来的累计 tokens(标明从哪天起)。
+  1d / 24h = 北京时间今天,3d / 7d / 30d = 含今天往前的天数。数字来自下方曲线的同一组序列(`nodes` 目标的 `<node>_tokens` 等,
+  每天的值 = 当天累计线的最高点;今天 = 当前值),K / M / B 缩写,鼠标移上去是完整数字。完结的日子存进 `node_usage_day`(不再重算;
+  时序库 5 分钟层只留 30 天,累计靠这张表),启动 30 秒后和每小时补一次。
+- **路由标示(`server/collectors/nodes.js`)**:每个 litellm 实例除了 `/model/info`,再读 `/router/settings` 的 `fallbacks`
+  (LiteLLM 尝试的顺序),某实例所服务节点的模型的第 n 个 fallback 模型落在哪台,那台就是这个实例的「备援n」。
+  现在:m133「litellm 4000 · 4001 备援1」,m26「litellm 4001 备援2 · litellm 4002」(之前 m133 被标成「~~litellm 4001~~ 待移除」)。
+  以后改 fallbacks 顺序会自己跟着变;读不到 router settings 时才退回配置里的 `fallback: [...]`。
+
 ## v2.45.0 — 2026-11-09
 
 **`GET /api/node-states` 多一个 `nodes`:推理节点卡每一栏(m133 / m25 / m26)的状态、在用槽位与 `skip` —— 每日健康检查

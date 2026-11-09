@@ -28,3 +28,9 @@ export function si3(n) {
   }
   return sg + String(Math.round(a));
 }
+
+// v2.46 the same with B for billions (the inference node detail's summary line: "1.23M", "4.56B")
+export function kmb(n) {
+  const s = si3(n);
+  return s.endsWith('G') ? `${s.slice(0, -1)}B` : s;
+}

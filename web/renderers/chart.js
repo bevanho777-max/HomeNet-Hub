@@ -93,6 +93,9 @@ const BAND_FILL = 'rgba(148,163,184,0.22)';
  * @param {{subs:{k:string,color:string,axis:'L'|'R'}[], metrics:object, height?:number,
  *          emptyText?:string, maxGapSec?:number}} opts
  *   maxGapSec: upper bound on the gap a line may bridge, for event-like series (see B25b).
+ *   v2.46 per sub: `dash` ([on, off] px: a dashed line), `alpha` (0..1), `digits` (the legend's
+ *   figure with that many decimals, as the card shows it), `min` (points a series needs to be
+ *   drawn; default 2 -- a series of single events may say 1).
  */
 export function drawMulti(canvas, series, legendEl, opts) {
   // leftMax (v2.26): the left axis is 0..100 (percent) unless a chart plots a small count on
@@ -107,7 +110,7 @@ export function drawMulti(canvas, series, legendEl, opts) {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, cssW, cssH);
 
-  const present = subs.filter((s) => (series[s.k] || []).length >= 2);
+  const present = subs.filter((s) => (series[s.k] || []).length >= (s.min ?? 2));
   // Right axis is only meaningful when something is plotted against it. Drawing its
   // ticks regardless left a bare 0…1.1 scale on cards whose metrics are all
   // percentages (the gateway card is exactly this), which reads as a broken axis.
@@ -206,11 +209,15 @@ export function drawMulti(canvas, series, legendEl, opts) {
       // so a single measurement still shows up.
       if ((i === 0 || isBreak(i)) && (i === pts.length - 1 || isBreak(i + 1))) lone.push([x, y]);
     });
+    ctx.save();
+    if (sub.alpha != null) ctx.globalAlpha = sub.alpha;
+    if (sub.dash) ctx.setLineDash(sub.dash);
     ctx.strokeStyle = sub.color; ctx.lineWidth = 1.8; ctx.lineJoin = 'round'; ctx.stroke();
     if (lone.length) {
       ctx.fillStyle = sub.color;
       for (const [x, y] of lone) { ctx.beginPath(); ctx.arc(x, y, 1.8, 0, Math.PI * 2); ctx.fill(); }
     }
+    ctx.restore();
   }
 
   // B24 label placement. Each name anchors at its own line's last sample, then two
@@ -272,8 +279,9 @@ export function drawMulti(canvas, series, legendEl, opts) {
     legendEl.innerHTML = present.map((sub) => {
       const pts = series[sub.k] || [];
       const cur = pts.length ? pts[pts.length - 1].value : null;
-      const val = cur == null ? '—' : Math.round(cur) + unitOf(metrics, sub);
-      return `<span class="lg"><span class="sw" style="background:${sub.color}"></span>${esc(labelOf(metrics, sub))} <b style="color:var(--text)">${val}</b></span>`;
+      const val = cur == null ? '—' : (sub.digits ? Number(cur).toFixed(sub.digits) : Math.round(cur)) + unitOf(metrics, sub);
+      const sw = sub.dash ? `background:repeating-linear-gradient(90deg,${sub.color} 0 4px,transparent 4px 7px)` : `background:${sub.color}`;
+      return `<span class="lg"><span class="sw" style="${sw}${sub.alpha != null ? `;opacity:${sub.alpha}` : ''}"></span>${esc(labelOf(metrics, sub))} <b style="color:var(--text)">${val}</b></span>`;
     }).join('') + (bandShown && bandLabel ? `<span class="lg"><span class="sw sw-band"></span>${esc(bandLabel)}</span>` : '');
   }
 }

@@ -517,6 +517,21 @@ h2:empty { display: none; } /* 堆叠卡外框无标题时不留空行 */
   position: relative; padding-left: 13px; color: var(--muted2); }
 .kv .item.sub-inline > .sub::before, .kv .item.sub-inline > .alt-form > .sub::before { content: "·"; position: absolute; left: 4px; }
 .kv .item.sub-inline > .sub.sub-away, .kv .item.sub-inline > .alt-form > .sub.sub-away { display: none; }
+/* v2.46 「上次 xx」/ Last xx on the Prefill / Decode value line (.vlast): right of the value, small and
+   grey, against the cell's right edge, in a column of its own -- the value keeps its full width, the
+   cell its size. fit.js shrinks it (down to 10px), then takes its shorter forms ("上次 194", "上 194",
+   "194"); the full text is in the title. (A row whose third lines join the value line has no
+   room for it: there it is left out, the cell's title still says it.) */
+.kv .item.has-last { grid-template-columns: minmax(0, max-content) minmax(0, 1fr); }
+.kv .item.has-last > .label, .kv .item.has-last > .sub { grid-column: 1 / -1; }
+.kv .item.has-last > .value { grid-column: 1; align-self: baseline; }
+.kv .item > .vlast { grid-row: 2; grid-column: 2; align-self: baseline; justify-self: end; display: block; min-width: 0; max-width: 100%;
+  padding-left: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  font-size: var(--cell-label); line-height: var(--cell-l); color: var(--muted2); text-shadow: none; }
+.kv .item.has-last.sub-inline > .vlast { display: none; }
+/* (no shorter form fits either -- a five-figure value in the narrowest cell: it is left out rather
+   than cut, the cell's title says it) */
+.kv .item > .vlast.is-cut { visibility: hidden; }
 /* B20 parts metric (one number per disk, each colored by its own level): one line, the bay
    number a tag after each figure. When the line does not fit even at 13px, fit.js shows the
    .alt-form instead: the hottest disk (with its bay) and the coolest, "max · min" under them.
@@ -753,6 +768,19 @@ h2:empty { display: none; } /* 堆叠卡外框无标题时不留空行 */
 .ranges { display: inline-flex; gap: var(--s1); background: var(--track); border-radius: 10px; padding: 3px; }
 .ranges button { background: transparent; color: var(--muted); border: 0; border-radius: 7px; padding: 6px 14px; font-size: 12px; cursor: pointer; font-weight: 500; transition: background .25s, color .25s; }
 .ranges button.active { background: var(--glass2); color: var(--text); box-shadow: 0 0 0 1px var(--hair) inset; }
+/* v2.46 the inference node detail's summary line (under the range buttons): the window, then
+   label + figure pairs. Each pair is one unbreakable unit; on a narrow screen whole pairs move to
+   the next line, nothing inside one wraps or is cut. The full figures are in the titles. */
+.node-sum { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: var(--s4); row-gap: var(--s1);
+  margin-top: var(--s3); padding: var(--s2) var(--s3); border: 1px solid var(--hair); border-radius: 10px;
+  background: var(--track); font-size: 12px; color: var(--muted); }
+.node-sum[hidden] { display: none; }
+.node-sum .ns-range { font-weight: 600; color: var(--text); white-space: nowrap; }
+.node-sum .ns-item { display: inline-flex; align-items: baseline; gap: 6px; white-space: nowrap; cursor: help; }
+.node-sum .ns-k { color: var(--muted2); }
+.node-sum .ns-v { color: var(--text); font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.node-sum .ns-total { margin-left: auto; }
+.node-sum .ns-none { color: var(--muted2); white-space: nowrap; }
 /* B10: N panes — auto-fit so 2/3/N screens lay out and wrap responsively */
 .hist-split { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: var(--s4); }
 .hist-pane { display: flex; flex-direction: column; gap: var(--s2); }

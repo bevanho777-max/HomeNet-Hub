@@ -5,6 +5,7 @@ import { esc, lvClass, setLine } from './common.js';
 import { fitLines } from '../fit.js';
 import { cv, t } from '../i18n.js';
 import { drawMulti } from './chart.js';
+import { kmb } from '../fmt.js';
 
 const RANGES = ['24h', '7d', '30d'];
 
@@ -296,6 +297,8 @@ async function load() {
   const canvas = $('#machineModalCanvas');
   const legend = $('#machineModalLegend');
   if (!canvas || !targetId) return;
+  // v2.46 the summary line: an inference node's column, or the machine card of the same id
+  showSum(nodeCtx ? (nodeCtx.kind === 'comfy' ? null : nodeCtx.col.node) : (nodeIds().has(targetId) ? targetId : null));
   if (nodeCtx) return nodeCtx.kind === 'comfy' ? loadComfy(canvas, legend) : loadNode(canvas, legend);
   if (inflight) inflight.abort();
   const ctrl = new AbortController();
@@ -383,6 +386,50 @@ function modalTitle(id) {
   return `${cv(target, 'name') || id} Detail`;
 }
 
+// ── v2.46 the summary line of an inference node (its 推理节点 column, or its machine card) ──
+// Over the window the modal shows (Beijing days: 1d / 24h = today, 3d / 7d / 30d = that many days
+// up to today): tokens (server counters), of which via LiteLLM, requests; and the tokens since the
+// hub began recording the node. From /api/node-usage, which reads the very series the modal's
+// token / request charts draw (server/node_usage.js). K / M / B; the full figure on hover.
+let sumSeq = 0;
+const nodeIds = () => new Set((CONFIG?.layout?.grid || []).filter((c) => c.type === 'nodes').flatMap((c) => (c.nodes || []).map((x) => x.node)));
+const fullNum = (n) => Number(n).toLocaleString('en-US');
+
+async function showSum(node) {
+  const el = $('#machineModalSum');
+  if (!el) return;
+  const seq = ++sumSeq;
+  if (!node) { el.hidden = true; el.innerHTML = ''; return; }
+  let s;
+  try {
+    const r = await fetch(`/api/node-usage?node=${encodeURIComponent(node)}&range=${encodeURIComponent(range)}`, { cache: 'no-store' });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    s = await r.json();
+  } catch {
+    if (seq === sumSeq) { el.hidden = true; el.innerHTML = ''; }
+    return;
+  }
+  if (seq !== sumSeq) return;
+  const item = (k, v, title, cls = '') => `<span class="ns-item${cls ? ` ${cls}` : ''}" title="${esc(title)}"><span class="ns-k">${esc(k)}</span><b class="ns-v">${esc(v)}</b></span>`;
+  const md = (d) => String(d || '').slice(5);   // 2026-11-08 -> 11-08
+  const miss = s.missing?.length ? `\n${t('sum_missing', s.missing.map(md).join(', '))}` : '';
+  const span = t('sum_range_title', s.from, s.to) + miss;
+  const parts = [];
+  parts.push(`<span class="ns-range" title="${esc(span)}">${esc(t('sum_range', range))}</span>`);
+  if (s.tokens == null && s.ll_tokens == null && s.reqs == null) parts.push(`<span class="ns-none">${esc(t('sum_no_data'))}</span>`);
+  else {
+    parts.push(item(t('sum_tokens'), kmb(s.tokens), s.tokens != null ? t('sum_title_tokens', fullNum(s.tokens)) + `\n${span}` : span));
+    parts.push(item(t('sum_ll'), kmb(s.ll_tokens), s.ll_tokens != null ? t('sum_title_ll', fullNum(s.ll_tokens)) + `\n${span}` : span));
+    parts.push(item(t('sum_reqs'), kmb(s.reqs), s.reqs != null ? t('sum_title_reqs', fullNum(s.reqs), s.ll_reqs != null ? fullNum(s.ll_reqs) : null) + `\n${span}` : span));
+  }
+  const tot = s.total || {};
+  if (tot.tokens != null) {
+    parts.push(item(tot.since ? t('sum_total', tot.since) : t('sum_total_none'), kmb(tot.tokens), t('sum_title_total', fullNum(tot.tokens), tot.since || '?'), 'ns-total'));
+  }
+  el.innerHTML = parts.join('');
+  el.hidden = false;
+}
+
 // Windows for the modal now open: a card may bring its own (the speed stack asks for
 // 1d/3d/7d); everything else keeps RANGES.
 let ranges = RANGES;
@@ -409,7 +456,7 @@ export function relocalizeMachineModal() {
   setLine($('#machineModalTitle'), modalTitle(targetId));
   showAgent(targetId);
   if (!nodeCtx) showParts(targetId);
-  load();   // the note and any error line are built from the dictionary too
+  load();   // the note and any error line are built from the dictionary too (and the summary line)
 }
 
 // ── v2.20 推理节点 modal ────────────────────────────────────────────────
@@ -459,14 +506,37 @@ async function loadNode(canvas, legend) {
     mainTitle(t('node_panel_speed'));
     const m = metrics();
     const maxGapSec = Math.max(900, 3 * Math.ceil((SPAN_SEC[range] || 86400) / 250));   // B25b
-    const noSpeed = col.speed ? t('chart_no_data_range', range) : (cv(col, 'speed_note') || t('node_no_speed_src'));
-    const sOpts = { metrics: m, height: 190, emptyText: noSpeed, maxGapSec };
-    drawMulti(canvas, sp, legend, { ...sOpts, subs: [{ k: 'prefill_speed', color: '#6aa9ff', axis: 'R' }] });
-    drawMulti(second.canvas, sp, second.legend, { ...sOpts, subs: [{ k: 'decode_speed', color: '#5eead4', axis: 'R' }] });
+    // v2.46 Prefill / Decode: one point per finished request, as the server recorded it (the live
+    // target's <node>_prefill / _decode, written by server/collectors/live.js) -- the card's 「上次」 is
+    // the last point, and the legend shows it to the same decimal. Before per-request recording began
+    // (rec_since), the old Prometheus 5-minute average of the speed target, dashed and faint.
+    const p = col.node;
+    const lvNow = liveTarget ? window.__lastSnap?.[liveTarget]?.extra?.live?.nodes?.[p] : null;
+    const firstRec = Math.min(...[`${p}_prefill`, `${p}_decode`].map((k) => lvh[k]?.[0]?.ts).filter(Number.isFinite));
+    const cut = lvNow?.rec_since ? lvNow.rec_since / 1000 : (Number.isFinite(firstRec) ? firstRec : null);
+    const old = (k) => (sp[k] || []).filter((x) => cut == null || x.ts < cut);
+    const sm = { ...m,
+      [`${p}_prefill`]: { label: 'Prefill t/s' }, [`${p}_decode`]: { label: 'Decode t/s' },
+      [`${p}_prefill_old`]: { label: t('chart_series_old') }, [`${p}_decode_old`]: { label: t('chart_series_old') } };
+    const sSeries = { [`${p}_prefill`]: lvh[`${p}_prefill`] || [], [`${p}_decode`]: lvh[`${p}_decode`] || [],
+      [`${p}_prefill_old`]: old('prefill_speed'), [`${p}_decode_old`]: old('decode_speed') };
+    const noSpeed = liveTarget || col.speed ? t('chart_no_data_range', range) : (cv(col, 'speed_note') || t('node_no_speed_src'));
+    const sOpts = { metrics: sm, height: 190, emptyText: noSpeed, maxGapSec };
+    const speedSubs = (k, color) => [
+      { k: `${p}_${k}`, color, axis: 'R', digits: 1, min: 1 },
+      { k: `${p}_${k}_old`, color, axis: 'R', dash: [4, 4], alpha: 0.45 }];
+    drawMulti(canvas, sSeries, legend, { ...sOpts, subs: speedSubs('prefill', '#6aa9ff') });
+    drawMulti(second.canvas, sSeries, second.legend, { ...sOpts, subs: speedSubs('decode', '#5eead4') });
+    const note = $('#machineModalNote');
+    if (note) {
+      const showOld = sSeries[`${p}_prefill_old`].length || sSeries[`${p}_decode_old`].length;
+      note.hidden = !(cut && showOld);
+      const d = new Date((cut || 0) * 1000), p2 = (x) => String(x).padStart(2, '0');
+      note.textContent = cut && showOld ? t('node_speed_since', `${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}`) : '';
+    }
     // v2.22: total (the server's own counters) against the LiteLLM share; a series the
     // node has no source for simply never appears (drawMulti skips missing keys).
     // v2.23: plus the embedding server's own count (llama-log-exporter) where there is one.
-    const p = col.node;
     const um = {
       ...m,
       [`${p}_reqs`]: { label: t('node_series_total') }, [`${p}_ll_reqs`]: { label: t('node_series_ll') },

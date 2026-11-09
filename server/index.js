@@ -29,6 +29,7 @@ import { demoTokenRows } from './collectors/demo.js';
 import { pivotTokens, TOKEN_RANGE_DAYS } from './token_detail.js';
 import { UsageEngine } from './usage.js';
 import { LiveCollector } from './collectors/live.js';
+import { NodeUsageDays, RANGE_DAYS } from './node_usage.js';
 import { EngineDetector, PROM_JOBS } from './engine.js';
 import { ComfyCollector } from './collectors/comfyui.js';
 import { discoverTarget } from './collectors/discovery.js';
@@ -113,7 +114,8 @@ const usage = new UsageEngine(join(DATA_DIR, 'homenet.db'), { snapshot, env: pro
 // v2.29: which engine (llama.cpp / Strata) answers on each inference node, and where
 const engine = new EngineDetector(join(DATA_DIR, 'homenet.db'), { env: process.env });
 // v2.25: live inference state (2 s) and the browsers listening for it (SSE)
-const live = new LiveCollector({ env: process.env, engine });
+// (v2.46: it writes each finished request's Prefill / Decode into the timeseries itself)
+const live = new LiveCollector({ env: process.env, engine, tsdb });
 const liveClients = new Set();
 let liveLast = null;
 const liveBus = {
@@ -195,6 +197,20 @@ setInterval(rollupTick, 60 * 1000);
 // aggregate-tier retention sweep
 tsdb.cleanup();
 setInterval(() => tsdb.cleanup(), 3600 * 1000);
+
+// v2.46 the inference node detail's summary line (node_usage.js): each finished Beijing day of each
+// node's usage series, stored once -- before the 5-minute tier's 30 days let it go
+const nodeUsage = new NodeUsageDays(tsdb, { snapshot });
+function nodesUsageTarget() {
+  const cfg = effective.get();
+  const t = (cfg.targets.targets || []).find((x) => x.enabled !== false && x.source?.type === 'inference_nodes');
+  return t ? { id: t.id, nodes: (t.nodes || []).map((n) => n.id) } : null;
+}
+function nodeUsageFill() {
+  try { const t = nodesUsageTarget(); if (t) nodeUsage.fill(t.id, t.nodes); } catch (e) { console.error(`[node-usage] ${e?.message || e}`); }
+}
+setTimeout(nodeUsageFill, 30 * 1000);
+setInterval(nodeUsageFill, 3600 * 1000);
 
 // resolve the token target (for /api/token_detail) via the layout token card,
 // falling back to the first sql target. Works for both sql and demo sources.
@@ -606,6 +622,19 @@ app.get('/api/node-states', VIEW, async () => {
     nodes[c.node] = { probe: c.probe, state, machine_online: machineUp(m), testing_ports: testingPorts(m), slots, skip: healthSkip(state, slots) };
   }
   return { at: Date.now(), targets, nodes };
+});
+
+// v2.46: the summary line at the top of an inference node's detail (the 推理节点 column, or the machine
+// card of the same id): tokens / tokens via LiteLLM / requests over the window the modal shows (Beijing
+// days: 1d / 24h = today) and the node's tokens since the hub began recording it -- from the same series
+// the modal's charts draw (node_usage.js).
+app.get('/api/node-usage', VIEW, async (req, reply) => {
+  const { node, range = '1d' } = req.query || {};
+  const t = nodesUsageTarget();
+  if (!t || !t.nodes.includes(String(node))) return reply.code(404).send({ error: 'unknown inference node' });
+  if (!RANGE_DAYS[range]) return reply.code(400).send({ error: 'unknown range' });
+  reply.header('Cache-Control', 'no-store');
+  return nodeUsage.summary(t.id, String(node), range, t.nodes);
 });
 
 // v2.25: the live inference state on its own, for the nodes card and the Token Usage

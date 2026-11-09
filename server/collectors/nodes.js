@@ -16,6 +16,12 @@
 //   • which litellm instance(s) route to the node: GET <instance>/model/info, matched on
 //     api_base host:port. Each instance may declare the nodes it is MEANT to serve
 //     (`serves`); a live route to any other node is reported as stale ("to be removed").
+//     v2.46: unless it is one of the instance's FALLBACKS -- GET <instance>/router/settings,
+//     current_values.fallbacks ([{ "<model>": ["<fallback model>", ...] }], in the order LiteLLM
+//     tries them): a node reached by the n-th fallback model of a model the instance serves
+//     its own node with is that instance's "fallback n" (4001: m133 first, then m26). Read
+//     from LiteLLM every poll, so a new order shows by itself. (An instance whose settings
+//     cannot be read falls back to its configured `fallback: [node, ...]`, in that order.)
 //
 // Metrics (numbers; written to the timeseries, charted by the node modal). A metric whose
 // source does not exist for that node (llama.cpp has no request counter) is left out:
@@ -60,6 +66,41 @@ async function modelInfo(url, key) {
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   const j = await r.json();
   return (j.data || []).map((d) => ({ name: d.model_name, at: hostPort(d.litellm_params?.api_base) }));
+}
+
+/** v2.46 the instance's router fallbacks: { "<model>": ["<fallback model>", ...] } (LiteLLM's order) */
+async function routerFallbacks(url, key) {
+  const r = await fetch(String(url).replace(/\/+$/, '') + '/router/settings', {
+    headers: { Authorization: `Bearer ${key}` },
+    signal: AbortSignal.timeout(ROUTES_TIMEOUT_MS),
+  });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  const j = await r.json();
+  const out = {};
+  for (const e of Array.isArray(j?.current_values?.fallbacks) ? j.current_values.fallbacks : []) {
+    for (const [model, list] of Object.entries(e && typeof e === 'object' ? e : {})) {
+      if (Array.isArray(list)) out[model] = [...(out[model] || []), ...list.map(String)];
+    }
+  }
+  return out;
+}
+
+/**
+ * v2.46 node id -> its position (1, 2, ...) among an instance's fallbacks: the fallback models of
+ * every model the instance routes to one of the nodes it `serves`, each mapped to the node its
+ * api_base belongs to. The first position a node takes wins.
+ */
+export function fallbackOrder(deps, fallbacks, serves, nodes) {
+  const nodeAt = (at) => nodes.find((n) => n.chat.has(at) || n.emb.has(at))?.id || null;
+  const out = new Map();
+  for (const d of deps || []) {
+    if (!serves.includes(nodeAt(d.at))) continue;
+    (fallbacks?.[d.name] || []).forEach((m, i) => {
+      const id = nodeAt((deps || []).find((x) => x.name === m)?.at);
+      if (id && !serves.includes(id) && !out.has(id)) out.set(id, i + 1);
+    });
+  }
+  return out;
 }
 
 const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
@@ -331,7 +372,15 @@ export async function collectNodes(target, env, { engine = null } = {}) {
   const inst = Array.isArray(src.instances) ? src.instances : [];
   const results = await Promise.all(inst.map(async (i) => {
     if (!key) return { i, err: 'no key' };
-    try { return { i, deps: await modelInfo(i.url, key) }; } catch (e) { return { i, err: String(e?.message || e) }; }
+    let deps;
+    try { deps = await modelInfo(i.url, key); } catch (e) { return { i, err: String(e?.message || e) }; }
+    // v2.46 the fallback order, as LiteLLM has it (an instance without `serves` has none to speak of)
+    let fb = null, fbErr = null;
+    if (Array.isArray(i.serves)) {
+      try { fb = fallbackOrder(deps, await routerFallbacks(i.url, key), i.serves, nodes); } catch (e) { fbErr = String(e?.message || e).slice(0, 120); }
+    }
+    if (!fb && Array.isArray(i.fallback)) fb = new Map(i.fallback.map((id, k) => [id, k + 1]));
+    return { i, deps, fb: fb || new Map(), fbErr };
   }));
   const anyOk = results.some((r) => r.deps);
   const out = {};
@@ -339,16 +388,18 @@ export async function collectNodes(target, env, { engine = null } = {}) {
     const routes = [];
     for (const r of results) {
       const serves = Array.isArray(r.i.serves) ? r.i.serves : null;
-      // v2.40 `fallback`: nodes this instance falls back to when its own node is gone (4001 -> m26 while m25's
-      // resident Strata is off; router_settings.fallbacks). A live fallback route is intended, shown as such,
-      // and never carries the instance's public name.
-      const fallback = Array.isArray(r.i.fallback) && r.i.fallback.includes(n.id) && !(serves && serves.includes(n.id));
+      // v2.40 a fallback: a node this instance falls back to when its own node is gone (4001 -> m133, then
+      // m26, while m25's resident Strata is off). v2.46: which nodes, and in what order, is read from the
+      // instance's router_settings.fallbacks (fallbackOrder). A live fallback route is intended, shown as
+      // "fallback n", and never carries the instance's public name.
+      const fbn = r.fb?.get(n.id) || null;
+      const fallback = !!fbn && !(serves && serves.includes(n.id));
       const intended = serves ? serves.includes(n.id) || fallback : true;
       const live = r.deps ? r.deps.some((d) => d.at && (n.chat.has(d.at) || n.emb.has(d.at))) : false;
       // live + intended = the route; live + not intended = left over, to be removed;
       // intended but not live = planned, not connected yet.
       if (live || (intended && serves && !fallback)) {
-        routes.push({ port: r.i.port, intended, live, ...(fallback ? { fallback: true } : {}), public: r.i.public && !fallback ? String(r.i.public) : null });
+        routes.push({ port: r.i.port, intended, live, ...(fallback ? { fallback: true, fallback_n: fbn } : {}), public: r.i.public && !fallback ? String(r.i.public) : null });
       }
     }
     routes.sort((a, b) => a.port - b.port);
@@ -364,7 +415,7 @@ export async function collectNodes(target, env, { engine = null } = {}) {
     extra: {
       nodes: out,
       day_start: localDay(nowSec).midnight,
-      route_errors: results.filter((r) => r.err).map((r) => ({ port: r.i.port, error: r.err })),
+      route_errors: results.filter((r) => r.err || r.fbErr).map((r) => ({ port: r.i.port, error: r.err || `router/settings: ${r.fbErr}` })),
     },
   };
 }

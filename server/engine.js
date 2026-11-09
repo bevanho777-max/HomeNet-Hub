@@ -200,7 +200,9 @@ export class EngineDetector {
     const n = this.nodes.get(id);
     if (!n?.cur) return null;
     const kind = n.cur.engine;
-    return { id, kind, url: `http://${n.def.host}:${n.cur.port}`, key_env: kind === 'strata' || !n.cur.mirror ? n.def.key_env : undefined };
+    return { id, kind, url: `http://${n.def.host}:${n.cur.port}`, key_env: kind === 'strata' || !n.cur.mirror ? n.def.key_env : undefined,
+      // v2.46 llama.cpp: the log exporter's /requests (each finished request's own timings)
+      ...(kind === 'llamacpp' && n.def.logs ? { logs: `http://${n.def.host}:${n.def.logs}`, logs_unit: n.def.logs_unit || undefined } : {}) };
   }
 
   /** the scrape address Prometheus should have for the node's engine, and the exporter's */

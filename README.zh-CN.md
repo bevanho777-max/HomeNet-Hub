@@ -539,7 +539,15 @@ docker compose restart homenet-hub
 输入 token 数);把 `inference_nodes` 节点的 `counters` 指过去即可(见 `config.example/targets.yaml`)。
 它从不碰推理服务本身。加 `--unit auto` 就跟随当前在跑 llama-server 的单元;加 `--mirror 端口` 还能给只听
 127.0.0.1 的 llama-server 提供只读镜像(`/slots` 只留数字,`/metrics` 附进程启动时间;只回 GET,`--allow`
-限定来源)。
+限定来源)。v2.46 起它还记下每笔已完成请求自己的计时(llama-server 释放槽位时写的 `prompt eval time` /
+`eval time` 两行),在 `/requests` 提供:节点的 `engine.logs` 指向它,hub 就按服务器自己量的值记下每笔请求的
+Prefill / Decode。
+
+**Prefill / Decode(v2.46)。** 推理节点卡上 Prefill / Decode 的大数字是当下正在跑的请求(没有就是「—」);
+右边的小字 **上次 xx** 是最近一笔*已完成*请求的值,取推理服务器自己的记录 —— Strata 的逐笔记录(`/metrics` 的
+`requests[]`)、llama.cpp 经日志 exporter 的计时行 —— 第二行是那笔结束的时间。每笔已完成请求都是节点详情里
+Prefill / Decode 曲线上的一个点,卡片和曲线的数值一致。详情最上面有一行摘要:所选时段(北京时间按天)的
+tokens、经 LiteLLM 的 tokens、请求数,以及开始记录以来的累计 tokens。
 
 **引擎自动识别(v2.29)。** 节点不必写死引擎,写 host 和候选端口即可 ——
 `engine: { host, ports: [...], key_env, logs }`。hub 启动时、每 3 分钟、以及实时读取连续失败后,按顺序问
