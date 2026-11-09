@@ -49,6 +49,44 @@ on screen is the one from `package.json`, and this file is what needs fixing.
 
 ---
 
+## v2.47.0 — 2026-11-10
+
+**推理节点的用量改成单一来源:每台每个北京日的 tokens / 请求数只算一次、存一份(`node_day`),Token Usage 卡(这台的部分)、推理节点卡(今天)、
+详情曲线、详情顶部摘要都读它,同一台同一天的数字完全一致。每天 00:10 结算前一天并逐处核对,有差异记日志、health-lite 报出来。
+m26 的 llama-log-exporter 记住读到的日志位置,重启接着读,不再重放 8 分钟。**
+
+*Rebuild required — `server/`、`web/` 改了。`agents/llama-log-exporter.py` 改了(`--state`),m26 已换上。`config/queries/` 新增
+`node_requests.sql`;`config/targets.yaml` 的 m25 `engine` 加 `counter_ports: [9878]`(新镜像跑起来之后再加:旧版 schema 不认)。*
+
+- **起因**:v2.46 的摘要对齐曲线后,有几天和 Token Usage 卡不一样(例:m133 11-08 曲线 421,689、Token 卡 505,087)。逐台逐天(10-20 起)比对后,原因有四种:
+  1. **跨午夜的请求**(m26 11-02 / 11-04 / 11-07 / 11-09,m25 10-31):LiteLLM 按请求*开始*的日子记,服务器计数器在读完提示词(llama.cpp)/ 请求结束时计入,
+     落在第二天。Token 卡遇到「计数器 < 它覆盖的 LiteLLM」就把那台那天整天换成 LiteLLM —— 结果跨午夜那笔被算两次(例:11-09 23:58 开始、11-10 00:05 结束的
+     62,006 tokens,在 11-09 的 LiteLLM 和 11-10 的计数器里各一次),或两天都没算(11-08 那笔 31,222)。m26 日志逐笔核对:连续两天合计,服务器与计数器一致。
+  2. **服务器重启前没被抓到的计数**(m133 11-08):19:19–19:35 Strata 重启三次,19:32:56–19:34:07 那笔(32,860 + 96)结束后、Prometheus 下次抓取前就重启了,
+     计数器少了 32,956。这里 LiteLLM 对。
+  3. **曲线停住**:计数器读到比 LiteLLM 少时,节点卡标「计数来源异常」并**不再写**这项 —— 曲线停在出错前的值(m133 11-08 停在 421,689)。
+  4. **曲线日终少最后一两分钟**:当天最后一个取样在 23:59 左右,之后结束的请求只进了结算(m25 11-09 差 2,366,m26 11-08 差 1,348)。
+  另:10-23 / 10-24 m25 计数器坏了(473 / 0,LiteLLM 6.5M / 12.8M),Token 卡的 LiteLLM 值对、曲线错。嵌入单独计(不进 tokens),fallback 请求按实际服务的
+  后端记(LiteLLM 的 api_base 正确),health-lite 的测试请求两边都算(各 1 次)。
+- **以哪边为准**:推理服务器自己的计数器(按它实际计入的时刻归日),计数器没覆盖的分钟补 LiteLLM,再补「重启前没被抓到」的请求(LiteLLM 里开始于最后一次抓取之前、
+  结束于重启之前的那几笔)。
+- **`server/collectors/nodes.js` `nodeFigures`**:上面这个算法,任意时间窗;今天(每分钟)、结算(00:10)、回填都用它。LiteLLM 改成逐笔读
+  (`node_requests.sql`,有开始与结束时间;`requests_query_file`,旧的 `query_file` 留给回退)。计数器偏低 / 没被抓只**标记**,数字照写。
+  `coverOf` 另报每次计数器下降(重启)的前后两个取样时刻。
+- **`server/node_usage.js` 账本(`node_day`)**:今天 = 节点卡的实时值;结束的一天 00:10 用原始记录结算一次,曲线那天以 23:59:59 的结算点收尾(当天没有更高的点)。
+  回填(一次):Prometheus(15 天)与 LiteLLM 逐笔记录(7 天)还在的日子重算;没有逐笔记录时,计数器整天覆盖且没重启的日子照样精确;其余沿用 Token 卡当时存的数,
+  方法记 `legacy`,详情图上灰底标「旧口径」,摘要的提示里列出。目前旧口径:m26 10-13–10-25 与 11-02,m25 10-20–11-03(那时的请求计数器现在的设置已读不到),
+  m133 10-29–10-31 与 11-02。
+- **Token Usage 卡(`server/usage.js`)**:账本有的节点日,这台的数字就是账本的(它的 LiteLLM 行算在里面),不再套「计数器偏低换成 LiteLLM」的规则。
+- **每日核对**:00:10 结算后比对前一天每台的 tokens / 请求数 / 经 LiteLLM:账本、曲线结算点、Token 卡、摘要必须相同,结果存 `usage_check`、写日志;
+  `GET /api/usage-check?day=`(`today` = 现在的实时值)。health-lite(05:00)加一项 `Hub-usage-check`,不一致列出数字并告警;LiteLLM 高于总数(跨午夜)只作附注。
+  回填后 10-13 到 11-09 每一天全部一致。
+- **m25 `engine.counter_ports: [9878]`**:只加进计数器选择器(不探测),11-04 前 m25 的 llama.cpp 镜像序列,重算旧日子用。
+- **`agents/llama-log-exporter.py` `--state`**:读到的 journal 位置(cursor —— 指向日志条目本身,journald 轮替文件后照样有效,是 journal 版的 inode + 偏移量)
+  和累计值(计数器、invocation、逐笔请求)一起原子写盘(临时文件 + rename,10 秒内有变化才写,SIGTERM 时也写);启动时从 cursor 之后接着读,不重放。
+  存档不是这些单元的、或 journalctl 找不到 cursor(停机期间被 vacuum)才重放。m26:`StateDirectory=homenet-llama-exporter`,
+  `--state /var/lib/homenet-llama-exporter/state.json`;`/metrics` 多 `homenet_llama_exporter_resumed`。
+
 ## v2.46.0 — 2026-11-10
 
 **推理节点卡的 Prefill / Decode 改成一套规则(三台一样):大数字只显示正在跑的请求(Prefill = 本次请求的值,Decode = 实时),

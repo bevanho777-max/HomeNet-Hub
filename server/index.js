@@ -29,7 +29,8 @@ import { demoTokenRows } from './collectors/demo.js';
 import { pivotTokens, TOKEN_RANGE_DAYS } from './token_detail.js';
 import { UsageEngine } from './usage.js';
 import { LiveCollector } from './collectors/live.js';
-import { NodeUsageDays, RANGE_DAYS } from './node_usage.js';
+import { NodeLedger, RANGE_DAYS, addDays } from './node_usage.js';
+import { dayOf, dayStart } from './usage.js';
 import { EngineDetector, PROM_JOBS } from './engine.js';
 import { ComfyCollector } from './collectors/comfyui.js';
 import { discoverTarget } from './collectors/discovery.js';
@@ -111,6 +112,9 @@ const litellmKeys = createLitellmKeys();
 // v2.24: all-usage engine (Token Usage, Per-Project, Clients); its day tables live in the
 // same database file.
 const usage = new UsageEngine(join(DATA_DIR, 'homenet.db'), { snapshot, env: process.env });
+// v2.47 THE per-node per-day usage (node_usage.js): every card, chart and summary line reads it
+const ledger = new NodeLedger(tsdb, { snapshot, env: process.env });
+usage.ledger = ledger;
 // v2.29: which engine (llama.cpp / Strata) answers on each inference node, and where
 const engine = new EngineDetector(join(DATA_DIR, 'homenet.db'), { env: process.env });
 // v2.25: live inference state (2 s) and the browsers listening for it (SSE)
@@ -147,6 +151,7 @@ effective.rebuild(config.get());
 // 'change' handler and a user write would have had to duplicate it.
 function applyEffective(next, why) {
   clearQueryCache();
+  ledger.configure((next.targets?.targets || []).find((t) => t.enabled !== false && t.source?.type === 'inference_nodes') || null);
   scheduler.apply(next);
   console.log(`[effective] applied etag=${next.etag} (${why})`);
 }
@@ -198,19 +203,42 @@ setInterval(rollupTick, 60 * 1000);
 tsdb.cleanup();
 setInterval(() => tsdb.cleanup(), 3600 * 1000);
 
-// v2.46 the inference node detail's summary line (node_usage.js): each finished Beijing day of each
-// node's usage series, stored once -- before the 5-minute tier's 30 days let it go
-const nodeUsage = new NodeUsageDays(tsdb, { snapshot });
-function nodesUsageTarget() {
-  const cfg = effective.get();
-  const t = (cfg.targets.targets || []).find((x) => x.enabled !== false && x.source?.type === 'inference_nodes');
-  return t ? { id: t.id, nodes: (t.nodes || []).map((n) => n.id) } : null;
+// v2.47 the ledger's day: at 00:10 (Beijing) yesterday is computed from the raw records and stored, and
+// every place that shows it is checked against it (node_usage.js; GET /api/usage-check, health-lite).
+// At start: every node-day not in the ledger yet (the first time: the whole history), then the same
+// for yesterday if 00:10 passed while the hub was down.
+async function ledgerDaily(why) {
+  if (ledger.busy) return ledger.busy;
+  ledger.busy = (async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const y = addDays(dayOf(now), -1);
+    try {
+      if (!ledger.hasDay(y) && now - dayStart(dayOf(now)) >= 600) {
+        await ledger.finalize(y);
+        console.log(`[ledger] ${y} finalized (${why})`);
+      }
+      const b = await ledger.backfill(now);
+      if (b.days) console.log(`[ledger] backfill: ${b.days} node-day(s)\n  ${b.report.join('\n  ')}`);
+      await usage.refresh();                          // the Token Usage card reads the new days at once
+      if (!usage.ready) { console.log('[usage-check] skipped: the Token Usage card has no view yet'); return; }
+      const days = new Set([y, ...b.report.map((x) => (x.match(/\d{4}-\d{2}-\d{2}/) || [])[0]).filter(Boolean)]);
+      for (const d of [...days].sort()) {
+        if (!ledger.hasDay(d)) continue;
+        if (d !== y && ledger.lastCheck(d)) continue;
+        const r = ledger.check(d, usage);
+        if (d === y || !r.ok) console.log(`[usage-check] ${d}: ${r.ok ? 'all equal' : 'MISMATCH ' + JSON.stringify(r.rows.filter((x) => !x.same))}`);
+      }
+    } catch (e) { console.error(`[ledger] ${why}: ${e?.message || e}`); }
+  })().finally(() => { ledger.busy = null; });
+  return ledger.busy;
 }
-function nodeUsageFill() {
-  try { const t = nodesUsageTarget(); if (t) nodeUsage.fill(t.id, t.nodes); } catch (e) { console.error(`[node-usage] ${e?.message || e}`); }
+function scheduleLedger() {
+  const now = Date.now() / 1000;
+  const next = dayStart(dayOf(now)) + 600 + (now - dayStart(dayOf(now)) >= 600 ? 86400 : 0);
+  setTimeout(() => { ledgerDaily('00:10').finally(scheduleLedger); }, Math.max(1000, (next - now) * 1000));
 }
-setTimeout(nodeUsageFill, 30 * 1000);
-setInterval(nodeUsageFill, 3600 * 1000);
+setTimeout(() => ledgerDaily('start'), 45 * 1000);
+scheduleLedger();
 
 // resolve the token target (for /api/token_detail) via the layout token card,
 // falling back to the first sql target. Works for both sql and demo sources.
@@ -630,11 +658,23 @@ app.get('/api/node-states', VIEW, async () => {
 // the modal's charts draw (node_usage.js).
 app.get('/api/node-usage', VIEW, async (req, reply) => {
   const { node, range = '1d' } = req.query || {};
-  const t = nodesUsageTarget();
-  if (!t || !t.nodes.includes(String(node))) return reply.code(404).send({ error: 'unknown inference node' });
+  if (!ledger.ids.includes(String(node))) return reply.code(404).send({ error: 'unknown inference node' });
   if (!RANGE_DAYS[range]) return reply.code(400).send({ error: 'unknown range' });
   reply.header('Cache-Control', 'no-store');
-  return nodeUsage.summary(t.id, String(node), range, t.nodes);
+  return ledger.summary(String(node), range);
+});
+
+// v2.47 the daily usage check (node_usage.js check): ?day=YYYY-MM-DD, default the newest. A finished day
+// that has no check yet is checked now. health-lite reads this.
+app.get('/api/usage-check', VIEW, async (req, reply) => {
+  const day = req.query?.day ? String(req.query.day) : null;
+  if (day && day !== 'today' && !/^\d{4}-\d{2}-\d{2}$/.test(day)) return reply.code(400).send({ error: 'bad day' });
+  reply.header('Cache-Control', 'no-store');
+  // (?day=today: the live figures, checked now and not stored)
+  if (day === dayOf(Date.now() / 1000) || req.query?.day === 'today') return usage.ready ? ledger.check(dayOf(Date.now() / 1000), usage) : { ok: null, rows: [], note: 'Token Usage card not ready' };
+  let r = ledger.lastCheck(day);
+  if (!r && day && ledger.hasDay(day) && usage.ready) r = ledger.check(day, usage);
+  return r || { day, ok: null, rows: [], info: [], note: 'not checked yet' };
 });
 
 // v2.25: the live inference state on its own, for the nodes card and the Token Usage

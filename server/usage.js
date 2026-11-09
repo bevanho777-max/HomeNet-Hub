@@ -34,10 +34,18 @@
 // LiteLLM for that node, marked partial: a total is never smaller than its LiteLLM share.
 // Nodes with `engine:` get their selectors from engine.js; their switch instants no longer
 // depend on how the selectors are written (the earliest one stored for the node is kept).
+//
+// v2.47 a node-day the ledger has (server/node_usage.js: node_day for finished days, the 推理节点
+// target's live figures today) IS that node's figure here: its counter rows are the ledger's and
+// its LiteLLM rows count as inside them (covered), whatever minute they fell in. The rule above
+// (a counter below its LiteLLM rows -> that node-day shows LiteLLM) no longer applies to such a
+// day: a request across midnight is in LiteLLM's day it STARTED and in the counter's day it was
+// counted, so the rule counted it on both days (m26 11-09 / 11-10) or on neither (11-08).
 import Database from 'better-sqlite3';
 import { collectSqlRowsInts } from './collectors/sql.js';
 import { promCounterWindow, promFirstSample, promQuery, hostPort, covered, TZ_OFFSET_SEC } from './collectors/nodes.js';
 import { nodeCounters } from './engine.js';
+import { LEDGER_TO_CTR } from './node_usage.js';
 
 const DAY = 86400;
 const SETTLE_SEC = 600;            // a day is final 10 min after it ends (late log rows, last scrape)
@@ -327,6 +335,9 @@ export class UsageEngine {
     catch (e) { this.lastError = String(e?.message || e); partial.add(today); }
     // a counter that is due but missing from the snapshot (inference_nodes not polled
     // yet, Prometheus down): its LiteLLM rows are not covered today, so nothing is lost
+    // (v2.47: a node the ledger has today is not missing -- its live figure stands; see below)
+    const ledToday = this.ledgerDays(today, nowSec);
+    for (const m of [...ct.missing]) if (ledToday.has(`${today}|${m.split(':')[0]}`)) ct.missing.delete(m);
     if (ct.missing.size) {
       partial.add(today);
       for (const r of llToday) {
@@ -346,11 +357,47 @@ export class UsageEngine {
     let legacy = [];
     try { legacy = await this.legacyRows(); } catch (e) { this.lastError = String(e?.message || e); }
 
+    // v2.47 the ledger's node-days replace the counter rows of those days and take in their LiteLLM rows
+    const led = this.ledgerDays(today, nowSec);
+    const inLedger = (day, node) => led.has(`${day}|${node}`);
+    const ctr = [...stored.ctr, ...live.ctr].filter((c) => !inLedger(c.day, c.node));
+    for (const [k, f] of led) {
+      const [day, node] = k.split('|');
+      for (const [key, kind] of Object.entries(LEDGER_TO_CTR)) if (typeof f[key] === 'number') ctr.push({ day, node, kind, value: f[key], ledger: true });
+    }
+    const markLl = (r) => {
+      const nd = r.endpoint ? this.nodeOf(r.endpoint) : null;
+      return nd && inLedger(r.day, nd.node.id) ? { ...r, cov_tok: 1, cov_req: 1, ledger: true } : r;
+    };
+
     const speed = await this.speed(nowSec);
-    this._state = this.build({ ll: [...legacy, ...stored.ll, ...live.ll], ctr: [...stored.ctr, ...live.ctr] }, {
+    this._state = this.build({ ll: [...legacy, ...stored.ll, ...live.ll].map(markLl), ctr }, {
       today, T, partial: [...partial], speed,
     });
     return this._state;
+  }
+
+  /** v2.47 `${day}|${node}` -> the ledger's figures (finished days stored, today live) */
+  ledgerDays(today, nowSec) {
+    const out = new Map();
+    if (!this.ledger) return out;
+    try {
+      for (const r of this.db.prepare('SELECT node, day, kind, value FROM node_day').all()) {
+        const k = `${r.day}|${r.node}`;
+        if (!out.has(k)) out.set(k, {});
+        out.get(k)[r.kind] = r.value;
+      }
+    } catch { /* no ledger table yet */ }
+    for (const n of this.nodes) {
+      const td = this.ledger.today(n.id, nowSec);
+      if (td) out.set(`${today}|${n.id}`, td.figures);
+    }
+    return out;
+  }
+
+  /** v2.47 a node-day as this card counts it (for the daily check): chat tokens and requests */
+  nodeDay(day, node) {
+    return this._nodeDays?.get(`${day}|${node}`) || null;
   }
 
   /** live generation throughput: Σ rate(generated tokens[1m]) per node */
@@ -390,6 +437,7 @@ export class UsageEngine {
     }
     const broken = new Set();
     for (const c of ctr) {
+      if (c.ledger) continue;              // (v2.47 the ledger's node-days: never)
       // (today: the 推理节点 card's check -- it leaves out the last 2 minutes, which a scrape
       // may not have reached yet -- reports a broken counter, and ctrToday leaves it out)
       if (c.day === today || (c.kind !== 'tokens' && c.kind !== 'embed_tokens')) continue;
@@ -398,13 +446,24 @@ export class UsageEngine {
     if (broken.size) {
       const typeOf = (kind) => (kind.startsWith('embed') ? 'embed' : 'chat');
       ll = ll.map((r) => {
-        const nd = (r.cov_tok || r.cov_req) && this.nodeOf(r.endpoint);
+        const nd = !r.ledger && (r.cov_tok || r.cov_req) && this.nodeOf(r.endpoint);
         return nd && broken.has(`${r.day}|${nd.node.id}|${nd.type}`) ? { ...r, cov_tok: 0, cov_req: 0 } : r;
       });
-      ctr = ctr.filter((c) => !broken.has(`${c.day}|${c.node}|${typeOf(c.kind)}`));
+      ctr = ctr.filter((c) => c.ledger || !broken.has(`${c.day}|${c.node}|${typeOf(c.kind)}`));
       partial = [...new Set([...partial, ...[...broken].map((b) => b.split('|')[0])])];
     }
     this.brokenDays = [...broken].map((b) => { const [day, node, type] = b.split('|'); return { day, node, type }; });
+    // v2.47 per node-day, chat: what this card counts for the node (counter rows + its uncovered LiteLLM rows)
+    const nodeDays = new Map();
+    const nd0 = (day, node) => { const k = `${day}|${node}`; if (!nodeDays.has(k)) nodeDays.set(k, { tokens: 0, reqs: 0 }); return nodeDays.get(k); };
+    for (const c of ctr) { if (c.kind === 'tokens') nd0(c.day, c.node).tokens += c.value; else if (c.kind === 'requests') nd0(c.day, c.node).reqs += c.value; }
+    for (const r of ll) {
+      const nd = r.endpoint ? this.nodeOf(r.endpoint) : null;
+      if (!nd || nd.type !== 'chat') continue;
+      if (!r.cov_tok) nd0(r.day, nd.node.id).tokens += r.tokens;
+      if (!r.cov_req) nd0(r.day, nd.node.id).reqs += r.requests;
+    }
+    this._nodeDays = nodeDays;
     const zero = () => ({ tok: 0, net: 0, req: 0, llTok: 0, llNet: 0, llReq: 0 });
     const days = new Map();          // day -> Map(classKey -> agg)
     const keys = new Map();          // api_key -> Map(day -> {tok, net, req})

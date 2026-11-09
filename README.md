@@ -630,6 +630,15 @@ request is one point of the node detail's Prefill / Decode chart, so the card an
 the same numbers. The detail opens with a summary line: tokens, tokens via LiteLLM and requests
 over the window shown (Beijing days), and tokens since recording began.
 
+**One usage figure per node and day (v2.47).** Each inference node's tokens / requests for a Beijing
+day are computed once — the server's own counters, LiteLLM's records for the minutes a counter did
+not cover and for requests a server restart took away before Prometheus read them — and stored
+(`node_day`). The Token Usage card, the nodes card, the detail charts and the summary line all read
+that one figure; a finished day is settled at 00:10 and every place is checked against it
+(`GET /api/usage-check`). Days the raw records can no longer recompute keep their old figure and are
+marked "old method" on the charts. `llama-log-exporter.py --state FILE` continues from its saved
+journal cursor after a restart instead of replaying the journal.
+
 **Engine auto-detection (v2.29).** Instead of naming a node's engine, give it a host and
 candidate ports — `engine: { host, ports: [...], key_env, logs }`. The hub asks each port in
 order (at start, every 3 minutes, and soon after the live reader loses the node):

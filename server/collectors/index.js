@@ -152,7 +152,10 @@ export class Scheduler {
         const { metrics: m, extra } = await collectNodes(target, env, { engine: this.ctx.engine });
         snapshot.update(target.id, { online: true, metrics: m, extra });
         const rows = samplableRows(target.id, { metrics: m }, metrics);
-        if (rows.length) tsdb.record(rows);
+        // v2.47 each sample at a time inside the day it belongs to (a poll that began before midnight
+        // and finished after it is still that day's), never on the day's settled point (23:59:59)
+        const ts = Math.min(Math.floor(Date.now() / 1000), Number(extra.day_start) + 86400 - 2);
+        if (rows.length) tsdb.recordAt(rows.map(([t, k, v]) => [ts, t, k, v]));
         // v2.24: the Token Usage card takes today's counters from this snapshot -- refresh it
         // now, so the two cards never show different "today" figures for a whole poll
         const ut = this.usageTarget;

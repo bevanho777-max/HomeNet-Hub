@@ -251,6 +251,9 @@ const targetsSchema = {
                     key_env: { type: 'string', pattern: '^[A-Z][A-Z0-9_]{0,63}$' },
                     logs: { type: 'integer', minimum: 1, maximum: 65535 },
                     logs_unit: { type: 'string', pattern: '^[A-Za-z0-9@._-]{1,128}$' },
+                    // v2.46: ports the node's engine USED to answer on -- only in the counter selectors (never
+                    // probed), so a finished day can still be recomputed from the series it had then (m25: 9878)
+                    counter_ports: { type: 'array', maxItems: 8, uniqueItems: true, items: { type: 'integer', minimum: 1, maximum: 65535 } },
                   },
                   additionalProperties: false,
                 },

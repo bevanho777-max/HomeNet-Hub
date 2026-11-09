@@ -549,6 +549,11 @@ Prefill / Decode。
 Prefill / Decode 曲线上的一个点,卡片和曲线的数值一致。详情最上面有一行摘要:所选时段(北京时间按天)的
 tokens、经 LiteLLM 的 tokens、请求数,以及开始记录以来的累计 tokens。
 
+**每台每天只有一个用量数字(v2.47)。** 每台推理节点每个北京日的 tokens / 请求数只算一次 —— 推理服务器自己的计数器,
+计数器没覆盖的分钟、以及服务器重启前没被 Prometheus 抓到的请求用 LiteLLM 的记录补 —— 存进 `node_day`。Token Usage 卡、
+推理节点卡、详情曲线、详情摘要都读这一个数;每天 00:10 结算前一天并逐处核对(`GET /api/usage-check`)。原始记录已无法重算
+的日子沿用旧数,图上标「旧口径」。`llama-log-exporter.py --state 文件` 重启后从存下的 journal 位置接着读,不再重放日志。
+
 **引擎自动识别(v2.29)。** 节点不必写死引擎,写 host 和候选端口即可 ——
 `engine: { host, ports: [...], key_env, logs }`。hub 启动时、每 3 分钟、以及实时读取连续失败后,按顺序问
 各端口:`/v1/status` 有回应是 Strata,`/slots`(或 `/props`)有回应是 llama.cpp。实时状态、计数器和 Prometheus

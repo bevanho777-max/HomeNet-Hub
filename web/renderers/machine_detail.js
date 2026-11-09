@@ -412,7 +412,8 @@ async function showSum(node) {
   if (seq !== sumSeq) return;
   const item = (k, v, title, cls = '') => `<span class="ns-item${cls ? ` ${cls}` : ''}" title="${esc(title)}"><span class="ns-k">${esc(k)}</span><b class="ns-v">${esc(v)}</b></span>`;
   const md = (d) => String(d || '').slice(5);   // 2026-11-08 -> 11-08
-  const miss = s.missing?.length ? `\n${t('sum_missing', s.missing.map(md).join(', '))}` : '';
+  const miss = (s.missing?.length ? `\n${t('sum_missing', s.missing.map(md).join(', '))}` : '')
+    + (s.legacy?.length ? `\n${t('sum_legacy', s.legacy.map(md).join(', '))}` : '');
   const span = t('sum_range_title', s.from, s.to) + miss;
   const parts = [];
   parts.push(`<span class="ns-range" title="${esc(span)}">${esc(t('sum_range', range))}</span>`);
@@ -499,7 +500,10 @@ async function loadNode(canvas, legend) {
     return (await r.json()).series || {};
   };
   try {
-    const [sp, us, lvh] = await Promise.all([get(col.speed), get(usageTarget), get(liveTarget)]);
+    // (v2.47 the node's summary for this window: which days are 「旧口径」)
+    const sumP = fetch(`/api/node-usage?node=${encodeURIComponent(col.node)}&range=${encodeURIComponent(range)}`, { cache: 'no-store', signal: ctrl.signal })
+      .then((r) => (r.ok ? r.json() : null)).catch(() => null);
+    const [sp, us, lvh, sum] = await Promise.all([get(col.speed), get(usageTarget), get(liveTarget), sumP]);
     if (inflight !== ctrl) return;
     const second = secondPanel(true);
     const extra = extraGpuPanels(liveTarget ? 3 : 2);
@@ -544,7 +548,10 @@ async function loadNode(canvas, legend) {
       [`${p}_tokens`]: { label: t('node_series_total') }, [`${p}_ll_tokens`]: { label: t('node_series_ll') },
       [`${p}_emb_ll_tokens`]: { label: t('node_series_emb_ll') }, [`${p}_emb_tokens`]: { label: t('node_series_emb_total') },
     };
-    const uOpts = { metrics: um, height: 170, emptyText: t('chart_no_data_range', range) };
+    // v2.47 days whose figure could not be recomputed from the raw records keep the old one: a pale band,
+    // 「旧口径」 in the legend. Each finished day's line ends on its settled point (23:59:59) = that day's figure.
+    const legacyBands = (sum?.total?.legacy_days || []).map((d) => { const a = Date.parse(`${d}T00:00:00+08:00`) / 1000; return { from: a, to: a + 86400 }; });
+    const uOpts = { metrics: um, height: 170, emptyText: t('chart_no_data_range', range), bands: legacyBands, bandLabel: t('chart_legacy_band') };
     setLine(extra[0].title, t('node_panel_reqs'));
     drawMulti(extra[0].canvas, us, extra[0].legend, { ...uOpts, subs: [
       { k: `${p}_reqs`, color: '#f7c948', axis: 'R' }, { k: `${p}_ll_reqs`, color: '#5eead4', axis: 'R' },

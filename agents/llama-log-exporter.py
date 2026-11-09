@@ -60,11 +60,23 @@ release"), for the hub's Prefill / Decode history:
           "gen_n": 7662, "gen_ms": 212092.5}, ...]}}}
       oldest first, at > T only, the newest N (default 2000); chat units only. The last
       REQ_KEEP requests of the unit's current run are kept (the replay rebuilds them).
+
+v2.47 -- --state FILE: where it has read up to in the journal (the journal CURSOR of the last entry
+counted: it names the entry itself, so it stays valid when journald rotates its files -- the
+journal's equivalent of a file's inode + offset) and everything counted up to there (the counters,
+each unit's invocation, the finished requests above), written atomically (temp file + rename) at
+most every 10 s while something changed, and on SIGTERM. At start it continues right after that
+cursor -- no replay of the boot's journal (on m26 that took ~8 minutes, /metrics answering 503 the
+whole time): the counters carry on from the saved values, the entries written while it was down
+are counted on the way. A file for other units, a cursor journalctl no longer finds (journald
+vacuumed past it while the exporter was down), or no file: the full replay, as before.
+  e.g. --state /var/lib/homenet-llama-exporter/state.json   (systemd: StateDirectory=homenet-llama-exporter)
 """
 import argparse
 import json
 import os
 import re
+import signal
 import subprocess
 import threading
 import time
@@ -88,6 +100,7 @@ ap.add_argument('--bind', default='0.0.0.0')
 ap.add_argument('--unit', action='append', required=True)
 ap.add_argument('--mirror', type=int, default=0)
 ap.add_argument('--allow', action='append', default=[])
+ap.add_argument('--state', default='')
 args = ap.parse_args()
 
 AUTO = args.unit == ['auto']
@@ -106,7 +119,9 @@ UNITS = {}                       # unit -> {embed, inv, start, requests, tokens}
 LOCK = threading.Lock()
 STATE = {'lines': 0, 'started': time.time(), 'follower_restarts': 0, 'replayed': 0, 'rescans': 0}
 CHANGED = threading.Event()      # (auto) the set of llama-server units changed: replay again
-CUR = {'proc': None, 'units': None}
+CUR = {'proc': None, 'units': None, 'cursor': None, 'dirty': False, 'replay': False}
+SAVE_EVERY = 10
+CURSOR_FAILS = 3                 # journalctl refusing the saved cursor this often in a row -> replay
 
 
 # ── local llama-server processes ────────────────────────────────────
@@ -267,6 +282,66 @@ def apply(e, units):
             st['done'].append((at, int(m.group(1)), rec.get('prompt_n'), rec.get('prompt_ms'), rec.get('gen_n'), rec.get('gen_ms')))
 
 
+def load_state(want):
+    """(units, cursor) from --state when it is for these units, else None"""
+    if not args.state:
+        return None
+    try:
+        with open(args.state) as f:
+            d = json.load(f)
+    except (OSError, ValueError):
+        return None
+    us = d.get('units') or {}
+    if d.get('version') != 1 or not d.get('cursor') or set(us) != set(want) \
+            or any(bool(us[u].get('embed')) != bool(want[u]) for u in want):
+        print('saved state is not for these units: replaying', flush=True)
+        return None
+    out = {}
+    for u, x in us.items():
+        out[u] = {'embed': bool(x.get('embed')), 'inv': x.get('inv'), 'start': float(x.get('start') or 0),
+                  'requests': int(x.get('requests') or 0), 'tokens': int(x.get('tokens') or 0),
+                  'pend': {str(k): dict(v) for k, v in (x.get('pend') or {}).items()},
+                  'done': deque((tuple(r) for r in x.get('done') or []), maxlen=REQ_KEEP)}
+    OLD_INVOCATIONS.update(d.get('old_invocations') or [])
+    return out, d['cursor']
+
+
+def save_state():
+    """write the position and the counts together (one consistent moment), atomically"""
+    if not args.state:
+        return
+    with LOCK:
+        if not STATE['replayed'] or not CUR['cursor'] or not CUR['dirty']:
+            return
+        d = {'version': 1, 'saved': time.time(), 'cursor': CUR['cursor'], 'old_invocations': sorted(OLD_INVOCATIONS)[-64:],
+             'units': {u: {'embed': x['embed'], 'inv': x['inv'], 'start': x['start'], 'requests': x['requests'],
+                           'tokens': x['tokens'], 'pend': {k: dict(v) for k, v in x['pend'].items()}, 'done': list(x['done'])}
+                       for u, x in UNITS.items()}}
+        CUR['dirty'] = False
+    tmp = args.state + '.tmp'
+    try:
+        with open(tmp, 'w') as f:
+            json.dump(d, f, separators=(',', ':'))
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, args.state)
+        STATE['saved'] = time.time()
+    except OSError as e:
+        CUR['dirty'] = True
+        print(f'cannot write {args.state}: {e}', flush=True)
+
+
+def saver():
+    while True:
+        time.sleep(SAVE_EVERY)
+        save_state()
+
+
+def on_term(signum, frame):
+    save_state()
+    os._exit(0)
+
+
 def follow():
     while True:
         want = wanted()
@@ -279,7 +354,17 @@ def follow():
                      'pend': {}, 'done': deque(maxlen=REQ_KEEP)}
                  for u, embed in want.items()}
         cursor = None
-        if want:
+        # v2.47 the saved position (only when the process starts: a change of units, or a cursor the
+        # journal no longer has, replays)
+        loaded = load_state(want) if want and not STATE.get('state_tried') and not CUR['replay'] else None
+        STATE['state_tried'] = 1
+        CUR['replay'] = False
+        if loaded:
+            fresh, cursor = loaded
+            STATE['resumed'] = 1
+            print('resumed from the saved position: ' + ', '.join(f"{u} {s['requests']}" for u, s in fresh.items()), flush=True)
+        elif want:
+            STATE['resumed'] = 0
             p = journal(want, ['-b'])
             for line in p.stdout:
                 try:
@@ -294,6 +379,8 @@ def follow():
             UNITS.clear()
             UNITS.update(fresh)
             STATE['replayed'] = 1
+            CUR['cursor'] = cursor
+            CUR['dirty'] = True
         if want and AUTO:
             print('counting ' + ', '.join(u + (' (embed)' if e else '') for u, e in want.items()), flush=True)
         # 2. Follow from where the replay stopped; if journalctl ever exits, resume from the
@@ -305,6 +392,7 @@ def follow():
                 continue
             p = journal(want, ['-f'] + (['--after-cursor', cursor] if cursor else ['-n', '0']))
             CUR['proc'] = p
+            got = 0
             try:
                 for line in p.stdout:
                     try:
@@ -314,14 +402,27 @@ def follow():
                     with LOCK:
                         apply(e, UNITS)
                         STATE['lines'] += 1
+                        if e.get('__CURSOR'):
+                            CUR['cursor'] = e['__CURSOR']
+                            CUR['dirty'] = True
                     cursor = e.get('__CURSOR', cursor)
+                    got += 1
             finally:
                 p.kill()
+                p.wait()
                 CUR['proc'] = None
             if CHANGED.is_set():
                 break
             with LOCK:
                 STATE['follower_restarts'] += 1
+            # a cursor journalctl will not seek to (vacuumed away while we were down): count it, and
+            # after a few in a row start over with the full replay
+            STATE['cursor_fails'] = STATE.get('cursor_fails', 0) + 1 if not got and p.returncode not in (0, -9) else 0
+            if STATE['cursor_fails'] >= CURSOR_FAILS:
+                print(f'journalctl refuses the saved cursor ({p.returncode}): replaying the journal', flush=True)
+                STATE['cursor_fails'] = 0
+                CUR['replay'] = True
+                break
             time.sleep(2)
 
 
@@ -409,6 +510,7 @@ class H(Quiet):
             out += [f'homenet_llama_tokens_total{{{lbl(u, s)}}} {s["tokens"]}' for u, s in UNITS.items() if s['embed']]
             out += ['# TYPE homenet_llama_invocation_start_seconds gauge']
             out += [f'homenet_llama_invocation_start_seconds{{{lbl(u, s)}}} {s["start"]:.3f}' for u, s in UNITS.items()]
+            out += ['# TYPE homenet_llama_exporter_resumed gauge', f'homenet_llama_exporter_resumed {STATE.get("resumed", 0)}']
             out += ['# TYPE homenet_llama_exporter_lines_total counter', f'homenet_llama_exporter_lines_total {STATE["lines"]}',
                     '# TYPE homenet_llama_exporter_follower_restarts_total counter',
                     f'homenet_llama_exporter_follower_restarts_total {STATE["follower_restarts"]}']
@@ -523,6 +625,9 @@ class M(Quiet):
 
 
 threading.Thread(target=follow, daemon=True).start()
+if args.state:
+    threading.Thread(target=saver, daemon=True).start()
+    signal.signal(signal.SIGTERM, on_term)
 if AUTO:
     threading.Thread(target=watch_units, daemon=True).start()
 if args.mirror:

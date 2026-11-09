@@ -44,7 +44,9 @@ export const instanceRe = (e) => `${reHost(e.host)}:(${e.ports.join('|')})`;
 export function nodeCounters(n) {
   const e = n.engine;
   if (!e) return n.counters || {};
-  const fam = (m) => `${m}{instance=~"${instanceRe(e)}"}`;
+  // (v2.46 counter_ports: where the engine used to answer -- its old series, for recomputing old days)
+  const all = { host: e.host, ports: [...new Set([...e.ports, ...(e.counter_ports || [])])] };
+  const fam = (m) => `${m}{instance=~"${instanceRe(all)}"}`;
   const requests = [fam('strata:requests_total')];
   if (e.logs) requests.push(`homenet_llama_requests_total{instance="${e.host}:${e.logs}",${e.logs_unit ? `unit="${e.logs_unit}"` : 'role="chat"'}}`);
   return {
