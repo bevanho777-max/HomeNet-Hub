@@ -67,7 +67,7 @@ const sourceSchema = {
   type: 'object',
   required: ['type'],
   properties: {
-    type: { enum: ['http', 'http_push', 'sql', 'exec', 'demo', 'tcp', 'tls', 'prometheus', 'ssh', 'inference_nodes', 'usage', 'usage_projects', 'inference_live', 'node_speed', 'comfyui'] },
+    type: { enum: ['http', 'http_push', 'sql', 'exec', 'demo', 'tcp', 'tls', 'prometheus', 'ssh', 'inference_nodes', 'usage', 'usage_projects', 'inference_live', 'node_speed', 'comfyui', 'kiwivm'] },
     // http
     url: { type: 'string' },
     readiness: { enum: ['llamacpp_models'] },
@@ -108,6 +108,12 @@ const sourceSchema = {
     // ssh (slice 2f): a reference to a vault credential. The secret itself is never
     // in config, in the database's target row, or anywhere a schema could describe it.
     credential_id: { type: 'string' },
+    // v2.48 kiwivm: the NAMES of the .env variables holding the VPS id, the API key and an optional
+    // http://host:port proxy (defaults KIWIVM_VEID / KIWIVM_API_KEY / KIWIVM_PROXY) -- never the values.
+    // `usage_every` = how often getRawUsageStats is called (default 1h); `url` (optional) = the API base.
+    veid_env: { type: 'string', pattern: '^[A-Z][A-Z0-9_]{0,63}$' },
+    proxy_env: { type: 'string', pattern: '^[A-Z][A-Z0-9_]{0,63}$' },
+    usage_every: { type: 'string' },
   },
   additionalProperties: true,
   allOf: [
@@ -138,6 +144,8 @@ const sourceSchema = {
     { if: { properties: { type: { const: 'inference_live' } } }, then: { required: ['nodes_target'] } },
     // v2.29: a node's Prefill / Decode, the Prometheus query built from that node's `engine`
     { if: { properties: { type: { const: 'node_speed' } } }, then: { required: ['nodes_target', 'node'] } },
+    // v2.48: a KiwiVM VPS -- its API base, when given, must be a plain https URL (no query: the key is added by the collector)
+    { if: { properties: { type: { const: 'kiwivm' } } }, then: { properties: { url: { pattern: '^https://[^\\s?#]+$' }, key_env: { pattern: '^[A-Z][A-Z0-9_]{0,63}$' } } } },
   ],
 };
 
@@ -314,7 +322,7 @@ const gridCard = {
   required: ['type'],
   properties: {
     target: { type: 'string' },
-    type: { enum: ['machine', 'token', 'service', 'history', 'info', 'stack', 'table', 'nodes', 'comfy'] },
+    type: { enum: ['machine', 'token', 'service', 'history', 'info', 'stack', 'table', 'nodes', 'comfy', 'vps'] },
     children: { type: 'array', items: { type: 'string' } }, // B12: stack child target ids
     // v2.22: columns the card takes in the grid (default 1). 2 falls back to the whole row
     // when the screen only has one column; 'full' is always the whole row.
@@ -472,6 +480,8 @@ const gridCard = {
     // a nodes card column is nothing without its probe target; a comfy card reads one comfyui target
     { if: { properties: { type: { const: 'nodes' } } }, then: { required: ['target'], properties: { nodes: { items: { required: ['node', 'probe'] } } } } },
     { if: { properties: { type: { const: 'comfy' } } }, then: { required: ['target', 'nodes'] } },
+    // v2.48 a VPS card reads one kiwivm target
+    { if: { properties: { type: { const: 'vps' } } }, then: { required: ['target'] } },
   ],
   additionalProperties: true,
 };

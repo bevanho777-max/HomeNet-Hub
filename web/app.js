@@ -10,6 +10,7 @@ import { renderInfo } from './renderers/info.js';
 import { renderTable } from './renderers/table.js';
 import { renderNodes, strataAlive, testingPorts } from './renderers/nodes.js';
 import { renderComfy, comfyInfo, comfyCutTitle, comfyDownState, comfyDownTitle } from './renderers/comfy.js';
+import { renderVps } from './renderers/vps.js';
 import { initHistory, historyRefresh, relocalizeHistory } from './renderers/history.js';
 import { initMachineDetail, openMachineModal, openNodeModal, openComfyModal, closeMachineModal, bindMachineModal, relocalizeMachineModal } from './renderers/machine_detail.js';
 import { openTableModal, closeTableModal, bindTableModal, relocalizeTableModal } from './renderers/table_detail.js';
@@ -457,6 +458,7 @@ function render() {
     else if (gc.type === 'table') cards.push(renderTable(gc, target, snap));
     else if (gc.type === 'nodes') cards.push(renderNodes(gc, resolveWithLive));
     else if (gc.type === 'comfy') cards.push(renderComfy(gc, resolveWithLive));
+    else if (gc.type === 'vps') cards.push(renderVps(gc, target, snap, metrics));   // v2.48 KiwiVM VPS
     if (cards.length > before) {
       if (gc.span != null) cards[cards.length - 1].span = gc.span;
       if (gc.stretch) cards[cards.length - 1].stretch = true;

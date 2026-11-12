@@ -49,7 +49,8 @@ you see the whole thing working before wiring up anything real.
 - **Collectors** — `http` (pull), `http_push` (machine pushes to you), `sql`
   (read-only Postgres), `exec` (allowlisted local commands), `tcp`, `tls`,
   `prometheus` (node_exporter scrape), `ssh` (credentialed Linux metrics),
-  `demo` (synthetic).
+  `kiwivm` (a BandwagonHost VPS's transfer and status from its provider's API — see
+  [VPS transfer](#vps-transfer-bandwagonhost--kiwivm)), `demo` (synthetic).
 - **Metric templates** — one metric key says how a value is read *and* how it is drawn:
   `value/max` composites, `divide` scaling, `level_map` for colouring text states, and
   per-segment colouring with superscript labels (that is how NAS drive temperatures
@@ -196,6 +197,34 @@ that, not before. The query file carries the exact `LEFT JOIN` and `GRANT` to us
 > Every `sql` collector reads its SQL from a file under `queries/` — never from config
 > and never from the frontend — with at most one whitelisted integer parameter. See
 > [Security](#security).
+
+---
+
+## VPS transfer (BandwagonHost / KiwiVM)
+
+A `kiwivm` target reads a BandwagonHost VPS from its provider's API (`api.64clouds.com/v1`,
+read-only) and a `type: vps` card shows it: this month's transfer used / plan with a bar
+(yellow from 80 %, red from 95 % — the `vps_traffic` thresholds in `metrics.yaml`), the
+next reset and the days left, a month-end projection (this cycle's average per day carried
+on to the reset; red above the plan), the VPS status, memory and disk, and the last 30
+days' daily transfer. `getServiceInfo` + `getLiveServiceInfo` are called every `interval`
+(5 min), `getRawUsageStats` every `usage_every` (1 h), each with a 15 s timeout.
+
+- **Credentials** — `KIWIVM_VEID` and `KIWIVM_API_KEY` in `.env` only; the target names the
+  variables. Every error text has the key masked, and only figures leave the collector
+  (no e-mail, address or SSH port reaches the public snapshot).
+- **Failures** — the card keeps the last good figures with their time and says
+  "API error" (the reason and the next retry in its tooltip); consecutive failures back
+  off 5 → 10 → 20 → 40 → 60 min. The last good figures are kept in `data/homenet.db`, so a
+  restart while the API is down still shows them.
+- **History** — the used transfer, percent, memory and disk go into the time series; each
+  day's transfer into its own table (kept beyond the 30-day series retention).
+- **Units** — KiwiVM's: `plan_monthly_data` is 3000 × 2³⁰ bytes for a "3 TB" plan, so
+  1 GB = 2³⁰ bytes and 1 TB = 1000 GB. Per the API docs both `data_counter` and
+  `plan_monthly_data` are multiplied by `monthly_data_multiplier`; the daily figures get
+  the same multiplier.
+
+See `vps_example` in [`config.example/targets.yaml`](config.example/targets.yaml).
 
 ---
 
@@ -666,6 +695,7 @@ and fill in what you use.
 | `PG_DSN` | Read-only Postgres DSN for a `sql` token collector. The name is whatever the target's `dsn_env` says; `PG_DSN` is the shipped example. |
 | `PUSH_TOKEN_*` | Shared secret per `http_push` target; the name must match that target's `token_env` (`openssl rand -hex 32`). |
 | `TELEGRAM_BOT_TOKEN` | Optional, for the built-in `probe_telegram` exec command. |
+| `KIWIVM_VEID` · `KIWIVM_API_KEY` · `KIWIVM_PROXY` | A `kiwivm` target's VPS id and API key (KiwiVM panel → API), and an optional `http://host:port` proxy for the calls (unset = direct). The names are whatever the target's `veid_env` / `key_env` / `proxy_env` say; these are the defaults. The key is masked in every log line and error and never reaches the browser. With `docker compose`, each one also has to be listed under the service's `environment:`. |
 | `PORT` | Listen port (default `3100`). |
 | `LOG_LEVEL` | Fastify log level (default `warn`). |
 | `CONFIG_DIR` / `DATA_DIR` | Override the config and database locations (defaults `./config`, `./data`). |

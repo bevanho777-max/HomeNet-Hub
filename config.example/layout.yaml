@@ -317,6 +317,16 @@ grid:
   #   more_label: "View all"
   #   more_label_en: "View all"
 
+  # v2.48 VPS card (a `kiwivm` target, vps_example in targets.yaml): transfer used / total
+  # with a bar (80% yellow, 95% red), next reset and days left, month-end projection (red
+  # above the total), memory, disk and the last 30 days' daily transfer; the header says the
+  # status and the data time, or "API error" with the last good time when the API fails.
+  # One column wide; the chart grows into whatever height its row gives it. Pairs with
+  # vps_example (disabled there) — uncomment both together.
+  #
+  # - type: vps
+  #   target: vps_example
+
 history:                            # bottom — dual-pane compare
   type: compare                     # B10: N-pane compare (dual_compare still accepted)
   title: "History · Compare"

@@ -686,3 +686,35 @@ targets:
     enabled: false
     map:
       expiry_days: "$.expiry_days"
+
+  # ── kiwivm: a BandwagonHost (KiwiVM) VPS from its provider's API (v2.48) ──────────────
+  # Monthly transfer (used / plan, with the reset date and a month-end projection), status,
+  # memory, disk and the last 30 days' daily transfer, read-only from
+  # https://api.64clouds.com/v1/ (getServiceInfo + getLiveServiceInfo every `interval`,
+  # getRawUsageStats every `usage_every`, cached in between). The VPS id and the API key
+  # (KiwiVM panel -> API) go in .env ONLY -- this block names the variables, never the values:
+  #   KIWIVM_VEID=...  KIWIVM_API_KEY=...  (optional) KIWIVM_PROXY=http://192.0.2.5:1080
+  # The key never reaches the snapshot, a log line or an error message (masked), and only
+  # the figures leave the collector (no e-mail, address or SSH port). A failed call keeps
+  # the last good figures on the card with their time and the error; repeated failures
+  # back off 5 -> 10 -> 20 -> 40 -> 60 min. Render it with a `type: vps` card (layout.yaml).
+  # Per the API docs data_counter and plan_monthly_data are both multiplied by
+  # monthly_data_multiplier; units are KiwiVM's (1 GB = 2^30 bytes, 1 TB = 1000 GB).
+  - id: vps_example
+    name: "VPS"
+    name_en: "VPS"
+    enabled: false
+    source:
+      type: kiwivm
+      veid_env: KIWIVM_VEID       # names of .env variables (these are the defaults)
+      key_env: KIWIVM_API_KEY
+      proxy_env: KIWIVM_PROXY     # unset or empty in .env = direct
+      interval: 5m
+      usage_every: 1h
+      timeout: 15s
+    map:
+      vps_traffic: { v: "$.used", max: "$.total" }   # percent; colours from metrics.yaml (80 / 95)
+      vps_used_gb: "$.used_gb"
+      vps_mem: "$.mem.pct"
+      vps_disk: "$.disk.pct"
+      vps_status: "$.status"

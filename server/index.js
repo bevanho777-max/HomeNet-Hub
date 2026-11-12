@@ -33,6 +33,7 @@ import { NodeLedger, RANGE_DAYS, addDays } from './node_usage.js';
 import { dayOf, dayStart } from './usage.js';
 import { EngineDetector, PROM_JOBS } from './engine.js';
 import { ComfyCollector } from './collectors/comfyui.js';
+import { KiwiVmCollector } from './collectors/kiwivm.js';
 import { discoverTarget } from './collectors/discovery.js';
 import { UserStore } from './store/user_store.js';
 import { EffectiveStore } from './config/effective.js';
@@ -131,7 +132,9 @@ const liveBus = {
 };
 // v2.32: ComfyUI nodes (read-only); its finished-job table lives in the same database file
 const comfy = new ComfyCollector(join(DATA_DIR, 'homenet.db'));
-const scheduler = new Scheduler({ snapshot, tsdb, env: process.env, vault, credStore, litellmKeys, usage, live, liveBus, engine, comfy });
+// v2.48: KiwiVM VPS targets (read-only API; daily transfer + last good figures in the same database file)
+const kiwivm = new KiwiVmCollector(join(DATA_DIR, 'homenet.db'));
+const scheduler = new Scheduler({ snapshot, tsdb, env: process.env, vault, credStore, litellmKeys, usage, live, liveBus, engine, comfy, kiwivm });
 console.log(`[litellm] key API ${litellmKeys.configured ? `enabled (${litellmKeys.status().base_url})` : `off — ${litellmKeys.reason}`}`);
 console.log(`[vault] ${vault.locked ? `locked — ${vault.reason}` : 'unlocked'}`
   + ` (${credStore.count()} credential(s) stored)`);

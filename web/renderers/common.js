@@ -70,10 +70,14 @@ export function ring(label, m) {
 // cuts it. v2.28: no line is reserved -- without a `sub` the cell is two lines -- and in a row
 // where not every cell has a second line, fit.js puts it on the value line instead.
 // `value` is HTML when `html` is set (callers escape), text otherwise.
-export function cellHtml({ label, value, cls = '', sub = '', itemCls = '', short = null, subShort = null, labelShort = null, html = false }) {
-  const attr = (s) => (s != null && s !== '' ? ` data-short="${esc(s)}"` : '');
-  return `<div class="item${itemCls ? ` ${itemCls}` : ''}"><span class="label fit"${labelShort !== label ? attr(labelShort) : ''}>${esc(label)}</span>`
+// v2.48 `last` = { text, forms: [shorter, ...] }: a small figure on the value line, right of the value (.vlast,
+// as the node cells' 「上次 xx」); `title` = the cell's own title.
+export function cellHtml({ label, value, cls = '', sub = '', itemCls = '', short = null, subShort = null, labelShort = null, html = false, last = null, title = '' }) {
+  const attr = (s, n = '') => (s != null && s !== '' ? ` data-short${n}="${esc(s)}"` : '');
+  const lf = last ? [...new Set((last.forms || []).filter((f) => f && f !== last.text))] : [];
+  return `<div class="item${itemCls ? ` ${itemCls}` : ''}${last ? ' has-last' : ''}"${title ? ` title="${esc(title)}"` : ''}><span class="label fit"${labelShort !== label ? attr(labelShort) : ''}>${esc(label)}</span>`
     + `<span class="value fit${cls ? ` ${cls}` : ''}"${attr(short)}>${html ? value : esc(value)}</span>`
+    + (last ? `<span class="vlast fit"${attr(lf[0])}${attr(lf[1], '2')}${attr(lf[2], '3')}>${esc(last.text)}</span>` : '')
     + (sub ? `<span class="sub fit"${attr(subShort)}>${esc(sub)}</span>` : '')
     + '</div>';
 }

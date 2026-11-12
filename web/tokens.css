@@ -686,6 +686,39 @@ h2:empty { display: none; } /* 堆叠卡外框无标题时不留空行 */
 .spark .col .b { width: 56%; max-width: 18px; height: calc((100% - 14px) * var(--f, 0) + 4px); border-radius: 5px 5px 0 0; background: linear-gradient(180deg, var(--cyan), rgba(79,227,208,0.18)); box-shadow: 0 0 10px -2px rgba(79,227,208,0.5); min-height: 3px; }
 .spark .col .d { font-size: 10px; color: var(--muted2); line-height: 1; white-space: nowrap; }
 
+/* ---------- v2.48 VPS 卡(type: vps,web/renderers/vps.js)---------- */
+/* One column: the transfer line and its bar, four standard cells (2 x 2 below 456px inside, 4 across
+   from there -- 4 x 108 + 3 x 8), and the 30-day chart, which takes whatever height the row leaves
+   (min 28px), so a card beside the taller Per-Project card grows its bars instead of a blank strip.
+   Its natural height (header + 207px) stays under that card's at every width. Nothing wraps. */
+.card[data-kind="vps"] > .card-body { display: flex; flex-direction: column; }
+.vps { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+.vps-use { flex: none; display: flex; align-items: baseline; gap: var(--s2); min-width: 0; }
+.vps-use > .vps-lbl { flex: none; font-size: var(--cell-label); line-height: var(--cell-l); color: var(--muted2); letter-spacing: 0.6px;
+  text-transform: uppercase; opacity: 0.7; white-space: nowrap; }
+.vps-use > .vps-amt { flex: 1 1 auto; min-width: 0; font-size: var(--cell-value); line-height: var(--cell-v); font-weight: 500;
+  white-space: nowrap; overflow: hidden; font-variant-numeric: tabular-nums; }
+.vps-use > .vps-pct { flex: none; font-size: var(--cell-value); line-height: var(--cell-v); font-weight: 600; white-space: nowrap;
+  font-variant-numeric: tabular-nums; }
+.vps-bar { flex: none; height: 6px; margin-top: 6px; border-radius: 3px; background: var(--track); overflow: hidden; text-shadow: none; }
+.vps-bar > i { display: block; height: 100%; min-width: 2px; border-radius: 3px; background: linear-gradient(90deg, rgba(79,227,208,0.45), var(--cyan)); }
+.vps-bar.lv-ok > i { background: linear-gradient(90deg, color-mix(in srgb, var(--green) 45%, transparent), var(--green)); }
+.vps-bar.lv-warn > i { background: linear-gradient(90deg, color-mix(in srgb, var(--yellow) 45%, transparent), var(--yellow)); }
+.vps-bar.lv-danger > i { background: linear-gradient(90deg, color-mix(in srgb, var(--red) 45%, transparent), var(--red)); }
+.card .vps > .kv { --kc: 2; margin-top: var(--s2); grid-template-columns: repeat(var(--kc), minmax(var(--cell-min), var(--cell-max)));
+  justify-content: space-between; }
+@container card (min-width: 456px) { .card .vps > .kv { --kc: 4; } }
+.vps-spark { flex: 1 1 auto; min-height: 28px; margin-top: var(--s2); display: flex; align-items: stretch; gap: 2px;
+  border-bottom: 1px solid var(--hair); }
+.vps-spark > .c { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; }
+.vps-spark > .c > i { display: block; width: 100%; max-width: 16px; height: calc(100% * var(--f, 0)); min-height: 2px;
+  border-radius: 2px 2px 0 0; background: linear-gradient(180deg, var(--cyan), rgba(79,227,208,0.22)); box-shadow: 0 0 8px -3px rgba(79,227,208,0.6); }
+.vps-spark > .c.today > i { opacity: 0.65; }   /* today is still being counted */
+.vps-spark > .c.none > i { height: 2px; background: var(--hair2); box-shadow: none; }   /* no samples that day */
+.vps-axis { flex: none; display: flex; align-items: baseline; gap: var(--s2); margin-top: 3px; font-size: 10px; line-height: 12px; color: var(--muted2); }
+.vps-axis > .fit { flex: none; white-space: nowrap; overflow: hidden; }
+.vps-axis > .fit.mid { flex: 1 1 auto; min-width: 0; text-align: center; }
+
 /* ---------- 状态色文本 ---------- */
 .lv-ok { color: var(--green); text-shadow: 0 0 14px color-mix(in srgb, var(--green) 50%, transparent); }
 .lv-warn { color: var(--yellow); text-shadow: 0 0 14px color-mix(in srgb, var(--yellow) 50%, transparent); }

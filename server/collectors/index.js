@@ -72,6 +72,8 @@ export class Scheduler {
     // v2.32 ComfyUI nodes (2 s, read-only; see comfyui.js)
     const comfyT = enabled.find((t) => t.source?.type === 'comfyui');
     if (this.ctx.comfy) this.ctx.comfy.configure(comfyT || null, { timeoutMs: parseDuration(comfyT?.source?.timeout, 1500) });
+    // v2.48 KiwiVM VPS targets (kiwivm.js keeps each one's last good figures and back-off)
+    if (this.ctx.kiwivm) this.ctx.kiwivm.configure(enabled.filter((t) => t.source?.type === 'kiwivm'));
     this.ctx.snapshot.prune(enabled.map((t) => t.id));
 
     for (const target of enabled) {
@@ -87,7 +89,7 @@ export class Scheduler {
         type === 'inference_live' || type === 'comfyui' ? 2000
           : type === 'usage' || type === 'usage_projects' || type === 'node_speed' ? 30000
           : type === 'http' ? 1500 : type === 'demo' ? 2000
-          : type === 'tls' ? 3600000 : type === 'tcp' ? 10000
+          : type === 'tls' ? 3600000 : type === 'tcp' ? 10000 : type === 'kiwivm' ? 300000
             : type === 'prometheus' ? 10000 : type === 'ssh' ? 10000
               : type === 'inference_nodes' ? 60000 : 8000);
       const tick = () => {
@@ -187,6 +189,23 @@ export class Scheduler {
         snapshot.update(target.id, { online: true, metrics: {}, extra: { comfy: view } });
         const rows = this.ctx.comfy.historyRows(target.id, view);
         if (rows.length) tsdb.record(rows);
+        return;
+      }
+      // v2.48: a KiwiVM (BandwagonHost) VPS -- transfer, reset, status, memory, disk (kiwivm.js). A failed API
+      // call keeps the last good figures on the card with their time and the error (extra.vps.api); the target
+      // only goes offline when there has never been an answer. Written to the timeseries only when fresh.
+      if (type === 'kiwivm') {
+        if (!this.ctx.kiwivm) throw new Error('kiwivm collector not available');
+        const view = await this.ctx.kiwivm.poll(target, {
+          env, timeoutMs: parseDuration(target.source.timeout, 15000), usageEveryMs: parseDuration(target.source.usage_every, 3600000),
+        });
+        if (!view.has_data) throw new Error(view.api.err || 'no answer from the KiwiVM API yet');
+        const norm = normalize(view, target, metrics);
+        snapshot.update(target.id, { online: true, metrics: norm.metrics, extra: { vps: view } });
+        if (view.fresh) {
+          const rows = samplableRows(target.id, norm, metrics);
+          if (rows.length) tsdb.record(rows);
+        }
         return;
       }
       // v2.24: all usage (counters + LiteLLM) by Beijing day -- see server/usage.js

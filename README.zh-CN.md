@@ -39,7 +39,8 @@
   历史图 N 屏对比(`panes: [...]`)。
 - **采集器** — `http`(拉取)、`http_push`(机器主动推)、`sql`(只读 Postgres)、
   `exec`(白名单本地命令)、`tcp`、`tls`、`prometheus`(抓 node_exporter)、
-  `ssh`(凭据式 Linux 指标)、`demo`(合成)。
+  `ssh`(凭据式 Linux 指标)、`kiwivm`(从服务商 API 读搬瓦工 VPS 的流量与状态,见
+  [VPS 流量](#vps-流量搬瓦工--kiwivm))、`demo`(合成)。
 - **指标模板** — 一个指标 key 同时描述值怎么取、怎么画:`value/max` 复合、`divide`
   缩放、`level_map` 给文本状态着色,以及复合指标逐段着色 + 上标标签(NAS 盘温的盘号、
   网关卡按模型拆开的请求量都是这么来的)。
@@ -162,6 +163,28 @@ join 依然叫不出 master key 的名字 —— 它是配置里的字面量,那
 
 > 每个 `sql` 采集器的 SQL 都只从 `queries/` 下的文件读 —— 从不来自配置,也从不来自前端 ——
 > 最多带一个白名单整数参数。见[安全](#安全)。
+
+---
+
+## VPS 流量(搬瓦工 / KiwiVM)
+
+`kiwivm` 目标从服务商的 API(`api.64clouds.com/v1`,只读)读取一台搬瓦工 VPS,`type: vps`
+卡片显示:本月已用 / 套餐总量与进度条(80% 起黄、95% 起红 —— `metrics.yaml` 里 `vps_traffic`
+的门槛)、下次重置日期与剩余天数、月底推算(本周期日均用量推到重置时刻;超过总量红字)、
+VPS 运行状态、内存、磁盘,以及近 30 天每日流量。`getServiceInfo` + `getLiveServiceInfo`
+每 `interval`(5 分钟)一次,`getRawUsageStats` 每 `usage_every`(1 小时)一次,单次逾时 15 秒。
+
+- **凭据** —— `KIWIVM_VEID`、`KIWIVM_API_KEY` 只放 `.env`,目标里只写变量名。所有错误文字都先遮蔽
+  key,采集器只放出数字(email、IP、SSH 端口都不会进公开的快照)。
+- **失败** —— 卡片沿用最后一次成功的数据并标出时间,标题右边显示「API 错误」(提示里有原因与下次重试
+  时间);连续失败按 5 → 10 → 20 → 40 → 60 分钟退避。最后一次成功的数据也存在 `data/homenet.db`,
+  API 不通时重启照样显示。
+- **历史** —— 已用量、百分比、内存、磁盘写进时序库;每天的流量另有一张表(不受时序 30 天保留期限制)。
+- **单位** —— 与 KiwiVM 一致:「3 TB」套餐的 `plan_monthly_data` 是 3000 × 2³⁰ 字节,所以
+  1 GB = 2³⁰ 字节、1 TB = 1000 GB。按 API 文档,`data_counter` 与 `plan_monthly_data` 都要乘
+  `monthly_data_multiplier`;每日流量也乘同一个系数。
+
+见 [`config.example/targets.yaml`](config.example/targets.yaml) 里的 `vps_example`。
 
 ---
 
@@ -577,6 +600,7 @@ tokens、经 LiteLLM 的 tokens、请求数,以及开始记录以来的累计 to
 | `PG_DSN` | `sql` token 采集器用的只读 Postgres DSN。变量名由目标的 `dsn_env` 决定,`PG_DSN` 是自带示例里用的那个。 |
 | `PUSH_TOKEN_*` | 每个 `http_push` 目标一个共享密钥,变量名必须与该目标的 `token_env` 一致(`openssl rand -hex 32`)。 |
 | `TELEGRAM_BOT_TOKEN` | 可选,内置 `probe_telegram` exec 命令用。 |
+| `KIWIVM_VEID` · `KIWIVM_API_KEY` · `KIWIVM_PROXY` | `kiwivm` 目标的 VPS 编号与 API key(KiwiVM 面板 → API),以及可选的 `http://host:port` 代理(不设 = 直连)。变量名以目标的 `veid_env` / `key_env` / `proxy_env` 为准,这三个是默认值。key 在每一行日志和错误里都被遮蔽,也不会进浏览器。用 `docker compose` 时,每个变量还要列在服务的 `environment:` 下。 |
 | `PORT` | 监听端口(默认 `3100`)。 |
 | `LOG_LEVEL` | Fastify 日志级别(默认 `warn`)。 |
 | `CONFIG_DIR` / `DATA_DIR` | 覆盖配置与数据库位置(默认 `./config`、`./data`)。 |

@@ -126,3 +126,9 @@ metrics:
   prefill_speed: { label: "Prefill t/s", higher_is_better: true }
   decode_speed:  { label: "Decode t/s",  higher_is_better: true }
   role:        { label: "Role" }
+  # v2.48 VPS (a `kiwivm` target): the transfer bar turns yellow at 80%, red at 95%
+  vps_traffic: { label: "本月流量", label_en: "Traffic", unit: "%", divide: 1073741824, format: "{v}/{max}G", thresholds: { warn: 80, danger: 95 } }
+  vps_used_gb: { label: "本月已用", label_en: "Used", unit: "G" }
+  vps_mem:     { label: "内存", label_en: "Memory", unit: "%", thresholds: { warn: 85, danger: 95 } }
+  vps_disk:    { label: "磁盘", label_en: "Disk", unit: "%", thresholds: { warn: 85, danger: 95 } }
+  vps_status:  { label: "状态", label_en: "Status", level_map: { running: ok, stopped: danger, suspended: danger } }
