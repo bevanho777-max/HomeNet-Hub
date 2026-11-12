@@ -49,6 +49,14 @@ on screen is the one from `package.json`, and this file is what needs fixing.
 
 ---
 
+## v2.48.2 — 2026-11-13
+
+**「不支援的设定类型」占位卡的样式:保留卡片的深色底,灰色虚线框、灰色文字(v2.48.1 用 `filter: grayscale` 把底色洗成浅灰)。功能与 v2.48.1 相同。**
+
+*Rebuild required — `web/` 改了。*
+
+- v2.48.1 的 tag 在测试通过前就随一次提交的自动推送(`push.followTags`)上了 origin;已推送的 tag 不改写,样式另发 v2.48.2。
+
 ## v2.48.1 — 2026-11-13
 
 **设定容错:为更新版本写的配置不再让 hub 起不来。不认识的 target 类型跳过、不认识的卡片类型换成灰色小卡「不支援的设定类型:<类型>」、
