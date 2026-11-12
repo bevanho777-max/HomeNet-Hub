@@ -38,6 +38,9 @@ services:
       # llama-server and m133's Strata check one since 2026-11. Unset -> that node's live state / slots are empty.
       - NODE_KEY_M26=${NODE_KEY_M26:-}
       - NODE_KEY_M133=${NODE_KEY_M133:-}
+      - KIWIVM_VEID=${KIWIVM_VEID:-}
+      - KIWIVM_API_KEY=${KIWIVM_API_KEY:-}
+      - KIWIVM_PROXY=${KIWIVM_PROXY:-}
       # Default http://litellm:4000 — the compose service name on the external
       # litellm_default network below, NOT 127.0.0.1: inside this container localhost is
       # the hub itself. Only set this if the proxy lives somewhere else.

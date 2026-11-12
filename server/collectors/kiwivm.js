@@ -1,9 +1,11 @@
 // v2.48 KiwiVM (BandwagonHost) VPS: monthly transfer, reset, status, memory and disk from the provider's
 // own API (https://api.64clouds.com/v1/<call>?veid=..&api_key=..), read-only.
 //
-//   getServiceInfo + getLiveServiceInfo   every `interval` (default 5m); either one is enough for the
-//                                         transfer figures (Live returns everything ServiceInfo does)
-//   getRawUsageStats                      every `usage_every` (default 1h), cached in between
+//   getLiveServiceInfo   every `interval` (default 5m): everything getServiceInfo returns plus the live status,
+//                        memory and disk. Only when it fails is getServiceInfo called instead -- the transfer
+//                        figures stay current, status / memory / disk keep their last good values (with
+//                        their time). Both failing is an API error. (Bevan, 2026-11-13: one call per poll.)
+//   getRawUsageStats     every `usage_every` (default 1h), cached in between
 //
 // The credentials live in the environment only (`veid_env` / `key_env` name the variables, default
 // KIWIVM_VEID / KIWIVM_API_KEY): never in config, the snapshot, the database or a log line. Every error
@@ -123,6 +125,7 @@ function freshState() {
     days: new Map(),              // 'YYYY-MM-DD' -> { in, out, n } (bytes, multiplier NOT applied)
     rawAt: 0, rawNextAt: 0, rawFails: 0, rawErr: null,
     fails: 0, nextAt: 0, err: null, errAt: 0, triedAt: 0,
+    liveErr: null,                // the last poll's getLiveServiceInfo error when getServiceInfo stood in
     cycleStart: null,             // exact start of the current cycle once a reset has been seen
     loaded: false,
   };
@@ -258,13 +261,14 @@ export class KiwiVmCollector {
     }
     if (now < st.nextAt) return this.view(target, { now, fresh: false });
     st.triedAt = now;
-    const [svc, live] = await Promise.allSettled([
-      this._call(target, 'getServiceInfo', creds, timeoutMs),
-      this._call(target, 'getLiveServiceInfo', creds, timeoutMs),
-    ]);
-    const errs = [svc, live].filter((r) => r.status === 'rejected').map((r) => r.reason?.message || String(r.reason));
-    // getLiveServiceInfo returns everything getServiceInfo does, so either one carries the transfer figures
-    const svcJ = svc.status === 'fulfilled' ? svc.value : live.status === 'fulfilled' ? live.value : null;
+    // getLiveServiceInfo returns everything getServiceInfo does: one call per poll; getServiceInfo only
+    // when it fails (the transfer figures from there, status / memory / disk kept from the last good Live)
+    let liveJ = null, svcJ = null;
+    const errs = [];
+    try { liveJ = await this._call(target, 'getLiveServiceInfo', creds, timeoutMs); svcJ = liveJ; } catch (e) { errs.push(e?.message || String(e)); }
+    if (!liveJ) {
+      try { svcJ = await this._call(target, 'getServiceInfo', creds, timeoutMs); } catch (e) { errs.push(e?.message || String(e)); }
+    }
     if (svcJ) {
       const s = pickService(svcJ);
       const prevReset = st.svc?.data_next_reset;
@@ -273,8 +277,9 @@ export class KiwiVmCollector {
       if (st.cycleStart && s.data_next_reset && st.cycleStart >= s.data_next_reset) st.cycleStart = null;
       st.svc = s; st.svcAt = Date.now();
     }
-    if (live.status === 'fulfilled') { st.live = pickLive(live.value); st.liveAt = Date.now(); }
-    if (errs.length) {
+    if (liveJ) { st.live = pickLive(liveJ); st.liveAt = Date.now(); st.liveErr = null; } else st.liveErr = errs[0] || null;
+    // an API error only when neither call answered
+    if (!svcJ) {
       st.err = errs.join('; ');
       st.errAt = now;
     } else st.err = null;
@@ -301,8 +306,9 @@ export class KiwiVmCollector {
       }
     }
     if (svcJ) this._save(target.id, st);
-    // (fresh = both calls answered now: only then are the figures written to the timeseries again)
-    return this.view(target, { now, fresh: errs.length === 0 });
+    // (fresh = Live answered now: only then is every figure current, and only then are they written to the
+    // timeseries again -- a poll that fell back to getServiceInfo would re-write old memory / disk values)
+    return this.view(target, { now, fresh: !!liveJ });
   }
 
   // getRawUsageStats: { data: [{ timestamp, network_in_bytes, network_out_bytes, ... }, ...] }, one sample per
@@ -387,6 +393,7 @@ export class KiwiVmCollector {
       data_at: st.svcAt || null, live_at: st.liveAt || null, raw_at: st.rawAt || null,
       api: {
         ok: !st.err, err: st.err, err_at: st.err ? st.errAt : null, fails: st.fails,
+        live_err: st.err ? null : st.liveErr,
         next_at: st.nextAt || null, raw_err: st.rawErr,
         every: target.source?.interval || '5m', usage_every: target.source?.usage_every || '1h',
       },

@@ -690,8 +690,8 @@ targets:
   # ── kiwivm: a BandwagonHost (KiwiVM) VPS from its provider's API (v2.48) ──────────────
   # Monthly transfer (used / plan, with the reset date and a month-end projection), status,
   # memory, disk and the last 30 days' daily transfer, read-only from
-  # https://api.64clouds.com/v1/ (getServiceInfo + getLiveServiceInfo every `interval`,
-  # getRawUsageStats every `usage_every`, cached in between). The VPS id and the API key
+  # https://api.64clouds.com/v1/ (getLiveServiceInfo every `interval`, getServiceInfo only when
+  # that fails; getRawUsageStats every `usage_every`, cached in between). The VPS id and the API key
   # (KiwiVM panel -> API) go in .env ONLY -- this block names the variables, never the values:
   #   KIWIVM_VEID=...  KIWIVM_API_KEY=...  (optional) KIWIVM_PROXY=http://192.0.2.5:1080
   # The key never reaches the snapshot, a log line or an error message (masked), and only

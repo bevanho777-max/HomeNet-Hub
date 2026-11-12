@@ -49,6 +49,37 @@ on screen is the one from `package.json`, and this file is what needs fixing.
 
 ---
 
+## v2.48.0 — 2026-11-13
+
+**新增「搬瓦工 VPS」卡片:从 KiwiVM 官方 API(`api.64clouds.com/v1`,只读)读一台搬瓦工 VPS —— 本月已用 / 套餐总量与进度条(80% 黄、95% 红)、
+下次重置日期与剩余天数、月底推算(超过总量红字)、运行状态、内存、磁盘、近 30 天每日流量;API 出错时沿用最后一次成功的数据,标出时间与错误。**
+
+*Rebuild required — `server/`、`web/` 改了。`docker-compose.yml` 加 `KIWIVM_VEID` / `KIWIVM_API_KEY` / `KIWIVM_PROXY` 三个环境变量(值在 `.env`)。
+`config/` 新增 `vps_bwg` 目标、`vps_*` 指标与 `type: vps` 卡片(新镜像跑起来之后再加:旧版 schema 不认)。*
+
+- **新的 source 类型 `kiwivm`(`server/collectors/kiwivm.js`)**:每 `interval`(5 分钟)只调 `getLiveServiceInfo`(它包含 `getServiceInfo` 的全部字段,
+  外加状态、内存、磁盘);它失败时才改调 `getServiceInfo` 补流量数字(状态、内存、磁盘沿用最后一次 Live 的,提示里写明时间),两个都失败才算 API 错误。
+  `getRawUsageStats` 每 `usage_every`(1 小时,其间用缓存)。单次逾时 15 秒。(Bevan 2026-11-13 定:每轮只调一个。)
+  - **凭据**:VPS 编号与 API key 只在环境变量(`veid_env` / `key_env`,默认 `KIWIVM_VEID` / `KIWIVM_API_KEY`),配置里只写变量名。所有错误文字
+    (连套接字层抛出的)先遮蔽 key 与 URL 里的 `api_key=` / `veid=`;采集器只放出白名单里的数字,email、IP、SSH 端口、MAC、主机名、截屏都不进快照。
+  - **代理**:`proxy_env`(默认 `KIWIVM_PROXY`)设成 `http://host:port` 就经 CONNECT 隧道走代理,不设 = 直连(Node 内建 `https`,不加依赖)。
+  - **失败**:沿用最后一次成功的数据(`extra.vps.api` 记错误、连续次数、下次重试);连续失败按 5 → 10 → 20 → 40 → 60 分钟退避,`getRawUsageStats` 另有自己的退避。
+    最后一次成功的数据存进 `kiwivm_state`,API 不通时重启照样显示;从没成功过才把目标标成离线。不影响其他采集器(各自的计时器,单次最长约 45 秒)。
+  - **历史**:`vps_traffic`(%)、`vps_used_gb`、`vps_mem`、`vps_disk` 只在这一轮 Live 成功时写进时序库(改由 getServiceInfo 补或失败时不重复写旧值);每天的流量按北京日
+    存进 `kiwivm_day`(同一个数据库文件,不受时序 30 天保留期限制;同一天只被样本数不少于它的回应覆盖)。
+- **换算**:按 API 文档,`data_counter` 与 `plan_monthly_data` 都要乘 `monthly_data_multiplier`(这台是 1);单位与 KiwiVM 套餐一致 —— 「3 TB」套餐的
+  `plan_monthly_data` = 3221225472000 = 3000 × 2³⁰,所以 1 GB = 2³⁰ 字节、1 TB = 1000 GB。`getRawUsageStats` 每 5 分钟一个样本,字段刚开机时是
+  `network_in_kbytes` / `network_out_kbytes`,之后是 `network_in_bytes` / `network_out_bytes`(两种都认);**`data_counter` = 进 + 出**:2026-11-13 逐样本累加
+  与六次读到的 `data_counter` 相差都不到 1.2 KB,所以每日流量用进 + 出、乘同一个系数。
+- **月底推算**:本周期日均(已用 ÷ 已过天数,都已乘系数)推到 `data_next_reset` 那一刻;周期起点 = hub 看到的上一次重置时刻,还没看到过就按重置时刻前推
+  一个日历月;满 1 天才推算(之前显示「不足 1 天」)。提示里写明算法与起点。
+- **`type: vps` 卡片(`web/renderers/vps.js`)**:标题右边 = 运行状态(运行中 / 已停止 / 已暂停)与数据时间,API 出错时是黄色「API 错误 · 最后成功时间」
+  (提示里有原因、连续次数、下次重试、每日流量更新时间、套餐与机房);流量行与进度条;四格(下次重置 + 剩余、月底推算 + 日均、内存、磁盘,都是
+  108–150px 的标准格子,窄卡 2 × 2、内宽 456px 起一排四格);近 30 天每日流量柱状图,吃掉行高剩下的高度(不留空白),没数据的日子画淡色短柱。
+  一栏宽,放在 Token Usage / Per-Project 之后:三栏时与 Per-Project 同一行,九栏时三张并排。中英文都有,时间一律北京时间。
+- **其他**:`cellHtml`(`web/renderers/common.js`)可带 `last`(值右边的小字,同推理节点卡的「上次」)与 `title`,不带时输出不变。
+  `config.example/`、`.env.example`、README 加了范例与说明。
+
 ## v2.47.1 — 2026-11-10
 
 **修正 v2.47.0 旧口径搬迁漏掉的请求数:请求计数器还不存在的日子(m26 10-13 – 10-20,计数器 10-21 才开始),Token Usage 卡当时用的是

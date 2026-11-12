@@ -207,8 +207,10 @@ read-only) and a `type: vps` card shows it: this month's transfer used / plan wi
 (yellow from 80 %, red from 95 % — the `vps_traffic` thresholds in `metrics.yaml`), the
 next reset and the days left, a month-end projection (this cycle's average per day carried
 on to the reset; red above the plan), the VPS status, memory and disk, and the last 30
-days' daily transfer. `getServiceInfo` + `getLiveServiceInfo` are called every `interval`
-(5 min), `getRawUsageStats` every `usage_every` (1 h), each with a 15 s timeout.
+days' daily transfer. Every `interval` (5 min) it calls `getLiveServiceInfo` alone — it returns
+everything `getServiceInfo` does plus the live status, memory and disk — and `getServiceInfo` only
+when that fails (the transfer stays current; status / memory / disk keep their last good values).
+Both failing is an API error. `getRawUsageStats` every `usage_every` (1 h). 15 s timeout each.
 
 - **Credentials** — `KIWIVM_VEID` and `KIWIVM_API_KEY` in `.env` only; the target names the
   variables. Every error text has the key masked, and only figures leave the collector

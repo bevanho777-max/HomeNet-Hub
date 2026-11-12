@@ -171,8 +171,10 @@ join 依然叫不出 master key 的名字 —— 它是配置里的字面量,那
 `kiwivm` 目标从服务商的 API(`api.64clouds.com/v1`,只读)读取一台搬瓦工 VPS,`type: vps`
 卡片显示:本月已用 / 套餐总量与进度条(80% 起黄、95% 起红 —— `metrics.yaml` 里 `vps_traffic`
 的门槛)、下次重置日期与剩余天数、月底推算(本周期日均用量推到重置时刻;超过总量红字)、
-VPS 运行状态、内存、磁盘,以及近 30 天每日流量。`getServiceInfo` + `getLiveServiceInfo`
-每 `interval`(5 分钟)一次,`getRawUsageStats` 每 `usage_every`(1 小时)一次,单次逾时 15 秒。
+VPS 运行状态、内存、磁盘,以及近 30 天每日流量。每 `interval`(5 分钟)只调 `getLiveServiceInfo`
+(它包含 `getServiceInfo` 的全部字段,外加状态、内存、磁盘),它失败时才改调 `getServiceInfo`(流量照常更新,
+状态、内存、磁盘沿用最后一次的值),两个都失败才算 API 错误;`getRawUsageStats` 每 `usage_every`(1 小时)一次。
+单次逾时 15 秒。
 
 - **凭据** —— `KIWIVM_VEID`、`KIWIVM_API_KEY` 只放 `.env`,目标里只写变量名。所有错误文字都先遮蔽
   key,采集器只放出数字(email、IP、SSH 端口都不会进公开的快照)。

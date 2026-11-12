@@ -83,6 +83,8 @@ function headerTag(v) {
   const lines = [t('vps_t_status', st.text), t('vps_t_data', bjFull(v.data_at / 1000), durText(v.api?.every || '5m'))];
   if (v.raw_at) lines.push(t('vps_t_raw', bjWhen(v.raw_at), durText(v.api?.usage_every || '1h')));
   if (v.api?.raw_err) lines.push(t('vps_t_raw_err', v.api.raw_err));
+  // (Live failed, getServiceInfo stood in: transfer current, status / memory / disk from the last good Live)
+  if (v.api?.ok && v.api.live_err) lines.push(t('vps_t_live_err', v.api.live_err, v.live_at ? bjWhen(v.live_at) : '—'));
   if (!v.api?.ok) {
     lines.push(t('vps_t_err', v.api.err || '?', v.api.fails || 0));
     if (v.api.next_at) lines.push(t('vps_t_next', bjWhen(v.api.next_at)));
