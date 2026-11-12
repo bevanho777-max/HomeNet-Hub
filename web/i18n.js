@@ -576,6 +576,9 @@ const ZH = {
   table_title_count: (title, n) => `${title}（共 ${n}）`,
 
   // v2.48 搬瓦工 VPS 卡(KiwiVM API;时间都是北京时间)
+  // v2.48.1 本版不认识的卡片(tolerate.js 换成的灰色占位卡)
+  unsupported_title: (type) => `不支援的设定类型:${type}`,
+  unsupported_note: (target, title) => `此版本不认识,已跳过${target ? ` · 目标 ${target}` : ''}${title ? ` · ${title}` : ''}`,
   vps_traffic: '本月流量',
   vps_reset: '下次重置',
   vps_reset_short: '重置',
@@ -1121,6 +1124,9 @@ const EN = {
   table_title_count: (title, n) => `${title} (${n} total)`,
 
   // v2.48 BandwagonHost VPS card (KiwiVM API; times are Beijing time)
+  // v2.48.1 a card this version cannot draw (the grey placeholder tolerate.js puts in its place)
+  unsupported_title: (type) => `Unsupported config type: ${type}`,
+  unsupported_note: (target, title) => `Not known to this version; skipped${target ? ` · target ${target}` : ''}${title ? ` · ${title}` : ''}`,
   vps_traffic: 'Traffic',
   vps_reset: 'Resets',
   vps_reset_short: 'Reset',

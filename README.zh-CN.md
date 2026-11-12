@@ -30,6 +30,10 @@
   "放开"。只读浏览默认仍公开,除非打开 `REQUIRE_LOGIN_TO_VIEW`。
 - **热重载** — 在宿主机改 YAML,面板约 3 秒内重塑。坏配置会被拒绝并保留上一份好配置
   (面板绝不黑屏)。
+- **设定向前兼容**(v2.48.1)—— 为更新版本写的配置照样能启动这一版:不认识的 target 类型跳过、
+  画不出的卡片类型换成一张灰色小卡「不支援的设定类型:…」、不认识的字段忽略,每一项都在日志和
+  `/healthz`(`config.warnings`)里留警告。YAML 坏掉、缺必填字段、类型不对仍然拒绝。
+  `node server/config/check.js` 只检查配置、不启动任何东西(输出 JSON;退出码 0 = 能启动,1 = 不能)。
 - **推送 agent,零入站端口** — 被监控机主动 POST 到 hub,自身**不开任何监听端口**。
   提供 **Linux**(bash + `/proc` + amdgpu sysfs / `nvidia-smi`)与 **Windows**
   (PowerShell 5.1 + `nvidia-smi`)双平台零依赖 agent。

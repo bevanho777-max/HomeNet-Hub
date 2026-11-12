@@ -322,7 +322,9 @@ const gridCard = {
   required: ['type'],
   properties: {
     target: { type: 'string' },
-    type: { enum: ['machine', 'token', 'service', 'history', 'info', 'stack', 'table', 'nodes', 'comfy', 'vps'] },
+    // v2.48.1 'unsupported' is not written by hand: it is what tolerate.js turns a card of a type this version
+    // does not know into (a small grey placeholder; `unsupported_type` / `target` say what it was)
+    type: { enum: ['machine', 'token', 'service', 'history', 'info', 'stack', 'table', 'nodes', 'comfy', 'vps', 'unsupported'] },
     children: { type: 'array', items: { type: 'string' } }, // B12: stack child target ids
     // v2.22: columns the card takes in the grid (default 1). 2 falls back to the whole row
     // when the screen only has one column; 'full' is always the whole row.
@@ -558,20 +560,26 @@ const validators = {
   theme: ajv.compile(themeSchema),
 };
 
+// One ajv error as the text every caller has always logged ("targets/targets/31/source/type must be equal to ...").
+export const formatError = (kind, e) => `${kind}${e.instancePath || ''} ${e.message}` +
+  (e.params && Object.keys(e.params).length ? ` (${JSON.stringify(e.params)})` : '');
+
 /**
  * Validate one config kind.
  * @returns {{ ok: true } | { ok: false, errors: string[] }}
  */
 export function validate(kind, data) {
+  const r = validateDetailed(kind, data);
+  return r.ok ? { ok: true } : { ok: false, errors: r.errors.map((e) => formatError(kind, e)) };
+}
+
+/** v2.48.1 the raw ajv errors (instancePath / keyword / params), for tolerate.js. */
+export function validateDetailed(kind, data) {
   const v = validators[kind];
-  if (!v) return { ok: false, errors: [`unknown config kind: ${kind}`] };
-  const ok = v(data);
-  if (ok) return { ok: true };
-  const errors = (v.errors || []).map(
-    (e) => `${kind}${e.instancePath || ''} ${e.message}` +
-      (e.params && Object.keys(e.params).length ? ` (${JSON.stringify(e.params)})` : '')
-  );
-  return { ok: false, errors };
+  if (!v) return { ok: false, errors: [{ instancePath: '', keyword: 'kind', message: `unknown config kind: ${kind}`, params: {} }] };
+  if (v(data)) return { ok: true, errors: [] };
+  // (copied: ajv reuses its errors array on the next call)
+  return { ok: false, errors: (v.errors || []).map((e) => ({ ...e })) };
 }
 
 // ── cross-file referential checks (§2: catch dangling target ids) ───
@@ -596,6 +604,8 @@ export function crossValidate({ metrics, targets, layout }) {
   };
 
   for (const c of layout?.grid || []) {
+    // (v2.48.1: a placeholder for a card this version cannot draw references nothing it needs)
+    if (c.type === 'unsupported') continue;
     refTarget(c.target, `layout.grid[type=${c.type}]`);
     (c.rings || []).forEach((m) => refMetric(m, `layout.grid[${c.target}].rings`, c.target));
     // only string items are metric keys (machine/service); info items are

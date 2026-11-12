@@ -1,6 +1,6 @@
 {
   "name": "homenet-hub",
-  "version": "2.48.0",
+  "version": "2.48.1",
   "private": false,
   "type": "module",
   "description": "Config-driven, self-hostable home-lab monitoring dashboard. Fastify + SQLite, YAML-configured, hot-reloadable.",
@@ -21,7 +21,8 @@
   "scripts": {
     "start": "node server/index.js",
     "dev": "node --watch server/index.js",
-    "check": "node --check server/index.js"
+    "check": "node --check server/index.js",
+    "test": "node --test test/*.test.mjs"
   },
   "engines": {
     "node": ">=20"

@@ -37,6 +37,13 @@ you see the whole thing working before wiring up anything real.
   the board stays public unless `REQUIRE_LOGIN_TO_VIEW` says otherwise.
 - **Hot-reload** — edit YAML on the host and the panel re-shapes in ~3 s. A bad edit is
   rejected and the last good config stays live (the panel never goes dark).
+- **Forward-compatible config** (v2.48.1) — a config written for a newer release still
+  starts this one: a target of a source type it does not know is skipped, a card of a type
+  it cannot draw becomes a small grey "Unsupported config type: …" placeholder, and an
+  unknown field is ignored — each with a warning in the log and in `/healthz`
+  (`config.warnings`). Broken YAML, a missing required field or a wrong type is still
+  refused. `node server/config/check.js` checks a config without starting anything
+  (JSON out; exit 0 = it would start, 1 = it would not).
 - **Push agents, zero inbound ports** — monitored machines POST to the hub, opening
   **no listening port** of their own. Zero-dependency agents ship for **Linux**
   (bash + `/proc` + amdgpu sysfs / `nvidia-smi`) and **Windows** (PowerShell 5.1 +

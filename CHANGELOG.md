@@ -49,6 +49,30 @@ on screen is the one from `package.json`, and this file is what needs fixing.
 
 ---
 
+## v2.48.1 — 2026-11-13
+
+**设定容错:为更新版本写的配置不再让 hub 起不来。不认识的 target 类型跳过、不认识的卡片类型换成灰色小卡「不支援的设定类型:<类型>」、
+不认识的字段忽略,每项都记警告(日志 `[config:warn]`、`/healthz` 的 `config.warnings`),其余卡片照常。YAML 坏掉、缺必填字段、类型不对仍然拒绝,
+热重载时保留旧配置。新增检查模式 `node server/config/check.js`:只载入配置、不起服务,`homenet-deploy.sh --rollback` 退回前用它(或临时容器)检查。**
+
+*Rebuild required — `server/`、`web/` 改了。`config/` 不用改。*
+
+- **起因**:v2.48.0 加了 `type: kiwivm` 目标与 `type: vps` 卡,退回 v2.47.1 时旧版开机校验失败直接退出 —— 回退前得手动改 config,紧急时容易出错。
+- **`server/config/tolerate.js`**(载入时、严格校验之前):
+  - target 的 `source.type` 不认识 → 跳过这个 target;画它的卡片(任何类型)换成占位卡,stack 卡去掉这个子项、nodes 卡去掉以它为 probe / speed 的栏,
+    状态栏与 history 的列表去掉它的 id;
+  - 卡片 `type` 不认识 → 同一位置换成占位卡(`type: unsupported`,带 `unsupported_type` / `target` / `title`);
+  - schema 不允许多余字段的地方出现不认识的字段(`additionalProperties: false`:指标门槛、节点 `engine` / `live` / `counters`、`when_down` …)→ 忽略那个字段;
+    本来就允许多余字段的地方(target、source、卡片本身)照旧不管。
+  - 其他错误(YAML 语法、缺必填、类型 / 格式不对、指向不存在的 target)照旧:开机拒绝,热重载保留上一份。
+- **占位卡(`web/renderers/unsupported.js`)**:灰色虚线框、一栏宽、不拉宽,标题「不支援的设定类型:<类型>」/「Unsupported config type: <type>」,
+  一行小字「此版本不认识,已跳过 · 目标 … · 原标题」(放不下就缩、再去掉后段,全文在提示里)。
+- **`server/config/check.js`**:`node server/config/check.js` 用 `CONFIG_DIR`(默认 `/app/config`)按开机同样的方式载入配置,输出一行 JSON
+  (`ok`、`version`、`warnings` / `skipped_targets` / `unsupported_cards`,或 `errors`),退出码 0 = 能启动、1 = 不能。不连网、不碰数据库。
+- **测试**:`npm test`(`node --test`,`test/config_tolerance.test.mjs`):未知 target、未知卡片类型、未知字段、YAML 损坏(热重载保留旧配置)、
+  格式错误仍被拒绝、检查模式的退出码 —— 7 项,Node 20 / 24 都通过。
+- 私有仓 `homenet-deploy.sh --rollback` 同时加了退回前的设定检查与自动修正(只拿掉目标版本不认识的项目,先整份备份),见 REBUILD §7。
+
 ## v2.48.0 — 2026-11-13
 
 **新增「搬瓦工 VPS」卡片:从 KiwiVM 官方 API(`api.64clouds.com/v1`,只读)读一台搬瓦工 VPS —— 本月已用 / 套餐总量与进度条(80% 黄、95% 红)、

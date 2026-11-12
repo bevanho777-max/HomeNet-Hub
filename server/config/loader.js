@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import YAML from 'yaml';
 import { validate, crossValidate } from './schema.js';
+import { tolerate } from './tolerate.js';
 import { VERSION } from '../version.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -131,6 +132,10 @@ export function loadConfig({ demoDismissed = false } = {}) {
   const onExampleBoard = targets.fallback || layout.fallback;
   if (demoDismissed) stripDemoContent(targets, layout);
 
+  // v2.48.1: what this version does not know (a newer release's target / card types, unknown fields) is set
+  // aside with a warning instead of refusing the whole config (tolerate.js); what remains is checked strictly
+  const tolerated = tolerate({ metrics: metrics.doc, targets: targets.doc, layout: layout.doc, theme: theme.doc, themeMissing: !!theme.missing });
+
   const errors = [];
   for (const [kind, m] of [['metrics', metrics], ['targets', targets], ['layout', layout]]) {
     const r = validate(kind, m.doc);
@@ -171,6 +176,10 @@ export function loadConfig({ demoDismissed = false } = {}) {
     // "the operator wrote a real config".
     onExampleBoard,
     demoDismissed: !!demoDismissed,
+    // v2.48.1: what was set aside (tolerate.js) -- logged by ConfigStore, in /healthz, and printed by check.js
+    warnings: tolerated.warnings,
+    skipped_targets: tolerated.skipped_targets,
+    unsupported_cards: tolerated.unsupported_cards,
   };
 }
 

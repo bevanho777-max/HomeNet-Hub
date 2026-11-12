@@ -34,6 +34,7 @@ export class ConfigStore extends EventEmitter {
   start() {
     this.current = loadConfig(this._loadOpts());
     this._log('loaded', `etag=${this.current.etag}${this.current.usingFallback ? ' (config.example fallback)' : ''}`);
+    this._logWarnings(this.current);
     this._watch();
     return this.current;
   }
@@ -46,6 +47,8 @@ export class ConfigStore extends EventEmitter {
       usingFallback: !!this.current?.usingFallback,
       demoMode: !!this.current?.onExampleBoard && !this.current?.demoDismissed,
       lastError: this.lastError,
+      // v2.48.1: what this version set aside from the config it runs (tolerate.js); [] when nothing
+      warnings: this.current?.warnings || [],
     };
   }
 
@@ -81,6 +84,7 @@ export class ConfigStore extends EventEmitter {
       this.current = next;
       this.lastError = null;
       this._log('reloaded', `etag=${next.etag} (changed=${changed}) trigger=${path || '?'}`);
+      if (changed) this._logWarnings(next);
       if (changed) this.emit('change', next);
       // Every successful reload, changed or not: queries/*.sql sit outside the etag, so
       // a SQL-only edit is "unchanged" here yet still has to reach the query cache.
@@ -103,5 +107,10 @@ export class ConfigStore extends EventEmitter {
 
   _log(tag, msg) {
     console.log(`[config:${tag}] ${msg}`);
+  }
+
+  // v2.48.1 each thing tolerate.js set aside, once per load that changed the config
+  _logWarnings(cfg) {
+    for (const w of cfg?.warnings || []) console.warn(`[config:warn] ${w}`);
   }
 }

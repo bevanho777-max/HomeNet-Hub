@@ -719,6 +719,16 @@ h2:empty { display: none; } /* 堆叠卡外框无标题时不留空行 */
 .vps-axis > .fit { flex: none; white-space: nowrap; overflow: hidden; }
 .vps-axis > .fit.mid { flex: 1 1 auto; min-width: 0; text-align: center; }
 
+/* ---------- v2.48.1 不认识的卡片(type: unsupported,web/renderers/unsupported.js)---------- */
+/* A placeholder: grey, dashed, the title and one line; nothing in it grows (fit.js shrinks the line, then cuts its
+   trailing " · " parts -- the full text stays in the title). */
+.card[data-kind="unsupported"] { --accent: var(--muted2); border: 1px dashed color-mix(in srgb, var(--muted2) 55%, transparent);
+  box-shadow: none; filter: grayscale(1); }
+.card[data-kind="unsupported"]::before { display: none; }
+.card[data-kind="unsupported"] h2 { color: var(--muted); margin-bottom: var(--s2); }
+.card[data-kind="unsupported"]:hover { transform: none; }
+.unsup-note { font-size: 11px; line-height: 16px; color: var(--muted2); white-space: nowrap; overflow: hidden; min-width: 0; }
+
 /* ---------- 状态色文本 ---------- */
 .lv-ok { color: var(--green); text-shadow: 0 0 14px color-mix(in srgb, var(--green) 50%, transparent); }
 .lv-warn { color: var(--yellow); text-shadow: 0 0 14px color-mix(in srgb, var(--yellow) 50%, transparent); }

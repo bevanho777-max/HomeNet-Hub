@@ -11,6 +11,7 @@ import { renderTable } from './renderers/table.js';
 import { renderNodes, strataAlive, testingPorts } from './renderers/nodes.js';
 import { renderComfy, comfyInfo, comfyCutTitle, comfyDownState, comfyDownTitle } from './renderers/comfy.js';
 import { renderVps } from './renderers/vps.js';
+import { renderUnsupported } from './renderers/unsupported.js';
 import { initHistory, historyRefresh, relocalizeHistory } from './renderers/history.js';
 import { initMachineDetail, openMachineModal, openNodeModal, openComfyModal, closeMachineModal, bindMachineModal, relocalizeMachineModal } from './renderers/machine_detail.js';
 import { openTableModal, closeTableModal, bindTableModal, relocalizeTableModal } from './renderers/table_detail.js';
@@ -442,8 +443,10 @@ function render() {
 
   // cards
   const cards = [];
-  for (const gc of CONFIG.layout?.grid || []) {
+  for (const [gi, gc] of (CONFIG.layout?.grid || []).entries()) {
     const before = cards.length;
+    // v2.48.1 a card this version cannot draw (tolerate.js): a grey placeholder, one column, never stretched
+    if (gc.type === 'unsupported') { cards.push(renderUnsupported(gc, gi)); continue; }
     const raw = targetById(gc.target);
     const snap = lastSnap[gc.target];
     const target = { ...raw, color: autoColor(raw, snap, gc.type) }; // B14: resolve auto/omitted color
