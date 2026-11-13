@@ -29,7 +29,7 @@ import { demoTokenRows } from './collectors/demo.js';
 import { pivotTokens, TOKEN_RANGE_DAYS } from './token_detail.js';
 import { UsageEngine } from './usage.js';
 import { LiveCollector } from './collectors/live.js';
-import { NodeLedger, RANGE_DAYS, addDays } from './node_usage.js';
+import { NodeLedger, RANGE_DAYS, RULES, addDays } from './node_usage.js';
 import { dayOf, dayStart } from './usage.js';
 import { EngineDetector, PROM_JOBS } from './engine.js';
 import { ComfyCollector } from './collectors/comfyui.js';
@@ -222,12 +222,15 @@ async function ledgerDaily(why) {
       }
       const b = await ledger.backfill(now);
       if (b.days) console.log(`[ledger] backfill: ${b.days} node-day(s)\n  ${b.report.join('\n  ')}`);
+      // v2.49 new rules: the stored days the raw records still cover, recomputed once (then checked again)
+      const rv = await ledger.revise(now);
+      if (rv.checked != null) console.log(`[ledger] rules ${RULES}: ${rv.checked} day(s) recomputed, ${rv.days.length} changed${rv.report.length ? `\n  ${rv.report.join('\n  ')}` : ''}`);
       await usage.refresh();                          // the Token Usage card reads the new days at once
       if (!usage.ready) { console.log('[usage-check] skipped: the Token Usage card has no view yet'); return; }
-      const days = new Set([y, ...b.report.map((x) => (x.match(/\d{4}-\d{2}-\d{2}/) || [])[0]).filter(Boolean)]);
+      const days = new Set([y, ...rv.days, ...b.report.map((x) => (x.match(/\d{4}-\d{2}-\d{2}/) || [])[0]).filter(Boolean)]);
       for (const d of [...days].sort()) {
         if (!ledger.hasDay(d)) continue;
-        if (d !== y && ledger.lastCheck(d)) continue;
+        if (d !== y && !rv.days.includes(d) && ledger.lastCheck(d)) continue;
         const r = ledger.check(d, usage);
         if (d === y || !r.ok) console.log(`[usage-check] ${d}: ${r.ok ? 'all equal' : 'MISMATCH ' + JSON.stringify(r.rows.filter((x) => !x.same))}`);
       }

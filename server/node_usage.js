@@ -21,6 +21,10 @@ import { dayOf, dayStart } from './usage.js';
 import { nodeFigures, nodesOf, llRequestsWindow, KIND_KEYS, covered, promQuery } from './collectors/nodes.js';
 
 export const METHOD = 'v2.47';
+// v2.49 the revision of nodeFigures' rules (restart stitching, the low check): when it changes, revise()
+// recomputes the stored days the raw records still cover. METHOD stays: these are still the ledger's own
+// figures (METHOD tells them from the Token Usage card's legacy ones, drawn as 「旧口径」).
+export const RULES = 'v2.49';
 const KEYS = ['tokens', 'net', 'reqs', 'emb_tokens', 'emb_reqs', 'll_tokens', 'll_reqs', 'emb_ll_tokens', 'emb_ll_reqs'];
 const CHECK_KEYS = ['tokens', 'reqs', 'll_tokens', 'll_reqs'];
 const DAY = 86400;
@@ -300,6 +304,37 @@ export class NodeLedger {
       }
     }
     return { days: n, report, sources: src };
+  }
+
+  /**
+   * v2.49 once per change of the computation (RULES, kept in tsdb_meta): every stored v2.47 node-day that
+   * can still be recomputed exactly -- LiteLLM's per-request log and Prometheus both still have it -- is
+   * computed again and re-saved where a figure changed (v2.49: m25 11-07 had two requests counted twice
+   * at a restart, 11-11 one request missing). Days the raw records no longer cover keep their figure.
+   */
+  async revise(nowSec = Math.floor(Date.now() / 1000)) {
+    const meta = this.db.prepare("SELECT v FROM tsdb_meta WHERE k = 'ledger_rules'").get()?.v || null;
+    if (meta === RULES || !this.target) return { days: [], report: [] };
+    const today = dayOf(nowSec);
+    const src = await this.sources();
+    const days = this.db.prepare('SELECT DISTINCT day FROM node_day WHERE method = ? AND day < ? ORDER BY day').all(METHOD, today).map((r) => r.day)
+      .filter((d) => src.logs != null && src.logs <= dayStart(d) && src.prom != null && src.prom <= dayStart(d) - 3600);
+    const report = [], changed = new Set();
+    for (const day of days) {
+      let res;
+      try { res = await this.computeDay(day, { full: true }); } catch (e) { report.push(`${day}: ${e?.message || e}`); continue; }
+      for (const [node, r] of Object.entries(res)) {
+        const old = this.stored(node, day);
+        if (!old || old.method !== METHOD || !r.exact || !Object.keys(r.figures).length) continue;
+        const diff = Object.entries(r.figures).filter(([k, v]) => typeof v === 'number' && Math.round(old.figures[k] ?? NaN) !== Math.round(v));
+        if (!diff.length) continue;
+        this._save(node, day, r.figures, METHOD);
+        changed.add(day);
+        report.push(`${node} ${day}: ${diff.map(([k, v]) => `${k} ${old.figures[k] ?? '—'} -> ${v}`).join(', ')}`);
+      }
+    }
+    this.db.prepare("INSERT OR REPLACE INTO tsdb_meta (k, v) VALUES ('ledger_rules', ?)").run(RULES);
+    return { days: [...changed], report, checked: days.length };
   }
 
   // ── the check ─────────────────────────────────────────────────────

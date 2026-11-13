@@ -37,13 +37,9 @@
 // server's start (llama-log-exporter.py publishes it -- the mirror's process start, a unit's
 // invocation start -- so a server restarted at 04:35 whose first scrape is at 21:00 still
 // counts from 04:35), else from its first sample; it ends at the last sample (a dead series,
-// a scrape that broke) and has a hole where the counter dropped across a missing stretch.
+// a scrape that broke) (v2.49: no hole at a restart any more -- see coverOf).
 // Today's figure = the counter + the LiteLLM requests (that produced tokens) in the minutes
-// it did not cover, so a gap never shows as missing usage. A counter is reported as broken
-// (counters.kinds[k].error, the card says "Counter error") when it could not be read, when
-// the node's engine is up but Prometheus does not scrape it, or when it counts less than
-// LiteLLM delivered to the node while it was covering (the last 2 minutes left out: a
-// request LiteLLM has logged may not be in the latest scrape yet).
+// it did not cover, so a gap never shows as missing usage.
 //
 // v2.46 ONE computation (nodeFigures) for a node's figure over ANY window -- the card's today (live,
 // every minute), each finished day (server/node_usage.js, 00:10, stored in node_day and used by the
@@ -53,10 +49,16 @@
 //           counter's last scrape and finished after it, before the restart -- the server counted it,
 //           the restart took the count away before Prometheus read it (m133 2026-11-08 19:34, 32,956
 //           tokens). The rows come one per request (node_requests.sql) with start and end.
-// A counter that reads lower than LiteLLM, or that Prometheus does not scrape, is FLAGGED (the card
-// says "Counter error") but still gives its figure -- before v2.46 the card stopped writing (its line
-// froze, m133 11-08 at 421,689) while the Token Usage card switched that node-day to LiteLLM's total,
-// which counted a request that ran across midnight on both days.
+// A counter that reads lower than LiteLLM, or that Prometheus does not scrape, is FLAGGED but still
+// gives its figure -- before v2.46 the card stopped writing (its line froze, m133 11-08 at 421,689)
+// while the Token Usage card switched that node-day to LiteLLM's total, which counted a request that
+// ran across midnight on both days.
+// v2.49 (m25 2026-11-13: "Counter error" on and off from 06:57 to past noon, for ONE request the
+// 06:54 restart took away): the lost-at-restart rule takes every request that ended between the
+// last scrape and the restart, the low check only compares requests the counter has had the chance
+// to count, the figure is never below what LiteLLM delivered while the counter covered, and the card
+// never shows "Counter error" again -- the figure always, a small yellow ≈ beside it where it is
+// really uncertain (kinds[k].mark: reason and source in the title). See nodeFigures.
 import { collectSqlRowsInts } from './sql.js';
 import { nodeCounters } from '../engine.js';
 
@@ -163,25 +165,56 @@ export async function promQuery(promUrl, q, time) {
   return j.data?.result || [];
 }
 
-const GAP_SEC = 300;       // samples further apart than this are a missing stretch
 const TAIL_SEC = 120;      // a series whose last sample is this recent is still running
+const SKEW_SEC = 2;        // LiteLLM's endTime vs the scrape's timestamp (both on 24; the server finished first)
 
-/** a counter's covered stretch(es) of [from, end] from its raw samples (see the header), and
- *  (v2.46) every drop -- a server restart -- as [last sample before it, first sample after it] */
+/**
+ * a counter's covered stretch of [from, end] from its raw samples (see the header), its newest sample
+ * (`last`), and every drop -- a server restart, or a counter reset -- with the sample before it (p),
+ * the first after it (q) and the value there (x: what the new process had counted by q).
+ * v2.49: a drop no longer cuts a hole in the cover. What the old process counted after p is put back
+ * from LiteLLM's rows by nodeFigures (`lost`); what the new process counted is in x. Filling the hole
+ * from LiteLLM by start minute (v2.29-v2.48) counted a request served by the new process before q twice.
+ */
 function coverOf(values, base, from, end) {
-  const out = [], drops = [];
-  let a = from, prevT = from, prevX = base;
+  const restarts = [];
+  let prevT = from, prevX = base, last = null;
   for (const [t, v] of values) {
     const tt = Number(t), x = Number(v);
     if (!Number.isFinite(x)) continue;
-    if (prevX != null && x < prevX) drops.push([prevT, tt]);
-    // a drop across a missing stretch: the server restarted somewhere in it, and what it
-    // counted between the last sample and the restart is lost
-    if (prevX != null && x < prevX && tt - prevT > GAP_SEC) { if (prevT > a) out.push([a, prevT]); a = tt; }
-    prevT = tt; prevX = x;
+    if (prevX != null && x < prevX) restarts.push({ p: prevT, q: tt, x });
+    prevT = tt; prevX = x; last = tt;
   }
-  if (values.length) out.push([a, end - prevT <= TAIL_SEC ? end : prevT]);
-  return { cover: out, drops };
+  return { cover: last != null ? [[from, end - prevT <= TAIL_SEC ? end : prevT]] : [], restarts, last };
+}
+
+const promLabel = (v) => String(v).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+
+/**
+ * v2.49 when the old process stopped counting, for each restart: the first scrape after p that
+ * FAILED (Prometheus' `up` = 0 -- nothing answered then, so the old process was gone), else q.
+ * Restarts of several series of one counter at the same scrape (prompt / cached / predicted tokens)
+ * are one restart; their x add up.
+ */
+async function restartCuts(promUrl, list) {
+  const merged = [];
+  for (const r of list.sort((a, b) => a.p - b.p)) {
+    const m = merged.find((x) => x.instance === r.instance && x.job === r.job && Math.abs(x.p - r.p) <= 2 && Math.abs(x.q - r.q) <= 2);
+    if (m) m.x += r.x; else merged.push({ ...r });
+  }
+  for (const r of merged) {
+    r.cut = r.q;
+    if (!r.instance) continue;
+    try {
+      const sel = `up{instance="${promLabel(r.instance)}"${r.job ? `,job="${promLabel(r.job)}"` : ''}}`;
+      const span = Math.max(1, Math.ceil(r.q - r.p));
+      for (const s of await promQuery(promUrl, `${sel}[${span}s] @ ${Math.floor(r.q)}`, Math.floor(r.q))) {
+        const f = (s.values || []).find(([t, v]) => Number(t) > r.p && Number(t) < r.q && Number(v) === 0);
+        if (f) r.cut = Math.min(r.cut, Number(f[0]));
+      }
+    } catch { /* unknown: q, and the bound in nodeFigures keeps it from counting twice */ }
+  }
+  return merged;
 }
 
 export function mergeCover(list) {
@@ -227,9 +260,9 @@ async function serverStarts(promUrl, s0, s1) {
  */
 export async function promCounterWindow(promUrl, selectors, startSec, endSec) {
   const s0 = Math.floor(startSec), s1 = Math.floor(endSec), span = s1 - s0;
-  if (span <= 0) return { value: 0, cover: [], drops: [] };
-  let total = 0, starts = null;
-  const cover = [], drops = [];
+  if (span <= 0) return { value: 0, cover: [], drops: [], restarts: [], last: null };
+  let total = 0, starts = null, last = null;
+  const cover = [], restarts = [];
   for (const sel of selectors) {
     const at = async (q) => new Map((await promQuery(promUrl, q, s1)).map((s) => [seriesKey(s.metric), Number(s.value?.[1])]));
     const fresh = await at(`last_over_time(${sel}[1h] @ ${s0})`);
@@ -248,10 +281,14 @@ export async function promCounterWindow(promUrl, selectors, startSec, endSec) {
       total += counterIncrease(vals, b);
       const c = coverOf(vals, b, from, s1);
       cover.push(...c.cover);
-      drops.push(...c.drops);
+      // (the newest sample of any series: a series that ended earlier -- an exporter replaced the
+      //  same day -- no longer counts, so it says nothing about how fresh the counter is)
+      if (c.last != null) last = last == null ? c.last : Math.max(last, c.last);
+      for (const r of c.restarts) restarts.push({ ...r, instance: s.metric?.instance || null, job: s.metric?.job || null });
     }
   }
-  return { value: Math.round(total), cover: mergeCover(cover), drops: mergeCover(drops) };
+  const rs = restarts.length ? await restartCuts(promUrl, restarts) : [];
+  return { value: Math.round(total), cover: mergeCover(cover), drops: mergeCover(rs.map((r) => [r.p, r.q])), restarts: rs, last };
 }
 
 export async function promIncreaseRange(promUrl, selectors, startSec, endSec) {
@@ -296,7 +333,6 @@ export const KIND_KEYS = [['requests', 'reqs'], ['tokens', 'tokens'], ['net', 'n
 export function nodesOf(target) {
   return (target?.nodes || []).map((n) => ({ ...n, counters: nodeCounters(n), chat: new Set(n.endpoints || []), emb: new Set(n.embed_endpoints || []) }));
 }
-const LOW_SKIP_SEC = 120;          // see the header: the newest LiteLLM rows are not compared
 
 /** the scrape address a counter kind depends on (null: not known) */
 function sourceOf(kind, sels, inst) {
@@ -341,9 +377,30 @@ const FIELD = (key) => (key.endsWith('reqs') ? () => 1 : key.endsWith('net') ? (
  * v2.46 THE figures of node `n` over [start, end) -- see the header. `rows`: llRequests() covering
  * the window. Returns { metrics: { <key>: value }, kinds: { <key>: detail }, ll } where key is
  * reqs / tokens / net / emb_reqs / emb_tokens and ll the LiteLLM shares (chat / embed, by start time).
- * A kind whose counter could not be read has no metric (its detail says why).
+ *
+ * v2.49 per kind, the figure is
+ *     max(counter + lost, LiteLLM while covered) + LiteLLM while not covered (gap)
+ *   counter  the exact increase of the server's counters, a restart / reset stitched (counterIncrease:
+ *            the last value read before it + everything the new process counted);
+ *   lost     what the old process counted after its last scrape and took with it: LiteLLM's requests
+ *            that ENDED after that scrape (p) and before the old process stopped (cut, the first
+ *            failed scrape after p), whenever they started -- v2.46-v2.48 only took the ones that had
+ *            started before p, and missed m25's 2026-11-13 06:54:33 request (started 06:54:26, after
+ *            the 06:54:25 scrape; the libc upgrade's restart came at 06:54:38). With no failed scrape
+ *            to tell when the old process stopped: what LiteLLM delivered in (p, q] beyond what the
+ *            new process had counted by q -- never a request twice;
+ *   LiteLLM while covered: its requests that ended by the counter's newest sample (the server counts
+ *            a request when it finishes, so the counter has had the chance to see exactly these) --
+ *            v2.46-v2.48 compared every request that STARTED over 2 minutes ago, so a long request
+ *            that had just finished, not scraped yet, read as "the counter is low".
+ * A kind whose counter cannot be read keeps a figure too, live (`memo`): the last one read plus what
+ * LiteLLM delivered since. Nothing replaces the figure any more. `mark` says when it is really
+ * uncertain -- the counter below LiteLLM ('low'), not collected for over TAIL_SEC while the node is up
+ * ('stale': LiteLLM fills, a direct request waits for the counter), unreadable ('read') -- and the card
+ * puts a small yellow ≈ beside the figure, the reason and the source in its title.
+ * (`error` stays for an unreadable counter only: a finished day computed then is not exact.)
  */
-export async function nodeFigures(prom, n, start, end, rows, { inst = null, health = null, healthErr = null, nodeUp = false, nowSec = end } = {}) {
+export async function nodeFigures(prom, n, start, end, rows, { inst = null, health = null, healthErr = null, nodeUp = false, nowSec = end, memo = null } = {}) {
   const c = n.counters || {};
   const mine = (rows || []).filter((r) => r.node === n.id && r.ok && r.st >= start && r.st < end);
   const ll = { tokens: 0, reqs: 0, emb_tokens: 0, emb_reqs: 0 };
@@ -353,28 +410,63 @@ export async function nodeFigures(prom, n, start, end, rows, { inst = null, heal
   const metrics = {}, kinds = {};
   for (const [kind, key] of KIND_KEYS) {
     if (!c[kind] || !c[kind].length) continue;
-    const k = kinds[key] = { raw: null, gap: 0, lost: 0, cover: [], drops: [], ll_cover: 0, error: null, source: sourceOf(kind, c[kind], inst) };
-    let w;
-    try { w = await promCounterWindow(prom, c[kind], start, end); }
-    catch (e) { k.error = { code: 'read', detail: String(e?.message || e).slice(0, 160) }; continue; }
-    k.raw = w.value; k.cover = w.cover; k.drops = w.drops;
+    const k = kinds[key] = { raw: null, gap: 0, lost: 0, cover: [], drops: [], restarts: [], last: null, ll_cover: 0, error: null, mark: null, source: sourceOf(kind, c[kind], inst) };
     const type = kind.startsWith('embed') ? 'embed' : 'chat';
     const f = FIELD(key);
-    // (drops inside the window only: the restart that took the count away happened here)
-    const drops = w.drops.filter(([p]) => p >= start && p < end);
+    const mk = `${n.id}|${key}`;
+    let w;
+    try { w = await promCounterWindow(prom, c[kind], start, end); }
+    catch (e) {
+      const detail = String(e?.message || e).slice(0, 160);
+      k.error = { code: 'read', detail };
+      if (memo) {
+        // the last figure read today, plus LiteLLM's requests it could not have had yet: covered ones
+        // that ended after its newest sample, uncovered ones logged after it was computed
+        const pv = memo.get(mk);
+        const mineT = mine.filter((r) => r.type === type);
+        if (pv && pv.start === start) {
+          let add = 0;
+          for (const r of mineT) if (covered(pv.cover, r.minute) ? r.en > (pv.last ?? pv.at) - SKEW_SEC : r.en > pv.at) add += f(r);
+          metrics[key] = pv.value + add;
+          k.mark = { code: 'read', detail, since: pv.at, source: 'last+ll' };
+        } else {
+          metrics[key] = mineT.reduce((a, r) => a + f(r), 0);
+          k.mark = { code: 'read', detail, since: null, source: 'll' };
+        }
+      }
+      continue;
+    }
+    k.raw = w.value; k.cover = w.cover; k.drops = w.drops; k.last = w.last;
+    const seen = w.last == null ? -Infinity : w.last - SKEW_SEC;
     for (const r of mine) {
       if (r.type !== type) continue;
       if (!covered(w.cover, r.minute)) { k.gap += f(r); continue; }
-      if (r.minute < nowSec - LOW_SKIP_SEC) k.ll_cover += f(r);
-      if (drops.some(([p, q]) => r.st <= p && r.en > p && r.en <= q)) k.lost += f(r);
+      if (r.en <= seen) k.ll_cover += f(r);
     }
-    // flags only (v2.46): the figure stands
+    // restarts inside the window (see above): rows that ended in (p, cut] -- or, the cut unknown,
+    // LiteLLM's (p, q] beyond the new process' first value
+    for (const d of w.restarts) {
+      if (!(d.p >= start && d.p < end)) continue;
+      let before = 0, all = 0;
+      for (const r of mine) {
+        if (r.type !== type || !covered(w.cover, r.minute) || !(r.en > d.p && r.en <= d.q)) continue;
+        all += f(r);
+        if (r.en <= d.cut) before += f(r);
+      }
+      const lost = Math.max(0, d.cut < d.q ? Math.max(before, all - d.x) : all - d.x);
+      k.lost += lost;
+      k.restarts.push({ p: d.p, q: d.q, cut: d.cut, lost });
+    }
+    const ctr = k.raw + k.lost;
+    const low = kind !== 'net' && ctr < k.ll_cover;
+    metrics[key] = (low ? k.ll_cover : ctr) + k.gap;
     const h = k.source && health ? health.get(k.source) : null;
-    if (k.source && nodeUp && health && !h) k.error = { code: 'missing', instance: k.source };
-    else if (k.source && nodeUp && h && h.health !== 'up') k.error = { code: 'down', instance: k.source, detail: h.error };
-    else if (k.source && nodeUp && healthErr) k.error = { code: 'read', detail: healthErr, soft: true };
-    else if (kind !== 'net' && k.raw + k.lost < k.ll_cover) k.error = { code: 'low', value: k.raw + k.lost, ll: k.ll_cover };
-    metrics[key] = k.raw + k.gap + k.lost;
+    if (low) k.mark = { code: 'low', value: ctr, ll: k.ll_cover, source: 'll' };
+    else if (nodeUp && nowSec - (w.last ?? start) > TAIL_SEC) {
+      k.mark = { code: 'stale', since: w.last, instance: k.source, source: 'ctr+ll',
+        why: health ? (!h ? 'missing' : h.health !== 'up' ? 'down' : null) : (healthErr ? 'read' : null), detail: h?.error || healthErr || null };
+    }
+    memo?.set(mk, { start, value: metrics[key], last: w.last, at: end, cover: w.cover });
   }
   return { metrics, kinds, ll };
 }
@@ -383,6 +475,9 @@ export async function nodeFigures(prom, n, start, end, rows, { inst = null, heal
  * @param ctx.engine  v2.29 EngineDetector: where each node's engine is (for the counters'
  *                    scrape health); nodes without `engine:` are checked by their selectors
  */
+// v2.49 each node / kind's last figure read today: an unreadable counter keeps showing it (+ LiteLLM since)
+const LIVE_MEMO = new Map();
+
 export async function collectNodes(target, env, { engine = null } = {}) {
   const src = target.source || {};
   const nodes = nodesOf(target);
@@ -413,7 +508,7 @@ export async function collectNodes(target, env, { engine = null } = {}) {
     // (a node that is off -- m110 -- is not)
     const eInfo = engine?.has(n.id) ? engine.info(n.id) : null;
     const nodeUp = !!(eInfo && eInfo.engine && !eInfo.error);
-    const fig = src.prometheus ? await nodeFigures(src.prometheus, n, midnight, nowSec, rows, { inst, health, healthErr, nodeUp, nowSec })
+    const fig = src.prometheus ? await nodeFigures(src.prometheus, n, midnight, nowSec, rows, { inst, health, healthErr, nodeUp, nowSec, memo: LIVE_MEMO })
       : { metrics: {}, kinds: {}, ll: { tokens: 0, reqs: 0, emb_tokens: 0, emb_reqs: 0 } };
     put(`${n.id}_ll_reqs`, fig.ll.reqs); put(`${n.id}_ll_tokens`, fig.ll.tokens);
     if (n.emb.size) { put(`${n.id}_emb_ll_reqs`, fig.ll.emb_reqs); put(`${n.id}_emb_ll_tokens`, fig.ll.emb_tokens); }
@@ -421,7 +516,8 @@ export async function collectNodes(target, env, { engine = null } = {}) {
       const k = fig.kinds[key];
       if (!k) continue;
       info.kinds[key] = k;
-      if (k.error) info[`${kind}_error`] = k.error.code;
+      if (k.error) info[`${kind}_error`] = k.error.code;     // (v2.49: an unreadable counter only)
+      if (k.mark) info[`${kind}_mark`] = k.mark.code;
       if (typeof fig.metrics[key] === 'number') put(`${n.id}_${key}`, fig.metrics[key]);
     }
   }

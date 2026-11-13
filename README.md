@@ -685,9 +685,16 @@ the counters and Prometheus follow what answered; a change is logged and the nod
 title shows the current engine. For Prometheus, point the `strata`, `llamacpp` and
 `llama_logs` jobs at the hub with `http_sd_configs` (`http://<hub>:3100/api/prom/sd/<job>`,
 LAN only) and give the nodes the labels the static jobs had (`prom_labels`), so the series
-continue. A counter that cannot be read, that Prometheus does not scrape while the engine is
-up, or that counts less than LiteLLM delivered shows **Counter error** (yellow, reason in the
-title) instead of a 0; the minutes a counter did not cover are filled from LiteLLM's records.
+continue. The minutes a counter did not cover are filled from LiteLLM's records.
+
+**Restarts and gaps never break the figure (v2.49).** A server restart, a counter reset or a few
+failed scrapes are stitched: the last value read before it + what the new process counted + what
+the old process counted after its last scrape (LiteLLM's requests that ended between that scrape
+and the restart -- never one the new counter already has). The figure is never below what LiteLLM
+delivered while the counter was collected, and it is always shown: where it is really uncertain (a
+counter below LiteLLM, one not collected for over 2 minutes while the engine is up, or unreadable)
+a small yellow **≈** stands before it, the reason and the source in the title. The ledger recomputes
+the stored days the raw records still cover once when these rules change.
 
 ---
 

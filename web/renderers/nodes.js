@@ -15,9 +15,9 @@
 // a dead node keeps its slot so the other two do not jump.
 //
 // v2.29: the column's title says which engine the hub found on the node (server/engine.js);
-// a counter the server reports as broken shows "Counter error" in yellow, never a 0, with
-// the reason in the cell's title; a counter that did not cover the whole day says, in the
-// title, how much of the figure came from LiteLLM and for which hours.
+// a counter that did not cover the whole day says, in the title, how much of the figure came
+// from LiteLLM and for which hours. v2.49: the figure is always shown (never "Counter error"
+// in its place); a small yellow ≈ before it where the server marks it really uncertain.
 import { card, esc } from './common.js';
 import { cv, t } from '../i18n.js';
 import { si3 } from '../fmt.js';
@@ -211,11 +211,24 @@ function engineTitle(e) {
   return parts.join(' · ') + (e.error ? `\n${t('engine_err', e.error)}` : '');
 }
 
-function ctrReason(err) {
-  if (err.code === 'missing') return t('ctr_reason_missing', err.instance);
-  if (err.code === 'down') return t('ctr_reason_down', err.instance, err.detail);
-  if (err.code === 'low') return t('ctr_reason_low', nfmt(err.value), nfmt(err.ll));
-  return t('ctr_reason_read', err.detail || '?');
+// v2.49 why a figure carries the ≈ (server/collectors/nodes.js nodeFigures `mark`), and what it is made of
+function ctrMarkTitle(m) {
+  const at = m.since ? hm(m.since) : '—';
+  let reason;
+  if (m.code === 'low') reason = t('ctr_reason_low', nfmt(m.value), nfmt(m.ll));
+  else if (m.code === 'stale') {
+    reason = m.why === 'down' ? t('ctr_reason_stale_down', m.instance || '?', at, m.detail)
+      : m.why === 'missing' ? t('ctr_reason_stale_missing', m.instance || '?', at) : t('ctr_reason_stale', at);
+  } else reason = t('ctr_reason_read', m.detail || '?');
+  const src = m.source === 'ctr+ll' ? t('ctr_src_ctr_ll', at) : m.source === 'last+ll' ? t('ctr_src_last_ll', at) : t('ctr_src_ll');
+  return t('ctr_mark_title', reason, src);
+}
+
+// v2.49 the restarts a figure was stitched across (the newest three; the rest counted)
+function restartLines(list, key) {
+  const rs = list || [];
+  const shown = rs.slice(-3).map((r) => t('ctr_restart_title', hm(r.p), r.lost ? (key.endsWith('reqs') ? nfmt(r.lost) : nfmt(Math.round(r.lost))) : null));
+  return rs.length > 3 ? [t('ctr_restart_more', rs.length - 3), ...shown] : shown;
 }
 
 // the stretches of today a counter did NOT cover, "00:00–04:35, 13:10–13:40"
@@ -298,16 +311,20 @@ export function renderNodes(gc, resolve) {
       return { sub: parts.join(' · '), subShort: short.join(' · ') };
     };
     const reqSub = meta && !cnt.requests ? { sub: t('node_no_req_counter'), subShort: t('abbr_no_counter') } : subOf('ll_reqs', 'emb_reqs', 'emb_ll_reqs');
-    // v2.29 a counter the server reports as broken: "Counter error" in yellow, the reason in
-    // the title; one that missed part of the day: the LiteLLM share of the figure, and when
+    // v2.49 the figure always -- the ledger's, the most credible one there is (v2.29-v2.48 put "Counter
+    // error" in its place); where the server marks it really uncertain, a small yellow ≈ before it, the
+    // reason and the source in the title. The title also says which restarts it was stitched across and
+    // how much of it came from LiteLLM because the counter missed part of the day (and when).
     const usage = (key, label, labelShort, sub) => {
       const k = cnt.kinds?.[key];
-      if (k?.error) {
-        return cell(label, esc(t('node_ctr_err')), { ...sub, cls: 'lv-warn', itemCls: 'lv-warn', short: t('abbr_ctr_err'), labelShort, title: t('ctr_err_title', ctrReason(k.error)) });
-      }
+      const v = mv(key);
       const nowSec = Date.now() / 1000, day0 = Number(meta?.extra?.day_start) || 0;
-      const title = k && k.gap > 0 && day0 ? t('ctr_gap_title', compact(k.gap), gapRanges(k.cover, day0, nowSec)) : '';
-      return cell(label, compact(mv(key)), { ...sub, labelShort, title });
+      const lines = [];
+      if (k?.mark) lines.push(ctrMarkTitle(k.mark));
+      if (k?.restarts?.length) lines.push(...restartLines(k.restarts, key));
+      if (k && k.gap > 0 && day0) lines.push(t('ctr_gap_title', compact(k.gap), gapRanges(k.cover, day0, nowSec)));
+      const mark = k?.mark && v != null ? '<span class="ctr-mark">≈</span>' : '';
+      return cell(label, mark + esc(v == null ? '—' : compact(v)), { ...sub, labelShort, title: lines.join('\n') });
     };
     // busy: "推理中" in cyan the moment the server has a request in flight, before any speed
     const multi = Number(lv?.max_streams) > 1;

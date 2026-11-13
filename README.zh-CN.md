@@ -588,9 +588,12 @@ tokens、经 LiteLLM 的 tokens、请求数,以及开始记录以来的累计 to
 各端口:`/v1/status` 有回应是 Strata,`/slots`(或 `/props`)有回应是 llama.cpp。实时状态、计数器和 Prometheus
 都跟着识别结果走;结果变化时记日志,节点栏的 title 显示当前引擎。Prometheus 那边把 `strata`、`llamacpp`、
 `llama_logs` 三个 job 改成 `http_sd_configs` 指向 hub(`http://<hub>:3100/api/prom/sd/<job>`,只限局域网),
-节点的 `prom_labels` 写成原静态 job 的标签,序列就能接上。计数器读不到、引擎在线但 Prometheus 没在抓、或者
-计到的比经 LiteLLM 的还少时,卡上显示黄色的 **计数来源异常**(原因在 title 里),不显示 0;计数器没覆盖到的
-分钟用 LiteLLM 的记录补上。
+节点的 `prom_labels` 写成原静态 job 的标签,序列就能接上。计数器没覆盖到的分钟用 LiteLLM 的记录补上。
+
+**重启和断档不会打断数字(v2.49)。** 服务重启、计数器归零、短暂抓取失败都自动接上:重启前最后的读数 + 新进程计的增量
++ 旧进程在最后一次抓取之后计的部分(在那次抓取之后、重启之前结束的经 LiteLLM 请求,新计数器已有的不会再算)。数字不会小于
+计数器在采时经 LiteLLM 的量,而且永远显示:真的不确定时(计数器比 LiteLLM 少、引擎在线但计数器超过 2 分钟没采到、读不到计数器)
+数字前加一个黄色小 **≈**,原因和采用的数据来源在 title 里。规则变了,帐本会把原始记录还在的已存日子重算一次。
 
 ---
 

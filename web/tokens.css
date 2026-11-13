@@ -546,6 +546,11 @@ h2:empty { display: none; } /* 堆叠卡外框无标题时不留空行 */
    grey, never the value's status color, so it cannot be mistaken for a reading. 10px is
    the smallest text on the board. */
 .kv .item .value sup { font-size: 10px; font-weight: 400; color: var(--muted2); opacity: 0.85; margin-left: 1px; vertical-align: super; line-height: 0; text-shadow: none; }
+/* v2.49 the 推理节点 card's ≈: a figure the server marks really uncertain (the reason and the source are in
+   the cell's title). Inline on the value line, before the figure, smaller (13px: a value's floor) and
+   yellow -- the cell keeps its size (fit.js shrinks the line like any other value). */
+.kv .item .value .ctr-mark { font-size: 13px; font-weight: 600; color: var(--yellow); margin-right: 2px; vertical-align: 0.06em; line-height: 0;
+  text-shadow: 0 0 10px color-mix(in srgb, var(--yellow) 45%, transparent); cursor: help; }
 /* parts_layout: table (gateway By Model): label left and number right in every slot, two
    cells wide. v2.28: one line, the value line (20px) -- the entries above zero, largest
    first, as many as fit (fit.js fitPtab); the rest are counted in a "+N" after them, with
