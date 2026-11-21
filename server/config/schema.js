@@ -222,6 +222,9 @@ const targetsSchema = {
           // follows the port it actually listens on, and a failed probe while the process runs is yellow
           // 连线中断 / Unreachable, red only when the process is gone (server/comfy_follow.js, web/app.js)
           process: { type: 'string', enum: ['comfyui'] },
+          // v2.50: this status pill follows the role of that ComfyUI / LLM machine (the comfyui target's node id):
+          // 「136 · ComfyUI」 or 「136 · LLM」, judged as the ComfyUI / LLM card judges it (web/renderers/comfy.js)
+          role_chip: { type: 'string', pattern: '^[a-zA-Z0-9_]+$' },
           // v2.20 inference_nodes: which rows of today's usage belong to which node, and
           // the host:port endpoints used to find the litellm instances routing to it.
           nodes: {
@@ -236,7 +239,11 @@ const targetsSchema = {
                 // v2.42 comfyui: ComfyUI here runs only while its owner opens it by hand (m110). With its machine up
                 // and no ComfyUI process the column is grey 未运行 / Not running, not red; nothing restarts it.
                 on_demand: { type: 'boolean' },
-                endpoints: { type: 'array', items: { type: 'string' } },         // chat host:port
+                // v2.50 comfyui: this machine also runs an LLM at times (one or the other) -- the id of its node in the
+                // inference_nodes target; the ComfyUI / LLM card shows whichever runs (server/roles.js)
+                llm: { type: 'string', pattern: '^[a-zA-Z0-9_]+$' },
+                // chat host:port; v2.50 "host:*" = every port of that host (server/endpoints.js)
+                endpoints: { type: 'array', items: { type: 'string' } },
                 // v2.25: where the live state is read (inference_live target): llama.cpp
                 // /slots or Strata /status; key_env names the .env variable with Strata's key
                 live: {
@@ -262,6 +269,9 @@ const targetsSchema = {
                     // v2.46: ports the node's engine USED to answer on -- only in the counter selectors (never
                     // probed), so a finished day can still be recomputed from the series it had then (m25: 9878)
                     counter_ports: { type: 'array', maxItems: 8, uniqueItems: true, items: { type: 'integer', minimum: 1, maximum: 65535 } },
+                    // v2.50: the machine target whose agent reports this engine (extra.llm) -- its port is asked first,
+                    // and Ollama / LM Studio / any OpenAI-compatible server are recognised too (engine.js)
+                    follow: { type: 'string', pattern: '^[a-zA-Z0-9_]+$' },
                   },
                   additionalProperties: false,
                 },

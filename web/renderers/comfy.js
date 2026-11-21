@@ -11,8 +11,20 @@
 // so they stay on the card, greyed, while the node is off. v2.41: while the machine is up, its
 // agent says whether ComfyUI still runs -- yellow 连线中断 if it does (comfyState); v2.43: no process is grey
 // (已手动停止 with m136's stop marker, else 未运行); red only 自动修复失败, when m136's watchdog gave up.
+//
+// v2.50 ComfyUI / LLM 节点 (BACKLOG 64): m110 / m136 take turns running ComfyUI or a large language model, one at a
+// time. The hub judges which (server/roles.js: the one that runs; both -- the one at work, else the one started last;
+// a new role only after two detections in a row) and the column shows that role, in the same place with the same six
+// cells of the same size: a role tag after the machine's name (ComfyUI orange, LLM purple), then
+//   ComfyUI  status / queue / progress / last done / images today / average per image (as before)
+//   LLM      status (latency on its second line) / concurrency-queue / Prefill (上次) / Decode (上次) / requests today /
+//            tokens today -- the 推理节点 card's very cells (nodes.js speedCells, usageCells: the same sources, the same
+//            「上次」 rule, the same ≈), so nothing here computes them a second way.
+// Both off: the column greys out, its status says 离线 · 最后为 LLM 12:20 (未开机 when the machine itself is off) and every
+// other cell keeps its last figure -- today's images / requests / tokens stay until Beijing midnight.
 import { card, esc } from './common.js';
 import { cv, t } from '../i18n.js';
+import { cell as nodeCell, speedCells, usageCells } from './nodes.js';
 
 function hm(ms) {
   const d = new Date(ms), now = new Date();
@@ -180,32 +192,215 @@ function todayCells(n) {
   return cell(t('comfy_today'), String(d.images ?? 0), { sub: jobs, subShort: jobsShort, labelShort: t('abbr_comfy_today') }) + avg;
 }
 
+// ── v2.50 roles ─────────────────────────────────────────────────────────────
+
+const ROLE_NAME = { comfy: 'ComfyUI', llm: 'LLM' };
+const ENGINE_NAME = { strata: 'Strata', llamacpp: 'llama.cpp', ollama: 'Ollama', lmstudio: 'LM Studio', openai: 'OpenAI API' };
+export const roleName = (r) => ROLE_NAME[r] || r;
+
+/** v2.50 extra.llm of a live, fresh machine snapshot (agents/homenet-agent.ps1); null when off / stale / not reported */
+export function llmInfo(m) {
+  if (!m || m.online === false || m.stale) return null;
+  const c = m.extra?.llm;
+  return c && typeof c === 'object' && Number.isFinite(Number(c.procs)) ? c : null;
+}
+const machineUp = (m) => !!(m && m.online !== false && !m.stale);
+
 /**
- * @param gc       layout card ({ type: comfy, target: <comfyui target id>, nodes: [{ node, name }] })
+ * the LLM side's state now: 'busy' | 'idle' | 'cut' | 'stopped' | 'off' (machine off) | 'wait'
+ *   reachable (live reader): busy while requests run, else idle; not reachable: its machine's agent says whether an
+ *   LLM server process runs (yellow 连线中断) or not (grey 未运行); the machine not reporting at all: 未开机
+ */
+export function llmState(lv, m) {
+  if (!machineUp(m)) return lv?.reachable === true ? (Number(lv.busy) > 0 ? 'busy' : 'idle') : 'off';
+  if (lv?.reachable === true) return Number(lv.busy) > 0 || Number(lv.queued) > 0 ? 'busy' : 'idle';
+  const c = llmInfo(m);
+  if (Number(c?.procs) > 0) return 'cut';
+  if (!c && lv?.reachable == null) return 'wait';
+  return 'stopped';
+}
+
+/** why an LLM server that runs does not answer (agent's listen list), as the status's second line */
+function llmCutSub(c) {
+  const ls = Array.isArray(c?.listen) ? c.listen : [];
+  if (!ls.length) return { sub: t('comfy_cut_nolisten'), subShort: t('abbr_comfy_nolisten') };
+  if (ls.every((l) => LOOPBACK.test(String(l?.addr ?? '')))) return { sub: t('comfy_cut_loopback'), subShort: t('abbr_comfy_loopback') };
+  const p = c?.api_port || ls[0]?.port;
+  return { sub: t('comfy_cut_port', p), subShort: t('abbr_comfy_port', p) };
+}
+
+function llmCutTitle(machine, c, error) {
+  const since = Number(c?.since) > 0 ? hm(Number(c.since) * 1000) : '?';
+  return t('llm_cut_title', machine, ENGINE_NAME[c?.engine] || c?.engine || '?', c?.name || '?', c?.pid ?? '?', since, listenText(c), error || '');
+}
+
+/** the time a role was last seen at work, for 离线 · 最后为 LLM 12:20 */
+const lastSeenText = (R) => (R?.last_on ? hm(R.last_on) : '—');
+
+/** the state of a whole column: the (confirmed) role, and what that role's service does now */
+export function columnState(R, n, lv, m) {
+  const role = R?.role === 'llm' ? 'llm' : 'comfy';
+  const offline = R?.state === 'off';
+  const sub = role === 'llm' ? llmState(lv, m) : comfyState(n, m);
+  return { role, offline, sub, power: machineUp(m) };
+}
+
+/** v2.50 the role chip (「136 · ComfyUI」 / 「136 · LLM」): { cls, label, lat, tip } -- the card's own rules */
+export function roleChip(id, short, R, n, lv, m, onDemand = false) {
+  const cs = columnState(R, n, lv, m);
+  const label = `${short} · ${roleName(cs.role)}`;
+  const last = t('role_last', roleName(cs.role), lastSeenText(R));
+  if (!cs.power) return { cls: 'unknown', label, lat: t('machine_off'), tip: t('role_poweroff_title', id, roleName(cs.role), lastSeenText(R)) };
+  if (cs.role === 'comfy' && cs.sub === 'failed') {
+    const c = comfyInfo(m);
+    return { cls: 'offline', label, lat: t('comfy_failed_state'), tip: comfyDownTitle('failed', id, c) };
+  }
+  if (cs.offline) return { cls: 'unknown', label, lat: t('role_offline'), tip: `${t('role_offline_title', id, roleName(cs.role), lastSeenText(R))}\n${last}` };
+  if (cs.role === 'llm') {
+    if (cs.sub === 'busy' || cs.sub === 'idle') return { cls: 'online', label, lat: lv?.latency_ms != null ? `${lv.latency_ms}ms` : '', tip: '' };
+    if (cs.sub === 'cut') return { cls: 'cut', label, lat: t('node_cut'), tip: llmCutTitle(id, llmInfo(m), lv?.error) };
+    return { cls: 'unknown', label, lat: t('comfy_down'), tip: t('llm_stopped_title', id) };
+  }
+  if (cs.sub === 'busy' || cs.sub === 'idle') return { cls: 'online', label, lat: n?.latency_ms != null ? `${n.latency_ms}ms` : '', tip: n?.followed && n?.port ? t('comfy_followed_title', n.port) : '' };
+  if (cs.sub === 'cut') return { cls: 'cut', label, lat: t('node_cut'), tip: comfyCutTitle(id, comfyInfo(m), n?.port, n?.error) };
+  if (cs.sub === 'manual' || cs.sub === 'stopped') {
+    return { cls: 'unknown', label, lat: t(cs.sub === 'manual' ? 'comfy_manual' : 'comfy_down'), tip: comfyDownTitle(cs.sub, id, comfyInfo(m), onDemand) };
+  }
+  return { cls: 'unknown', label, lat: '', tip: '' };
+}
+
+const WHY = { 'only-comfy': 'role_why_only_comfy', 'only-llm': 'role_why_only_llm', 'busy-comfy': 'role_why_busy_comfy', 'busy-llm': 'role_why_busy_llm',
+  'newer-comfy': 'role_why_newer_comfy', 'newer-llm': 'role_why_newer_llm', kept: 'role_why_kept', none: 'role_why_none' };
+
+function roleTagTitle(R) {
+  if (!R) return '';
+  const lines = [t('role_tag_title', roleName(R.role), R.role_since ? hm(R.role_since) : '?')];
+  if (R.why && WHY[R.why]) lines.push(t(WHY[R.why]));
+  if (R.cand && R.cand_n > 0) lines.push(t('role_switching', R.cand === 'off' ? t('role_offline') : roleName(R.cand), R.cand_n, R.confirm || 2));
+  return lines.join('\n');
+}
+
+function head(name, role, rest, R, { mismatch = null } = {}) {
+  const tag = `<span class="role-tag role-${role}"${R ? ` title="${esc(roleTagTitle(R))}"` : ''}>${esc(roleName(role))}</span>`;
+  const mm = mismatch ? `<span class="role-mismatch" title="${esc(t('role_mismatch_title', mismatch.litellm || '?', mismatch.backend, mismatch.engine))}">≠ :${esc(String(mismatch.engine))}</span>` : '';
+  return `<div class="node-head"><span class="node-name">${esc(name)}</span>${tag}<span class="node-port fit" data-min="10">${rest ? `· ${rest}` : ''}${mm}</span></div>`;
+}
+
+// the second line: what runs (ComfyUI: the GPU; LLM: the model, then the GPU), greyed when it is the last one seen
+function gpuText(R, sys) {
+  const g = sys?.gpu ? sys : (R?.info?.comfy_system?.gpu ? R.info.comfy_system : R?.info?.gpu_fallback) || {};
+  return { gpu: g.gpu || null, vram: g.vram_total_gb != null ? `${g.vram_total_gb} GB` : null };
+}
+const clip = (s, n) => (s && s.length > n ? `${s.slice(0, n - 1)}…` : s);
+
+function modelLine(parts, { last = false, title = '', shorts = [] } = {}) {
+  const text = parts.filter(Boolean).join(' · ') || '—';
+  const ds = shorts.filter((x) => x && x !== text).map((x, i) => ` data-short${i ? i + 1 : ''}="${esc(x)}"`).join('');
+  return `<div class="node-model fit${last ? ' is-last' : ''}"${title ? ` title="${esc(title)}"` : ''}${ds}>${esc(text)}</div>`;
+}
+
+// ── ComfyUI mode ──
+function comfyColumn(col, idx, n, mach, R, cs) {
+  const name = cv(col, 'name') || col.node;
+  const state = cs.sub;
+  const stale = NOT_ANSWERING.has(state) || cs.offline;
+  const sys = n?.system || R?.info?.comfy_system || {};
+  const ver = sys.version ? `v${sys.version}` : '';
+  const g = gpuText(R, n?.system);
+  const gpuTitle = g.gpu ? t('comfy_gpu_title', g.gpu, n?.system?.vram_used_gb ?? '—', (n?.system?.vram_total_gb ?? R?.info?.comfy_system?.vram_total_gb) ?? '—') : '';
+  const dim = cs.offline && state !== 'failed';
+  const colCls = dim || state === 'off' || state === 'stopped' || state === 'manual' ? 'node-idle' : state === 'busy' ? 'node-online node-busy' : state === 'cut' ? 'node-online node-cut' : state === 'failed' ? 'node-online node-down' : 'node-online';
+  const status = dim ? offlineCell(R, mach, col.node) : statusCell(state, n || {}, col.node, mach);
+  const cells = status + queueCell(dim ? 'off' : state, n || {})
+    + progressCell(dim ? 'off' : state, n || {}) + lastCell(n || {})
+    + todayCells(n || {});
+  return `<div class="node-col ${colCls}" data-col="${idx}" data-role="comfy">`
+    + head(name, 'comfy', esc(ver), R)
+    + modelLine([g.gpu, g.vram], { last: stale, title: gpuTitle })
+    + `<div class="kv node-kv">${cells}</div>`
+    + '</div>';
+}
+
+// 离线 · 最后为 LLM 12:20 -- or 未开机 when the machine itself is off; grey either way
+function offlineCell(R, mach, id) {
+  const r = roleName(R?.role === 'llm' ? 'llm' : 'comfy'), when = lastSeenText(R);
+  const off = !machineUp(mach);
+  return cell(t('comfy_status'), off ? t('machine_off') : t('role_offline'), {
+    cls: 'node-idle-text', sub: t('role_last', r, when), subShort: t('abbr_role_last', r, when),
+    title: off ? t('role_poweroff_title', id, r, when) : t('role_offline_title', id, r, when),
+  });
+}
+
+// ── LLM mode ──
+const LLM_STATE_CLASS = { busy: 'lv-cool', idle: 'lv-ok', cut: 'lv-warn', stopped: 'node-idle-text', off: 'node-idle-text', wait: '' };
+
+function llmStatusCell(state, lv, m, id) {
+  const lat = lv?.latency_ms != null ? { sub: t('comfy_latency', lv.latency_ms), subShort: `${lv.latency_ms} ms` } : { sub: t('comfy_latency', '—'), subShort: '— ms' };
+  if (state === 'busy') return cell(t('comfy_status'), t('node_busy'), { cls: 'lv-cool', short: t('abbr_busy'), ...lat });
+  if (state === 'idle') return cell(t('comfy_status'), t('node_online'), { cls: 'lv-ok', ...lat });
+  if (state === 'cut') { const c = llmInfo(m); return cell(t('comfy_status'), t('node_cut'), { cls: 'lv-warn', ...llmCutSub(c), title: llmCutTitle(id, c, lv?.error) }); }
+  if (state === 'stopped') return cell(t('comfy_status'), t('comfy_down'), { cls: 'node-idle-text', sub: t('llm_down_sub'), subShort: t('abbr_comfy_noproc'), title: t('llm_stopped_title', id) });
+  if (state === 'off') return cell(t('comfy_status'), t('comfy_off'), { cls: 'node-idle-text', sub: t('node_sub_ondemand'), subShort: t('abbr_ondemand') });
+  return cell(t('comfy_status'), '—', { sub: t('comfy_checking') });
+}
+
+// 并发 / 排队: requests running / streams the server runs, and how many wait (the live reader's own figures)
+function concCell(state, lv, R) {
+  const label = t('llm_conc'), labelShort = t('abbr_llm_conc');
+  if ((state === 'busy' || state === 'idle') && lv?.busy_known === false) {
+    return nodeCell(label, '—', { sub: t('llm_conc_unknown'), subShort: t('abbr_llm_conc_unknown'), labelShort, title: t('llm_conc_unknown_title') });
+  }
+  if (state === 'busy' || state === 'idle') {
+    const r = Number(lv?.running) || 0, M = Number(lv?.max_streams) || 1, q = Number(lv?.queued) || 0;
+    return nodeCell(label, esc(`${r}/${M}`), { cls: r ? 'lv-cool' : '', sub: q ? t('node_queued', q) : t('node_no_queue'), labelShort });
+  }
+  const seen = R?.info?.llm_seen;
+  return nodeCell(label, '—', seen ? { sub: t('comfy_seen', hm(seen)), subShort: hm(seen), labelShort } : { sub: t('comfy_never'), subShort: t('abbr_comfy_never'), labelShort });
+}
+
+function llmColumn(col, idx, mach, R, cs, lv, meta) {
+  const name = cv(col, 'name') || col.node;
+  const node = R?.llm || col.node;
+  const state = cs.sub;
+  const I = R?.info || {};
+  const route = meta?.extra?.nodes?.[node];
+  const r = Array.isArray(route?.routes) ? (route.routes.find((x) => x.live && x.intended) || route.routes.find((x) => x.live)) : null;
+  const ll = r ? r.port : I.litellm_port;
+  const eng = lv?.engine?.engine || I.llm_engine || llmInfo(mach)?.engine || null;
+  const rest = [eng ? esc(ENGINE_NAME[eng] || eng) : esc(t('llm_engine_unknown')), ll ? esc(t('node_litellm_port', ll)) : null].filter(Boolean).join(' · ');
+  const model = lv?.engine?.model || I.llm_model || llmInfo(mach)?.model || null;
+  const g = gpuText(R, null);
+  const live = state === 'busy' || state === 'idle';
+  const dim = cs.offline || state === 'off' || state === 'stopped';
+  const colCls = dim ? 'node-idle' : state === 'busy' ? 'node-online node-busy' : state === 'cut' ? 'node-online node-cut' : 'node-online';
+  const mTitle = [model, g.gpu, g.vram].filter(Boolean).join(' · ');
+  const cells = (cs.offline ? offlineCell(R, mach, col.node) : llmStatusCell(state, lv, mach, col.node))
+    + concCell(cs.offline ? 'off' : state, lv, R)
+    + speedCells(col, lv, live && !cs.offline)
+    + usageCells(meta, node);
+  return `<div class="node-col ${colCls}" data-col="${idx}" data-role="llm">`
+    + head(name, 'llm', rest, R, { mismatch: R?.mismatch || null })
+    + modelLine([model || '—', g.gpu, g.vram], { last: !live || cs.offline, title: mTitle, shorts: [clip(model, 22), clip(model, 14)] })
+    + `<div class="kv node-kv">${cells}</div>`
+    + '</div>';
+}
+
+/**
+ * @param gc       layout card ({ type: comfy, target: <comfyui target id>, nodes: [{ node, name }],
+ *                 v2.50 usage: <inference_nodes id>, live: <inference_live id>)
  * @param resolve  id → { target, snap }
  */
 export function renderComfy(gc, resolve) {
   const view = resolve(gc.target).snap?.extra?.comfy || null;
+  const meta = gc.usage ? resolve(gc.usage).snap || null : null;
+  const liveNodes = gc.live ? resolve(gc.live).snap?.extra?.live?.nodes || {} : {};
   const cols = (gc.nodes || []).map((col, idx) => {
     const n = view?.nodes?.[col.node] || null;
-    const mach = resolve(col.node)?.snap || null;     // v2.41 the machine of the same id (its agent's extra.comfyui)
-    const state = comfyState(n, mach);
-    const stale = NOT_ANSWERING.has(state);
-    const name = cv(col, 'name') || col.node;
-    const sys = n?.system || {};
-    const ver = sys.version ? t('comfy_version', sys.version) : 'ComfyUI';
-    const gpu = [sys.gpu, sys.vram_total_gb != null ? `${sys.vram_total_gb} GB` : null].filter(Boolean).join(' · ') || '—';
-    const gpuTitle = sys.gpu ? t('comfy_gpu_title', sys.gpu, sys.vram_used_gb ?? '—', sys.vram_total_gb ?? '—') : '';
-    const colCls = state === 'off' || state === 'stopped' || state === 'manual' ? 'node-idle' : state === 'busy' ? 'node-online node-busy' : state === 'cut' ? 'node-online node-cut' : state === 'failed' ? 'node-online node-down' : 'node-online';
-    // (cells flow down the columns: status / queue, progress / last, today / average)
-    const cells = statusCell(state, n || {}, col.node, mach) + queueCell(state, n || {})
-      + progressCell(state, n || {}) + lastCell(n || {})
-      + todayCells(n || {});
-    return `<div class="node-col ${colCls}" data-col="${idx}">`
-      + `<div class="node-head"><span class="node-name">${esc(name)}</span><span class="node-port fit" data-min="10">· ${esc(ver)}</span></div>`
-      + `<div class="node-model fit${stale ? ' is-last' : ''}"${gpuTitle ? ` title="${esc(gpuTitle)}"` : ''}>${esc(gpu)}</div>`
-      + `<div class="kv node-kv">${cells}</div>`
-      + '</div>';
+    const mach = resolve(col.node)?.snap || null;     // v2.41 the machine of the same id (its agent's extra.comfyui / llm)
+    const R = view?.roles?.[col.node] || null;        // v2.50 its role (server/roles.js)
+    const lv = R ? liveNodes[R.llm] || null : null;
+    const cs = columnState(R, n, lv, mach);
+    return cs.role === 'llm' ? llmColumn(col, idx, mach, R, cs, lv, meta) : comfyColumn(col, idx, n, mach, R, cs);
   });
   return {
     ...card({

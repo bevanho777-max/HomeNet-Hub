@@ -32,7 +32,8 @@ import { LiveCollector } from './collectors/live.js';
 import { NodeLedger, RANGE_DAYS, RULES, addDays } from './node_usage.js';
 import { dayOf, dayStart } from './usage.js';
 import { EngineDetector, PROM_JOBS } from './engine.js';
-import { ComfyCollector } from './collectors/comfyui.js';
+import { ComfyCollector, bjDayStart } from './collectors/comfyui.js';
+import { RoleTracker } from './roles.js';
 import { KiwiVmCollector } from './collectors/kiwivm.js';
 import { discoverTarget } from './collectors/discovery.js';
 import { UserStore } from './store/user_store.js';
@@ -132,9 +133,11 @@ const liveBus = {
 };
 // v2.32: ComfyUI nodes (read-only); its finished-job table lives in the same database file
 const comfy = new ComfyCollector(join(DATA_DIR, 'homenet.db'));
+// v2.50: ComfyUI / LLM nodes -- which of the two each RTX 5090 machine runs now; role and timeline in the same file
+const roles = new RoleTracker(join(DATA_DIR, 'homenet.db'));
 // v2.48: KiwiVM VPS targets (read-only API; daily transfer + last good figures in the same database file)
 const kiwivm = new KiwiVmCollector(join(DATA_DIR, 'homenet.db'));
-const scheduler = new Scheduler({ snapshot, tsdb, env: process.env, vault, credStore, litellmKeys, usage, live, liveBus, engine, comfy, kiwivm });
+const scheduler = new Scheduler({ snapshot, tsdb, env: process.env, vault, credStore, litellmKeys, usage, live, liveBus, engine, comfy, roles, kiwivm });
 console.log(`[litellm] key API ${litellmKeys.configured ? `enabled (${litellmKeys.status().base_url})` : `off — ${litellmKeys.reason}`}`);
 console.log(`[vault] ${vault.locked ? `locked — ${vault.reason}` : 'unlocked'}`
   + ` (${credStore.count()} credential(s) stored)`);
@@ -725,6 +728,17 @@ app.get('/api/history', VIEW, async (req) => {
   if (!target) return { target: null, range, series: {} };
   if (metric) return { target, metric, range, points: tsdb.history(target, metric, since) };
   return { target, range, series: tsdb.historyTarget(target, since) };
+});
+
+// v2.50 ComfyUI / LLM nodes: one machine's role timeline (ComfyUI / LLM / off) over Beijing days -- 1d = today since
+// 00:00, 3d / 7d = that many days up to now -- for the top of the column modal (roles.js, role_log)
+app.get('/api/roles/timeline', VIEW, async (req, reply) => {
+  const { node, range = '1d' } = req.query || {};
+  if (!node || !roles.has(String(node))) return reply.code(404).send({ error: 'unknown ComfyUI / LLM node' });
+  const days = RANGE_DAYS[range] || 1;
+  const now = Date.now();
+  const from = bjDayStart(now) - (days - 1) * 86400000;
+  return { range, ...roles.timeline(String(node), from, now) };
 });
 
 // v2.32 ComfyUI nodes: completed jobs and images per hour, for the column modal (from the

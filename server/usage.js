@@ -45,6 +45,7 @@ import Database from 'better-sqlite3';
 import { collectSqlRowsInts } from './collectors/sql.js';
 import { promCounterWindow, promFirstSample, promQuery, hostPort, covered, TZ_OFFSET_SEC } from './collectors/nodes.js';
 import { nodeCounters } from './engine.js';
+import { EndpointSet } from './endpoints.js';
 import { LEDGER_TO_CTR } from './node_usage.js';
 
 const DAY = 86400;
@@ -135,7 +136,7 @@ export class UsageEngine {
     this.prom = nodesTarget?.source?.prometheus || null;
     this.logsSince = Math.floor(Date.parse(this.src.logs_since) / 1000);
     this.nodes = (nodesTarget?.nodes || []).map((n) => ({
-      id: n.id, counters: nodeCounters(n), auto: !!n.engine, chat: new Set(n.endpoints || []), emb: new Set(n.embed_endpoints || []),
+      id: n.id, counters: nodeCounters(n), auto: !!n.engine, chat: new EndpointSet(n.endpoints), emb: new EndpointSet(n.embed_endpoints),
     }));
     const rules = (target.classify?.rules || []).map((r, i) => ({
       key: `c${i}`, label: r.name, color: r.color, re: safeRegex(r.match?.regex), counters: r.counters || null,

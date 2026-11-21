@@ -61,6 +61,7 @@
 // really uncertain (kinds[k].mark: reason and source in the title). See nodeFigures.
 import { collectSqlRowsInts } from './sql.js';
 import { nodeCounters } from '../engine.js';
+import { EndpointSet } from '../endpoints.js';
 
 const ROUTES_TIMEOUT_MS = 5000;
 const PROM_TIMEOUT_MS = 8000;
@@ -331,7 +332,7 @@ export const KIND_KEYS = [['requests', 'reqs'], ['tokens', 'tokens'], ['net', 'n
 
 /** the inference_nodes target's nodes, with their counter selectors and endpoint sets */
 export function nodesOf(target) {
-  return (target?.nodes || []).map((n) => ({ ...n, counters: nodeCounters(n), chat: new Set(n.endpoints || []), emb: new Set(n.embed_endpoints || []) }));
+  return (target?.nodes || []).map((n) => ({ ...n, counters: nodeCounters(n), chat: new EndpointSet(n.endpoints), emb: new EndpointSet(n.embed_endpoints) }));
 }
 
 /** the scrape address a counter kind depends on (null: not known) */
@@ -552,10 +553,13 @@ export async function collectNodes(target, env, { engine = null } = {}) {
       const fallback = !!fbn && !(serves && serves.includes(n.id));
       const intended = serves ? serves.includes(n.id) || fallback : true;
       const live = r.deps ? r.deps.some((d) => d.at && (n.chat.has(d.at) || n.emb.has(d.at))) : false;
+      // (v2.50 the backend address(es) the instance sends this node's requests to -- litellm 4003 / 4004 name a port
+      //  that may not be where the engine answers now; the ComfyUI / LLM card compares the two)
+      const at = r.deps ? [...new Set(r.deps.filter((d) => d.at && (n.chat.has(d.at) || n.emb.has(d.at))).map((d) => d.at))] : [];
       // live + intended = the route; live + not intended = left over, to be removed;
       // intended but not live = planned, not connected yet.
       if (live || (intended && serves && !fallback)) {
-        routes.push({ port: r.i.port, intended, live, ...(fallback ? { fallback: true, fallback_n: fbn } : {}), public: r.i.public && !fallback ? String(r.i.public) : null });
+        routes.push({ port: r.i.port, intended, live, ...(fallback ? { fallback: true, fallback_n: fbn } : {}), public: r.i.public && !fallback ? String(r.i.public) : null, ...(at.length ? { at } : {}) });
       }
     }
     routes.sort((a, b) => a.port - b.port);

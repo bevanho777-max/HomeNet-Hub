@@ -57,6 +57,11 @@
 // meaningful speed); such a request still records its Decode. While a request runs, the
 // card's big figure is that request's own (Strata reports its prefill once it decodes:
 // live.prefill_tok_s_mean); the 「上次」 beside it stays the last finished one.
+// v2.50 (m110 / m136, BACKLOG 64): Ollama, LM Studio and any other OpenAI-compatible server are only checked for an
+// answer (GET /v1/models; Ollama /api/ps): reachable and the latency, nothing per request (busy_known: false). A
+// llama.cpp / Strata that wants a key the hub does not have (`auth` from the engine detector, or a 401 / 403 here)
+// is checked on /health instead, likewise. Every node's reading carries its latency (latency_ms: the poll's own
+// round trip), the status cell's second line on the ComfyUI / LLM card.
 const WINDOW_MS = 10000;
 const BACKOFF_MAX_MS = 30000;
 const MIN_PREFILL_TOKENS = 32;      // a (nearly) fully cached prompt has no meaningful speed
@@ -90,7 +95,7 @@ function freshState() {
   return {
     reachable: null, fails: 0, nextAt: 0, err: null, at: 0,
     maxStreams: 1, tasks: new Map(), held: [], queued: 0,
-    last: null, lastRecAt: 0,
+    last: null, lastRecAt: 0, latency: null, plain: false,
   };
 }
 
@@ -226,8 +231,21 @@ export class LiveCollector {
     st.nodeId = n.id;
     if (now < st.nextAt) return;               // backing off
     try {
-      if (def.kind === 'llamacpp') await this._llamacpp(def, st, now);
-      else if (def.kind === 'strata') await this._strata(def, st, now);
+      const t0 = Date.now();
+      // v2.50 status only: an engine without slots (Ollama / LM Studio / OpenAI API), or one that wants a key we lack
+      if (def.auth || st.locked || !(def.kind === 'llamacpp' || def.kind === 'strata')) await this._plain(def, st);
+      else {
+        try {
+          if (def.kind === 'llamacpp') await this._llamacpp(def, st, now);
+          else await this._strata(def, st, now);
+          st.plain = false;
+        } catch (e) {
+          if (!/^HTTP 40[13]$/.test(String(e?.message))) throw e;
+          st.locked = true;                      // (this server, until its engine / port changes: freshState)
+          await this._plain(def, st);
+        }
+      }
+      st.latency = Date.now() - t0;
       st.reachable = true; st.fails = 0; st.nextAt = 0; st.err = null; st.at = now;
     } catch (e) {
       // Unreachable is not "idle": requests in flight are unknown, so they are dropped
@@ -284,6 +302,17 @@ export class LiveCollector {
     for (const task of [...st.tasks.values()]) {
       if (!seen.has(task.key)) this._end(st, task, now, matchRecord(task));
     }
+  }
+
+  // ── v2.50 status only ──────────────────────────────────────────────
+  async _plain(def, st) {
+    const base = def.url.replace(/\/+$/, '');
+    const key = def.key_env ? this.env[def.key_env] : null;
+    const headers = key ? { Authorization: `Bearer ${key}` } : {};
+    const path = def.auth || st.locked ? '/health' : def.kind === 'ollama' ? '/api/ps' : '/v1/models';
+    await getJson(`${base}${path}`, headers, this.timeoutMs);
+    st.plain = true; st.maxStreams = 1; st.held = []; st.queued = 0;
+    st.tasks.clear();
   }
 
   // ── llama.cpp ──────────────────────────────────────────────────────
@@ -496,6 +525,9 @@ export class LiveCollector {
         prefill_now: newestPrefill(tasks),
         streams, last, ...done,
         at: st.at || null, error: st.reachable === false ? st.err : null, engine,
+        latency_ms: st.reachable === true ? st.latency : null,
+        // (v2.50 status only: no requests to see -- the card's concurrency cell says so)
+        ...(st.plain ? { busy_known: false } : {}),
       };
     }
     return { at: now, nodes, decode_total: anyDecode && total > 0 ? round1(total) : null };

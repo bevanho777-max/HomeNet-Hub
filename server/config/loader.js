@@ -232,6 +232,8 @@ export function publicConfig(cfg) {
     ...(typeof t.machine === 'string' && t.machine ? { machine: t.machine } : {}),
     // v2.41: which process on that machine it is (comfyui): 连线中断 while the process runs, red once it is gone
     ...(t.process === 'comfyui' ? { process: t.process } : {}),
+    // v2.50: the pill follows that ComfyUI / LLM machine's role (「136 · ComfyUI」 / 「136 · LLM」)
+    ...(typeof t.role_chip === 'string' && t.role_chip ? { role_chip: t.role_chip } : {}),
     // v2.28: how often it is polled, as written ("15s") -- the inference node's latency cell
     // says so on its second line. Only the interval: the rest of `source` stays server-side.
     ...(typeof t.source?.interval === 'string' ? { interval: t.source.interval } : {}),

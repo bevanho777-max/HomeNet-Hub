@@ -9,7 +9,7 @@ import { renderStack } from './renderers/stack.js';
 import { renderInfo } from './renderers/info.js';
 import { renderTable } from './renderers/table.js';
 import { renderNodes, strataAlive, testingPorts } from './renderers/nodes.js';
-import { renderComfy, comfyInfo, comfyCutTitle, comfyDownState, comfyDownTitle } from './renderers/comfy.js';
+import { renderComfy, comfyInfo, comfyCutTitle, comfyDownState, comfyDownTitle, roleChip } from './renderers/comfy.js';
 import { renderVps } from './renderers/vps.js';
 import { renderUnsupported } from './renderers/unsupported.js';
 import { initHistory, historyRefresh, relocalizeHistory } from './renderers/history.js';
@@ -139,7 +139,7 @@ function openCardModal(c, e) {
   if (c.kind === 'comfy') {
     const idx = Number(e?.target?.closest?.('.node-col')?.dataset.col);
     const col = c.detail?.gc?.nodes?.[idx];
-    if (col) openComfyModal({ col, target: c.detail.gc.target, ranges: c.detail.ranges });
+    if (col) openComfyModal({ col, target: c.detail.gc.target, ranges: c.detail.ranges, usageTarget: c.detail.gc.usage || null, liveTarget: c.detail.gc.live || null });
     return;
   }
   // The machine modal titles itself from config (target name + " Detail") so a language
@@ -224,8 +224,35 @@ function hmOf(ms) {
   return d.toDateString() === now.toDateString() ? s : `${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${s}`;
 }
 
+// v2.50 a pill that follows a ComfyUI / LLM machine's role (`role_chip: m136`): 「136 · ComfyUI」 / 「136 · LLM」, judged
+// exactly as the card judges the column (web/renderers/comfy.js roleChip). null: no role known (an older server).
+function roleChipOf(target) {
+  const id = target.role_chip;
+  const gc = (CONFIG.layout?.grid || []).find((c) => c.type === 'comfy' && (c.nodes || []).some((x) => x.node === id));
+  const view = lastSnap[gc?.target]?.extra?.comfy;
+  const R = view?.roles?.[id] || null;
+  if (!R) return null;
+  const lv = gc?.live ? resolveWithLive(gc.live).snap?.extra?.live?.nodes?.[R.llm] || null : null;
+  return roleChip(id, String(id).replace(/^m/, ''), R, view?.nodes?.[id] || null, lv, lastSnap[id], !!target.on_demand);
+}
+
+/** v2.50 'ComfyUI' / 'LLM' for a machine whose role the hub tracks (roles.js), else null */
+function machineRole(id) {
+  for (const gc of CONFIG.layout?.grid || []) {
+    if (gc.type !== 'comfy') continue;
+    const R = lastSnap[gc.target]?.extra?.comfy?.roles?.[id];
+    if (R) return R.role === 'llm' ? 'LLM' : 'ComfyUI';
+  }
+  return null;
+}
+
 function chip(target, snap) {
   let cls = 'unknown', lat = '', tip = '';
+  const rc = target.role_chip ? roleChipOf(target) : null;
+  if (rc) {
+    const l = rc.lat ? `<span class="lat">${esc(rc.lat)}</span>` : '';
+    return `<span class="chip ${rc.cls}"${rc.tip ? ` title="${esc(rc.tip)}"` : ''}><span class="dot"></span>${esc(rc.label)}${l}</span>`;
+  }
   const off = machineOff(target, snap);
   if (off) {
     lat = `<span class="lat">${esc(t('machine_off'))}</span>`;
@@ -450,7 +477,8 @@ function render() {
     const raw = targetById(gc.target);
     const snap = lastSnap[gc.target];
     const target = { ...raw, color: autoColor(raw, snap, gc.type) }; // B14: resolve auto/omitted color
-    if (gc.type === 'machine') cards.push(renderMachine(gc, target, snap, metrics));
+    // (v2.50 a ComfyUI / LLM machine's purpose pill follows its role, as its column does)
+    if (gc.type === 'machine') cards.push(renderMachine(gc, { ...target, role: machineRole(gc.target) || target.role }, snap, metrics));
     else if (gc.type === 'token') cards.push(renderToken(gc, target, snap, currentLive()));
     else if (gc.type === 'service') cards.push(renderService(gc, target, snap, metrics));
     else if (gc.type === 'stack') cards.push(renderStack(gc, (id) => {
@@ -516,6 +544,8 @@ function renderLive() {
   for (const gc of CONFIG.layout?.grid || []) {
     let c = null;
     if (gc.type === 'nodes') c = renderNodes(gc, resolveWithLive);
+    // (v2.50 a ComfyUI / LLM column in LLM mode shows the live reader's figures too)
+    else if (gc.type === 'comfy' && gc.live) c = renderComfy(gc, resolveWithLive);
     else if (gc.type === 'token') {
       const raw = targetById(gc.target);
       c = renderToken(gc, { ...raw, color: autoColor(raw, lastSnap[gc.target], 'token') }, lastSnap[gc.target], currentLive());
@@ -523,7 +553,7 @@ function renderLive() {
     if (!c) continue;
     const el = [...document.querySelectorAll('#grid > .card')].find((x) => x.dataset.key === c.key);
     if (!el) continue;
-    if (gc.type === 'nodes') {
+    if (gc.type === 'nodes' || gc.type === 'comfy') {
       const body = el.querySelector('.card-body');
       if (body && el._body !== c.body) { body.innerHTML = c.body; el._body = c.body; }
     } else {

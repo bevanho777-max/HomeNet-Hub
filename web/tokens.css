@@ -34,6 +34,7 @@
   --blue: #5aa6ff;
   --cyan: #4fe3d0;
   --violet: #b18cff;
+  --orange: #ff9d5c;              /* v2.50 the ComfyUI role (the ComfyUI / LLM card's accent) */
   /* 状态色 → lv-* 映射（normalize 出 level，前端只贴 class） */
   --lv-ok: var(--green);
   --lv-warn: var(--yellow);
@@ -362,6 +363,14 @@ h2:empty { display: none; } /* 堆叠卡外框无标题时不留空行 */
   font-size: 10.5px; font-weight: 600; letter-spacing: 0.5px; padding: 1px 7px; border-radius: 9px;
   color: var(--green); border: 1px solid color-mix(in srgb, var(--green) 45%, transparent);
 }
+/* v2.50 ComfyUI / LLM 节点: the role tag after the machine's name (ComfyUI orange, LLM purple), and a litellm backend
+   port that is not where the engine answers (yellow, the ports in the title) */
+.role-tag {
+  flex: none; font-size: 10.5px; font-weight: 600; letter-spacing: 0.5px; padding: 1px 7px; border-radius: 9px;
+}
+.role-tag.role-comfy { color: var(--orange); border: 1px solid color-mix(in srgb, var(--orange) 50%, transparent); }
+.role-tag.role-llm { color: var(--violet); border: 1px solid color-mix(in srgb, var(--violet) 55%, transparent); }
+.role-mismatch { color: var(--yellow); margin-left: 6px; cursor: help; }
 .node-route { color: var(--muted); }
 .node-route-stale { color: var(--muted2); }
 .node-route-stale s { text-decoration-thickness: 1px; }
@@ -828,6 +837,30 @@ h2:empty { display: none; } /* 堆叠卡外框无标题时不留空行 */
 .node-sum .ns-v { color: var(--text); font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
 .node-sum .ns-total { margin-left: auto; }
 .node-sum .ns-none { color: var(--muted2); white-space: nowrap; }
+/* v2.50 a ComfyUI / LLM machine's detail: the role timeline over the window (one strip, midnights as ticks, the two ends
+   labelled; the legend counts the time per state) and the ComfyUI | LLM tabs under it */
+.role-bar { margin-top: var(--s3); }
+.role-bar[hidden] { display: none; }
+.role-strip { padding: var(--s2) var(--s3); border: 1px solid var(--hair); border-radius: 10px; background: var(--track); font-size: 12px; color: var(--muted); }
+.role-strip .rl-head { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: var(--s4); row-gap: var(--s1); }
+.role-strip .rl-title { font-weight: 600; color: var(--text); white-space: nowrap; }
+.role-strip .rl-legend { display: inline-flex; flex-wrap: wrap; column-gap: var(--s3); row-gap: 2px; margin-left: auto; }
+.role-strip .rl-key { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.role-strip .rl-none { color: var(--muted2); white-space: nowrap; }
+.role-strip .rl-sw { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+.role-strip .rl-track { position: relative; height: 14px; margin-top: var(--s2); border-radius: 4px; background: var(--hair); overflow: hidden; }
+.role-strip .rl-seg { position: absolute; top: 0; bottom: 0; }
+.role-strip .rl-tick { position: absolute; top: 0; bottom: 0; width: 1px; background: color-mix(in srgb, var(--text) 35%, transparent); }
+.role-strip .rl-axis { display: flex; justify-content: space-between; align-items: baseline; margin-top: 4px; font-size: 11px; color: var(--muted2); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.rs-comfy { background: var(--orange); }
+.rs-llm { background: var(--violet); }
+.rs-off { background: color-mix(in srgb, var(--muted2) 70%, transparent); }
+.rs-none { background: transparent; }
+.role-tabs { display: inline-flex; gap: var(--s1); margin-top: var(--s3); background: var(--track); border-radius: 10px; padding: 3px; }
+.role-tabs button { background: transparent; color: var(--muted); border: 0; border-radius: 7px; padding: 6px 16px; font-size: 12px; cursor: pointer; font-weight: 600; }
+.role-tabs button.active { background: var(--glass2); color: var(--text); box-shadow: 0 0 0 1px var(--hair) inset; }
+.role-tabs button[data-tab="comfy"].active { color: var(--orange); }
+.role-tabs button[data-tab="llm"].active { color: var(--violet); }
 /* B10: N panes — auto-fit so 2/3/N screens lay out and wrap responsively */
 .hist-split { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: var(--s4); }
 .hist-pane { display: flex; flex-direction: column; gap: var(--s2); }

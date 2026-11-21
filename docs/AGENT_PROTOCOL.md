@@ -170,6 +170,22 @@ agent 对任何响应都不做分支处理,唯一职责是"采集→推送→睡
 > "gave_up_at": <unix>, "reason": "limit|no-process-after-restart" }`。hub:探测失败时,`watchdog.state` = `gave-up` 且
 > `age_s` ≤ 300 → 红色「自动修复失败」;`procs` > 0 → 黄色「连线中断」;`procs` = 0 → 灰色,有标记「已手动停止」、
 > 没有「未运行」(v2.41 的红色取消)。`on_demand` 的节点(m110)不看标记,照 v2.42。
+> v2.50:`watchdog.state` 多一个 `llm-role` —— 这台在跑大模型服务(见下面的 `extra.llm`),看门狗只在 ComfyUI 角色时作用。
+
+> **`extra.llm`(v2.50,Windows agent)**:这台机器上的大模型服务,和 `extra.comfyui` 同一节奏(每 10 秒,错开两个周期)、
+> **一直发**(没有时 `{"procs":0,"listen":[]}`)。只侦测,不启动、不停止任何服务。
+> `{ "procs": N, "engine": "llamacpp|strata|ollama|lmstudio|openai", "name": "llama-server.exe", "pid": 123, "since": <unix 秒>,
+> "listen": [{ "port": 8080, "addr": "0.0.0.0" }], "api_port": 8080, "confirmed": true, "via": "/props", "auth": false,
+> "slots": 1, "metrics": true, "busy": 0, "model": "qwen3.8-27b-q4_k_m", "others": 1 }`。
+> 先按进程名找:`llama-server*.exe`(llama.cpp)、`LM Studio.exe` / `lms.exe` / `llmster.exe`(LM Studio;只算真的在听 API 的那个)、
+> `ollama.exe`(不算它的 runner)、`python -m serve.server`(Strata);再对它监听的每个端口经本机回环(只绑某个地址的就问那个地址)确认:
+> `/v1/status`(Strata)、`/props` `/slots` `/metrics`(llama.cpp)、`/api/version` `/api/ps`(Ollama)、`/api/v0/models`(LM Studio)、
+> `/health`、`/v1/models`(任何 OpenAI 兼容服务,取模型 ID)。每个端口的结果留 `$LlmProbeTtl` 秒(默认 60),只有 `busy`(进行中的请求,
+> llama.cpp 的 `/slots`、Strata 的 `/v1/status`;-1 = 不知道)每次重读。`via` = 哪个端点认出来的;`auth` = 它要 key(401 / 403);
+> `metrics` = llama.cpp 开了 `--metrics`(Prometheus 才有计数器);`since` = 进程启动时间(Ollama:最新的 runner);同时有几个服务时报
+> 「已确认 > 忙 > 有模型 > 最新启动」排第一的那个,`others` = 其余几个。
+> hub:`inference_nodes` 的节点写 `engine.follow: <机器 id>` 时,引擎识别先问 `api_port` 和 `listen` 里不是只绑 loopback 的端口
+> (`server/engine.js`),agent 说没有大模型进程或机器离线时不探测;「ComfyUI / LLM 节点」卡按两边哪个在跑判断角色(`server/roles.js`)。
 
 > **空闲轮询(v2.38,`server/idle_spin.js`)**:多卡的 Strata 节点,Strata 在两张卡之间交接时用一个在 GPU 上自旋的
 > 单线程 kernel 等主机内存里的旗标,没有请求时 `gpu_busy_percent` 也读 100、核心频率在最高档,但显存时钟停在闲置档。

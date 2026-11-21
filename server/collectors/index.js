@@ -61,7 +61,12 @@ export class Scheduler {
     // reader, which reads where it says
     this.nodesTargets = new Map(enabled.filter((t) => t.source?.type === 'inference_nodes').map((t) => [t.id, t]));
     const nodesT = [...this.nodesTargets.values()][0] || null;
-    if (this.ctx.engine) this.ctx.engine.configure(nodesT, { every: parseDuration(nodesT?.source?.engine_probe_every, 180000) });
+    if (this.ctx.engine) {
+      // (v2.50 `follow` nodes ask the ports their machine's agent reports: extra.llm of that machine's snapshot)
+      this.ctx.engine.machineOf = (id) => this.ctx.snapshot.get(id);
+      this.ctx.engine.configure(nodesT, { every: parseDuration(nodesT?.source?.engine_probe_every, 180000) });
+    }
+    this.nodesTargetId = nodesT?.id || null;
     // v2.25 live inference state (2 s, straight from the servers)
     const liveT = enabled.find((t) => t.source?.type === 'inference_live');
     if (liveT && this.ctx.live) {
@@ -72,6 +77,8 @@ export class Scheduler {
     // v2.32 ComfyUI nodes (2 s, read-only; see comfyui.js)
     const comfyT = enabled.find((t) => t.source?.type === 'comfyui');
     if (this.ctx.comfy) this.ctx.comfy.configure(comfyT || null, { timeoutMs: parseDuration(comfyT?.source?.timeout, 1500) });
+    // v2.50 ComfyUI / LLM nodes: which of the two each machine runs now (roles.js), judged on every ComfyUI poll
+    if (this.ctx.roles) this.ctx.roles.configure(comfyT || null, new Map(enabled.map((t) => [t.id, t])));
     // v2.48 KiwiVM VPS targets (kiwivm.js keeps each one's last good figures and back-off)
     if (this.ctx.kiwivm) this.ctx.kiwivm.configure(enabled.filter((t) => t.source?.type === 'kiwivm'));
     this.ctx.snapshot.prune(enabled.map((t) => t.id));
@@ -186,6 +193,11 @@ export class Scheduler {
       if (type === 'comfyui') {
         // v2.41: each node probed on the port its machine's agent says ComfyUI listens on (comfy_follow.js)
         const view = await this.ctx.comfy.poll((id) => snapshot.get(id));
+        // v2.50 the role of each machine (ComfyUI / LLM / off), from this reading, the live reader's and the agents'
+        if (this.ctx.roles) {
+          view.roles = this.ctx.roles.update({ now: view.at, comfyView: view, machineOf: (id) => snapshot.get(id), liveView: this._liveView,
+            engine: this.ctx.engine, nodesSnap: this.nodesTargetId ? snapshot.get(this.nodesTargetId) : null });
+        }
         snapshot.update(target.id, { online: true, metrics: {}, extra: { comfy: view } });
         const rows = this.ctx.comfy.historyRows(target.id, view);
         if (rows.length) tsdb.record(rows);

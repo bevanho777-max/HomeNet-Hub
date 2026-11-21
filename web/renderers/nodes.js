@@ -79,7 +79,7 @@ const labelShortOf = (label) => { for (const [k, a] of Object.entries(LABEL_SHOR
 // for the value ("推理 1/2" -> "推理": the 1000px two-column board cut even the short form).
 // v2.46 `last`: { text, forms: [shorter, ...] } -- a small figure on the value line, right of the
 // value (the Prefill / Decode cells' 「上次 xx」); fit.js shrinks it, then takes its shorter forms.
-function cell(label, value, { cls = '', sub = '', short = null, short2 = null, subShort = null, subShort2 = null, labelShort = labelShortOf(label), title = '', itemCls = '', last = null } = {}) {
+export function cell(label, value, { cls = '', sub = '', short = null, short2 = null, subShort = null, subShort2 = null, labelShort = labelShortOf(label), title = '', itemCls = '', last = null } = {}) {
   const ds = (x, n = '') => (x != null && x !== '' ? ` data-short${n}="${esc(x)}"` : '');
   const lf = last ? [...new Set((last.forms || []).filter((f) => f && f !== last.text))] : [];
   return `<div class="item${itemCls ? ` ${itemCls}` : ''}${last ? ' has-last' : ''}"${title ? ` title="${esc(title)}"` : ''}><span class="label fit"${ds(labelShort)}>${esc(label)}</span>`
@@ -111,7 +111,7 @@ function lastOf(rec, what) {
 }
 const whenOf = (rec) => (rec ? hm(rec.at / 1000) : t('node_no_rec'));
 
-function speedCells(col, lv, live) {
+export function speedCells(col, lv, live) {
   const preL = lastOf(lv?.done_prefill, 'Prefill'), decL = lastOf(lv?.done_decode, 'Decode');
   const mk = (label, value, { cls = '', sub, subShort = null }, L) => cell(label, value, { cls, sub, subShort, last: L, title: L.title });
   if (!lv) {
@@ -244,6 +244,47 @@ function gapRanges(cover, dayStart, nowSec) {
 }
 
 /**
+ * v2.50 the node's two usage cells -- 今日请求 / 今日 tokens -- from the inference_nodes snapshot `meta` (the ledger's
+ * figures for today, the ≈ where the server marks them really uncertain). Shared with the ComfyUI / LLM card's LLM mode.
+ */
+export function usageCells(meta, node) {
+  const col = { node };
+  // Today's usage. The big numbers are the machine's TOTAL from its own counters
+  // (requests that never touched LiteLLM included); the second line is the LiteLLM share
+  // and, on a node that also serves embeddings, the embedding server's own count.
+  const mv = (k) => meta?.metrics?.[`${col.node}_${k}`]?.value;
+  const cnt = meta?.extra?.nodes?.[col.node]?.counters || {};
+  // v2.27: each second line with its short form ("经 LLM 52.2M · 嵌入 1.2M" -> "LLM 52.2M · 嵌 1.2M")
+  const subOf = (ll, emb, embLl) => {
+    const parts = [], short = [];
+    if (mv(ll) != null) { parts.push(t('node_sub_ll', compact(mv(ll)))); short.push(t('abbr_ll', compact(mv(ll)))); }
+    const e = mv(emb) != null ? mv(emb) : mv(embLl);
+    if (e != null) { parts.push(t('node_sub_emb', compact(e))); short.push(t('abbr_emb', compact(e))); }
+    // (v2.28: no counter read yet -- still a second line, so the row stays three lines)
+    if (!parts.length) return { sub: t('node_sub_ll', '—'), subShort: t('abbr_ll', '—') };
+    return { sub: parts.join(' · '), subShort: short.join(' · ') };
+  };
+  const reqSub = meta && !cnt.requests ? { sub: t('node_no_req_counter'), subShort: t('abbr_no_counter') } : subOf('ll_reqs', 'emb_reqs', 'emb_ll_reqs');
+  // v2.49 the figure always -- the ledger's, the most credible one there is (v2.29-v2.48 put "Counter
+  // error" in its place); where the server marks it really uncertain, a small yellow ≈ before it, the
+  // reason and the source in the title. The title also says which restarts it was stitched across and
+  // how much of it came from LiteLLM because the counter missed part of the day (and when).
+  const usage = (key, label, labelShort, sub) => {
+    const k = cnt.kinds?.[key];
+    const v = mv(key);
+    const nowSec = Date.now() / 1000, day0 = Number(meta?.extra?.day_start) || 0;
+    const lines = [];
+    if (k?.mark) lines.push(ctrMarkTitle(k.mark));
+    if (k?.restarts?.length) lines.push(...restartLines(k.restarts, key));
+    if (k && k.gap > 0 && day0) lines.push(t('ctr_gap_title', compact(k.gap), gapRanges(k.cover, day0, nowSec)));
+    const mark = k?.mark && v != null ? '<span class="ctr-mark">≈</span>' : '';
+    return cell(label, mark + esc(v == null ? '—' : compact(v)), { ...sub, labelShort, title: lines.join('\n') });
+  };
+  return usage('reqs', t('node_reqs'), t('abbr_node_reqs'), reqSub)
+    + usage('tokens', t('node_tokens'), t('abbr_node_tokens'), subOf('ll_tokens', 'emb_tokens', 'emb_ll_tokens'));
+}
+
+/**
  * @param gc       layout card ({ type: nodes, target: <inference_nodes id>, nodes: [...] })
  * @param resolve  id → { target, snap }
  */
@@ -295,37 +336,6 @@ export function renderNodes(gc, resolve) {
     const modelTitle = state === 'online' ? '' : ` title="${esc(t('node_model_last'))}"`;
 
     const lat = state === 'online' ? esc(probeS?.metrics?.latency?.display || '—') : '—';
-    // Today's usage. The big numbers are the machine's TOTAL from its own counters
-    // (requests that never touched LiteLLM included); the second line is the LiteLLM share
-    // and, on a node that also serves embeddings, the embedding server's own count.
-    const mv = (k) => meta?.metrics?.[`${col.node}_${k}`]?.value;
-    const cnt = meta?.extra?.nodes?.[col.node]?.counters || {};
-    // v2.27: each second line with its short form ("经 LLM 52.2M · 嵌入 1.2M" -> "LLM 52.2M · 嵌 1.2M")
-    const subOf = (ll, emb, embLl) => {
-      const parts = [], short = [];
-      if (mv(ll) != null) { parts.push(t('node_sub_ll', compact(mv(ll)))); short.push(t('abbr_ll', compact(mv(ll)))); }
-      const e = mv(emb) != null ? mv(emb) : mv(embLl);
-      if (e != null) { parts.push(t('node_sub_emb', compact(e))); short.push(t('abbr_emb', compact(e))); }
-      // (v2.28: no counter read yet -- still a second line, so the row stays three lines)
-      if (!parts.length) return { sub: t('node_sub_ll', '—'), subShort: t('abbr_ll', '—') };
-      return { sub: parts.join(' · '), subShort: short.join(' · ') };
-    };
-    const reqSub = meta && !cnt.requests ? { sub: t('node_no_req_counter'), subShort: t('abbr_no_counter') } : subOf('ll_reqs', 'emb_reqs', 'emb_ll_reqs');
-    // v2.49 the figure always -- the ledger's, the most credible one there is (v2.29-v2.48 put "Counter
-    // error" in its place); where the server marks it really uncertain, a small yellow ≈ before it, the
-    // reason and the source in the title. The title also says which restarts it was stitched across and
-    // how much of it came from LiteLLM because the counter missed part of the day (and when).
-    const usage = (key, label, labelShort, sub) => {
-      const k = cnt.kinds?.[key];
-      const v = mv(key);
-      const nowSec = Date.now() / 1000, day0 = Number(meta?.extra?.day_start) || 0;
-      const lines = [];
-      if (k?.mark) lines.push(ctrMarkTitle(k.mark));
-      if (k?.restarts?.length) lines.push(...restartLines(k.restarts, key));
-      if (k && k.gap > 0 && day0) lines.push(t('ctr_gap_title', compact(k.gap), gapRanges(k.cover, day0, nowSec)));
-      const mark = k?.mark && v != null ? '<span class="ctr-mark">≈</span>' : '';
-      return cell(label, mark + esc(v == null ? '—' : compact(v)), { ...sub, labelShort, title: lines.join('\n') });
-    };
     // busy: "推理中" in cyan the moment the server has a request in flight, before any speed
     const multi = Number(lv?.max_streams) > 1;
     const statusCell = busy
@@ -349,8 +359,7 @@ export function renderNodes(gc, resolve) {
     const cells = statusCell
       + cell(t('node_latency'), lat, latSub)
       + speedCells(col, lv, state === 'online' && !!lv?.reachable)
-      + usage('reqs', t('node_reqs'), t('abbr_node_reqs'), reqSub)
-      + usage('tokens', t('node_tokens'), t('abbr_node_tokens'), subOf('ll_tokens', 'emb_tokens', 'emb_ll_tokens'));
+      + usageCells(meta, col.node);
 
     const eng = engineTitle(lv?.engine);
     return `<div class="node-col node-${state}${busy ? ' node-busy' : ''}" data-col="${idx}"${eng ? ` title="${esc(eng)}"` : ''}>`

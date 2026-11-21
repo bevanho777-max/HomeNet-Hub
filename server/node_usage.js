@@ -182,12 +182,16 @@ export class NodeLedger {
         if (!k) continue;
         if (k.error?.code === 'read' && !k.error.soft) { exact = false; notes.push(`${key}: ${k.error.detail}`); continue; }
         figures[key] = f.metrics[key];
+        // v2.50 a node whose engine follows its machine's agent (m110 / m136, engine.follow: every port of the host) and
+        // has no counter series at all that day: its engine did not run, or ran unscraped -- what LiteLLM logged for it
+        // is all there is to know (0 on a ComfyUI day), not a figure that could be recomputed better later
+        const idle = !!n.engine?.follow && !k.cover.length && !k.raw;
         // (no per-request rows: exact only when nothing needed them)
-        if (!full && (k.drops.some(([q]) => q >= a && q < b) || !(k.cover.length === 1 && k.cover[0][0] <= a + 60 && k.cover[0][1] >= b - 60))) {
+        if (!idle && !full && (k.drops.some(([q]) => q >= a && q < b) || !(k.cover.length === 1 && k.cover[0][0] <= a + 60 && k.cover[0][1] >= b - 60))) {
           exact = false; notes.push(`${key}: counter restarted or did not cover the day, and LiteLLM's per-request log is gone`);
         }
         // a counter with no series at all that day (its selectors changed since): cannot be recomputed
-        if (!k.cover.length && !k.raw) { exact = false; notes.push(`${key}: no counter series that day`); }
+        if (!idle && !k.cover.length && !k.raw) { exact = false; notes.push(`${key}: no counter series that day`); }
       }
       if (full) {
         figures.ll_tokens = f.ll.tokens; figures.ll_reqs = f.ll.reqs;

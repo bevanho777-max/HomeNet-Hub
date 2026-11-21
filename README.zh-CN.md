@@ -595,6 +595,13 @@ tokens、经 LiteLLM 的 tokens、请求数,以及开始记录以来的累计 to
 计数器在采时经 LiteLLM 的量,而且永远显示:真的不确定时(计数器比 LiteLLM 少、引擎在线但计数器超过 2 分钟没采到、读不到计数器)
 数字前加一个黄色小 **≈**,原因和采用的数据来源在 title 里。规则变了,帐本会把原始记录还在的已存日子重算一次。
 
+**轮流跑 ComfyUI 或大模型的机器(v2.50)。** 一台 GPU 机器有时跑 ComfyUI、有时跑大模型(一次只跑一种)时,ComfyUI 卡的节点写
+`llm: <推理节点 id>`,推理节点写 `engine: { host, ports, follow: <机器 id> }`:卡片(「ComfyUI / LLM 节点」)按哪个在跑显示那个角色
+—— 两个都在时正在工作的优先、都闲置以最后启动的为准,新角色连续侦测到 2 次才切换,两个都离线保留最后的角色和数值;同一排 6 个格子,
+LLM 模式就是推理节点卡的格子(Prefill / Decode「上次」、今日请求 / Tokens、≈)。Windows agent 回报 `extra.llm`(llama.cpp / LM Studio /
+Ollama / Strata,按进程名找、经本机回环确认),hub 跟随它回报的端口;`endpoints: ["host:*"]` 让这台任何端口的 LiteLLM 请求都归它。
+状态灯写 `role_chip: <机器 id>` 就跟着角色变;详情有角色时间轴与 ComfyUI / LLM 两个分页。
+
 ---
 
 ## 环境变量

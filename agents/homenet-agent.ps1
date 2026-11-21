@@ -19,6 +19,8 @@ $ClaudeRefreshLoops = 15
 $NetIface  = ""         # pin the NIC by adapter name; empty = auto-detect default route
 $NetRetryLoops = 15     # while no NIC is available, re-probe every N loops (~30s at 2s)
 $ComfyEveryLoops = 5    # v2.41: re-read ComfyUI's processes / listening ports every N loops (~10s at 2s)
+$LlmEveryLoops = 5      # v2.50: re-read the LLM servers' processes / listening ports every N loops (~10s at 2s)
+$LlmProbeTtl = 60       # v2.50: re-confirm each LLM port's engine and model (local HTTP probes) at most this often (s)
 $ComfyStopMarker = ""      # v2.43: ComfyUI's "stopped by hand" marker file; set on m136 only (empty = not reported)
 $ComfyWatchdogStatus = ""  # v2.43: status file of the m136 ComfyUI watchdog (comfy-watchdog.ps1); m136 only
 $DumpPayload = $false   # set $true to write each payload to last-payload.json for debugging
@@ -236,6 +238,220 @@ function Get-ComfyExtra {
   return ('"comfyui":{{"procs":{0},"listen":[{1}],"pid":{2},"since":{3}{4}{5}}}' -f $procs.Count, ($list -join ','), [int]$first.ProcessId, $since, $tail, $watch)
 }
 
+# ---------------- v2.50 LLM servers on this machine ----------------
+# m110 / m136 take turns running ComfyUI or an LLM (one at a time); the hub tells which from what runs. This reports
+# the LLM side as the "llm":{...} member of extra, always (procs 0 when none), like comfyui. DETECTION ONLY: nothing
+# here starts, stops or changes any server (m110 starts nothing by itself).
+# A server = a process of a known engine: llama.cpp (llama-server*.exe), LM Studio (LM Studio.exe / lms.exe /
+# llmster.exe), Ollama (ollama.exe; its model runners are not counted), Strata (python -m serve.server). Each TCP
+# port such a process listens on is confirmed by asking it over loopback (or the one address it binds):
+#   /v1/status (Strata), /props + /slots + /metrics (llama.cpp), /api/version + /api/ps (Ollama),
+#   /api/v0/models (LM Studio), /health, /v1/models (any OpenAI-compatible server: the model ID).
+# A port's answer is kept $LlmProbeTtl seconds; only the busy count of the server reported is read every time.
+# Fields: procs, engine (llamacpp|strata|ollama|lmstudio|openai), name (process), pid, since (process start, unix s;
+# Ollama: its newest model runner), listen [{port, addr}] (the server process' ports), api_port (the one that
+# answered as the API), confirmed (an endpoint said which engine it is, not only the process name), via (which),
+# auth (it wants a key), model, slots, metrics (llama.cpp /metrics on: Prometheus has counters), busy (requests in
+# flight, -1 = not known), others (more servers than the one reported).
+$script:llmCache = @{}
+
+function Get-Http([string]$url, [int]$timeoutMs = 700, [int]$maxChars = 65536) {
+  $resp = $null
+  try {
+    $req = [System.Net.HttpWebRequest]::Create($url)
+    $req.Timeout = $timeoutMs; $req.ReadWriteTimeout = $timeoutMs
+    $req.Proxy = $null; $req.AllowAutoRedirect = $false
+    $req.Accept = 'application/json, text/plain, */*'
+    $resp = $req.GetResponse()
+  } catch [System.Net.WebException] {
+    $resp = $_.Exception.Response
+    if (-not $resp) { return @{ code = 0; body = '' } }
+  } catch { return @{ code = 0; body = '' } }
+  try {
+    $code = [int]$resp.StatusCode
+    $sr = New-Object System.IO.StreamReader($resp.GetResponseStream())
+    $buf = New-Object char[] $maxChars
+    $n = $sr.ReadBlock($buf, 0, $maxChars)
+    return @{ code = $code; body = [string]::new($buf, 0, $n) }
+  } catch { return @{ code = [int]$resp.StatusCode; body = '' } } finally { $resp.Close() }
+}
+
+# (`return ,$v`: PowerShell would unroll a one-element array -- /slots of a one-slot llama.cpp -- into its element)
+function ConvertFrom-JsonOrNull([string]$s) {
+  if (-not $s) { return $null }
+  try { $v = $s | ConvertFrom-Json; return ,$v } catch { return $null }
+}
+
+# a model ID as plain ASCII: a path's leaf, no quotes or backslashes, at most 96 characters
+function Get-ModelText($m) {
+  $s = [string]$m
+  if ($s -match '[\\/]') { $s = ($s -split '[\\/]')[-1] }
+  $s = $s -replace '[^A-Za-z0-9._:@+\-]', ''
+  if ($s.Length -gt 96) { $s = $s.Substring(0, 96) }
+  return $s
+}
+
+# What answers on one port of a process of engine kind $hint: @{ engine; via; auth; model; slots; metrics; busy }
+function Test-LlmPort([string]$addr, [int]$port, [string]$hint) {
+  $b = "http://${addr}:$port"
+  $r = @{ engine = ''; via = ''; auth = $false; model = ''; slots = 0; metrics = $false; busy = -1; answered = $false }
+  $mark = { param($h) if ($h.code -gt 0) { $r.answered = $true }; if ($h.code -eq 401 -or $h.code -eq 403) { $r.auth = $true } }
+  if ($hint -eq 'strata' -or $hint -eq '') {
+    $h = Get-Http "$b/v1/status"; & $mark $h
+    $j = ConvertFrom-JsonOrNull $h.body
+    if ($h.code -eq 200 -and $j -and ($j.concurrency -or $j.activity)) {
+      $r.engine = 'strata'; $r.via = '/v1/status'
+      if ($null -ne $j.activity.in_flight) { $r.busy = [int]$j.activity.in_flight }
+      if ($j.concurrency.serving) { $r.slots = [int]$j.concurrency.serving }
+    }
+    if ($hint -eq 'strata' -and -not $r.model) {
+      $h = Get-Http "$b/health"; & $mark $h
+      $j = ConvertFrom-JsonOrNull $h.body
+      if ($j -and $j.model) { $r.model = Get-ModelText $j.model; if (-not $r.engine) { $r.engine = 'strata'; $r.via = '/health' } }
+    }
+  }
+  if (-not $r.engine -and ($hint -eq 'llamacpp' -or $hint -eq '')) {
+    $h = Get-Http "$b/props"; & $mark $h
+    $j = ConvertFrom-JsonOrNull $h.body
+    if ($h.code -eq 200 -and $j -and ($null -ne $j.total_slots -or $j.default_generation_settings)) {
+      $r.engine = 'llamacpp'; $r.via = '/props'
+      if ($j.total_slots) { $r.slots = [int]$j.total_slots }
+      if ($j.model_alias) { $r.model = Get-ModelText $j.model_alias } elseif ($j.model_path) { $r.model = Get-ModelText $j.model_path }
+    }
+    $h = Get-Http "$b/slots"; & $mark $h
+    $j = ConvertFrom-JsonOrNull $h.body
+    if ($h.code -eq 200 -and $h.body -match '^\s*\[') {
+      if (-not $r.engine) { $r.engine = 'llamacpp'; $r.via = '/slots' }
+      $r.slots = @($j | Where-Object { $_ }).Count
+      $r.busy = @($j | Where-Object { $_.is_processing }).Count
+    }
+    if ($r.engine -eq 'llamacpp' -or $hint -eq 'llamacpp') {
+      $h = Get-Http "$b/metrics" 700 4096; & $mark $h
+      if ($h.code -eq 200 -and $h.body -match 'llamacpp:') { $r.metrics = $true; if (-not $r.engine) { $r.engine = 'llamacpp'; $r.via = '/metrics' } }
+    }
+  }
+  if (-not $r.engine -and ($hint -eq 'ollama' -or $hint -eq '')) {
+    $h = Get-Http "$b/api/version"; & $mark $h
+    $j = ConvertFrom-JsonOrNull $h.body
+    if ($h.code -eq 200 -and $j -and $j.version) {
+      $r.engine = 'ollama'; $r.via = '/api/version'
+      $ps = ConvertFrom-JsonOrNull (Get-Http "$b/api/ps").body
+      $m = @($ps.models)
+      if ($m.Count -and $m[0].name) { $r.model = Get-ModelText $m[0].name }
+    }
+  }
+  if (-not $r.engine -and ($hint -eq 'lmstudio' -or $hint -eq '')) {
+    $h = Get-Http "$b/api/v0/models"; & $mark $h
+    $j = ConvertFrom-JsonOrNull $h.body
+    if ($h.code -eq 200 -and $j -and $null -ne $j.data) {
+      $r.engine = 'lmstudio'; $r.via = '/api/v0/models'
+      $ld = @($j.data | Where-Object { $_.state -eq 'loaded' -and $_.type -ne 'embeddings' })
+      if ($ld.Count) { $r.model = Get-ModelText $ld[0].id }
+    }
+  }
+  if (-not $r.model -and ($r.engine -or $hint -or $r.answered)) {
+    $h = Get-Http "$b/v1/models"; & $mark $h
+    $j = ConvertFrom-JsonOrNull $h.body
+    $d = @($j.data)
+    if ($h.code -eq 200 -and $d.Count -and $d[0].id) {
+      $r.model = Get-ModelText $d[0].id
+      if (-not $r.engine) { $r.engine = 'openai'; $r.via = '/v1/models' }
+    }
+  }
+  if (-not $r.engine -and $hint -eq 'llamacpp') {
+    $h = Get-Http "$b/health"; & $mark $h
+    if ($h.code -eq 200 -or $h.code -eq 503) { $r.engine = 'llamacpp'; $r.via = '/health' }
+  }
+  return $r
+}
+
+function Get-LlmExtra {
+  $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+  $procs = @(Get-CimInstance Win32_Process -Filter "Name LIKE 'llama-server%' OR Name='LM Studio.exe' OR Name='lms.exe' OR Name='llmster.exe' OR Name='ollama.exe' OR Name='python.exe' OR Name='pythonw.exe'")
+  $cands = @(); $runners = @()
+  foreach ($p in $procs) {
+    $n = [string]$p.Name; $cl = [string]$p.CommandLine; $kind = ''
+    if ($n -like 'llama-server*') { $kind = 'llamacpp' }
+    elseif ($n -eq 'ollama.exe') { if ($cl -match '(?i)\srunner(\s|$)') { $runners += $p } else { $kind = 'ollama' } }
+    elseif ($n -eq 'LM Studio.exe' -or $n -eq 'lms.exe' -or $n -eq 'llmster.exe') { $kind = 'lmstudio' }
+    elseif ($cl -match '(?i)(-m\s+serve\.server|serve[\\/]server\.py)') { $kind = 'strata' }
+    if ($kind) { $cands += [pscustomobject]@{ p = $p; kind = $kind } }
+  }
+  if (-not $cands.Count) { $script:llmCache = @{}; return '"llm":{"procs":0,"listen":[]}' }
+  $byPid = @{}
+  foreach ($l in @(Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue)) {
+    $k = [string]$l.OwningProcess
+    if (-not $byPid[$k]) { $byPid[$k] = @() }
+    $byPid[$k] += $l
+  }
+  $servers = @(); $keep = @{}
+  foreach ($c in $cands) {
+    $ls = @($byPid[[string]$c.p.ProcessId]); $seen = @{}; $list = @()
+    foreach ($l in $ls) {
+      if (-not $l) { continue }
+      $a = ([string]$l.LocalAddress) -replace '[^0-9A-Fa-f:.]', ''
+      $key = "$a|$($l.LocalPort)"
+      if ($seen[$key] -or $list.Count -ge 6) { continue }
+      $seen[$key] = $true
+      $list += [pscustomobject]@{ port = [int]$l.LocalPort; addr = $a }
+    }
+    # LM Studio's helper processes (renderer, GPU ...) listen nowhere: not servers
+    if ($c.kind -eq 'lmstudio' -and -not $list.Count) { continue }
+    $best = $null; $tried = 0; $done = @{}
+    foreach ($e in ($list | Sort-Object port)) {
+      if ($tried -ge 4) { break }
+      if ($done[[string]$e.port]) { continue }
+      $done[[string]$e.port] = $true
+      # wildcard binds are asked on loopback; a single-address bind on that address
+      $addr = ''
+      if ($e.addr -eq '0.0.0.0' -or $e.addr -eq '::' -or $e.addr -eq '') { $addr = '127.0.0.1' }
+      elseif ($e.addr -match '^[0-9.]+$') { $addr = $e.addr }
+      elseif ($e.addr -eq '::1') { $addr = '[::1]' }
+      if (-not $addr) { continue }
+      $ck = "$($c.p.ProcessId)|$($e.port)"
+      $hit = $script:llmCache[$ck]
+      if ($hit -and ($now - $hit.at) -lt $LlmProbeTtl) { $res = $hit.res } else { $res = Test-LlmPort $addr $e.port $c.kind; $tried++ }
+      $keep[$ck] = @{ at = $(if ($hit -and ($now - $hit.at) -lt $LlmProbeTtl) { $hit.at } else { $now }); res = $res; addr = $addr }
+      if ($res.engine -and -not $best) { $best = @{ port = $e.port; res = $res; addr = $addr } }
+    }
+    if ($c.kind -eq 'lmstudio' -and -not $best) { continue }
+    $since = [DateTimeOffset]::new($c.p.CreationDate.ToUniversalTime()).ToUnixTimeSeconds()
+    if ($c.kind -eq 'ollama' -and $runners.Count) {
+      $nr = ($runners | Sort-Object CreationDate | Select-Object -Last 1)
+      $since = [DateTimeOffset]::new($nr.CreationDate.ToUniversalTime()).ToUnixTimeSeconds()
+    }
+    $servers += [pscustomobject]@{ c = $c; list = $list; best = $best; since = $since }
+  }
+  $script:llmCache = $keep
+  if (-not $servers.Count) { return '"llm":{"procs":0,"listen":[]}' }
+  # the one reported: a confirmed one before an unconfirmed, busy before idle, a model loaded, then the newest
+  $rank = { param($s) $v = 0; if ($s.best) { $v += 8; if ($s.best.res.busy -gt 0) { $v += 4 }; if ($s.best.res.model) { $v += 2 } }; $v }
+  $pick = $servers | Sort-Object @{ Expression = { & $rank $_ }; Descending = $true }, @{ Expression = { $_.since }; Descending = $true } | Select-Object -First 1
+  $engine = $pick.c.kind; $res = $null; $apiPort = 0
+  if ($pick.best) {
+    $res = $pick.best.res; $apiPort = $pick.best.port; $engine = $res.engine
+    # the busy count is read every time (the rest of the port's answer is kept $LlmProbeTtl s)
+    $bb = "http://$($pick.best.addr):$apiPort"
+    if ($engine -eq 'llamacpp') {
+      $h = Get-Http "$bb/slots"
+      $j = ConvertFrom-JsonOrNull $h.body
+      if ($h.code -eq 200 -and $h.body -match '^\s*\[') { $res.busy = @($j | Where-Object { $_.is_processing }).Count }
+    } elseif ($engine -eq 'strata') {
+      $j = ConvertFrom-JsonOrNull (Get-Http "$bb/v1/status").body
+      if ($j -and $null -ne $j.activity.in_flight) { $res.busy = [int]$j.activity.in_flight }
+    }
+  }
+  $lj = ($pick.list | ForEach-Object { '{{"port":{0},"addr":"{1}"}}' -f $_.port, $_.addr }) -join ','
+  $nm = ([string]$pick.c.p.Name) -replace '[^A-Za-z0-9 ._-]', ''
+  $out = '"llm":{{"procs":{0},"engine":"{1}","name":"{2}","pid":{3},"since":{4},"listen":[{5}]' -f $servers.Count, $engine, $nm, [int]$pick.c.p.ProcessId, $pick.since, $lj
+  if ($res) {
+    $out += ',"api_port":{0},"confirmed":true,"via":"{1}","auth":{2},"slots":{3},"metrics":{4},"busy":{5}' -f $apiPort, $res.via, $(if ($res.auth) { 'true' } else { 'false' }), [int]$res.slots, $(if ($res.metrics) { 'true' } else { 'false' }), [int]$res.busy
+    if ($res.model) { $out += ',"model":"' + $res.model + '"' }
+  } else { $out += ',"confirmed":false,"busy":-1' }
+  if ($servers.Count -gt 1) { $out += ',"others":' + ($servers.Count - 1) }
+  return ($out + '}')
+}
+
 # Claude Max window: same self-recorded start algorithm as claude-report.ps1
 # (blockId change -> record now as new start, +5h = reset). Shares the same state file.
 # Returns the "claude":{...} member of extra, or "" when ccusage is not installed.
@@ -264,8 +480,13 @@ function Get-ClaudeExtra {
 # ---------------- main loop ----------------
 if (-not $ClaudeRefreshLoops -or $ClaudeRefreshLoops -lt 1) { $ClaudeRefreshLoops = 15 }
 if (-not $ComfyEveryLoops -or $ComfyEveryLoops -lt 1) { $ComfyEveryLoops = 5 }
+if (-not $LlmEveryLoops -or $LlmEveryLoops -lt 1) { $LlmEveryLoops = 5 }
+if (-not $LlmProbeTtl -or $LlmProbeTtl -lt 10) { $LlmProbeTtl = 60 }
+# (the LLM read two loops after the ComfyUI one, so the two slower reads never share a loop; -Once: both at once)
+$llmPhase = if ($Once) { 0 } else { 2 % $LlmEveryLoops }
 $claudeFrag = ""
 $comfyFrag = ""
+$llmFrag = ""
 $loop = 0
 while ($true) {
   Start-Sleep -Seconds $Interval
@@ -296,8 +517,9 @@ while ($true) {
 
   if ($loop % $ClaudeRefreshLoops -eq 0) { $claudeFrag = Get-ClaudeExtra }
   if ($loop % $ComfyEveryLoops -eq 0) { $comfyFrag = Get-ComfyExtra }
+  if ($loop % $LlmEveryLoops -eq $llmPhase) { $llmFrag = Get-LlmExtra }
   $loop++
-  $extraJson = '{' + ((@($claudeFrag, $agentFrag, $hostFrag, $comfyFrag) | Where-Object { $_ }) -join ',') + '}'
+  $extraJson = '{' + ((@($claudeFrag, $agentFrag, $hostFrag, $comfyFrag, $llmFrag) | Where-Object { $_ }) -join ',') + '}'
 
   $payload = ('{{"v":1,"id":"{0}","ts":{1},"os":"windows",{2}{3}{4}{5}{6}{7},"extra":{8}}}' -f `
     $AgentId, $now, (Get-UptimeJson), (Get-CpuJson), (Get-MemJson), (Get-DiskJson), $netJson, (Get-GpusJson), $extraJson)

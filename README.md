@@ -696,6 +696,16 @@ counter below LiteLLM, one not collected for over 2 minutes while the engine is 
 a small yellow **≈** stands before it, the reason and the source in the title. The ledger recomputes
 the stored days the raw records still cover once when these rules change.
 
+**Machines that take turns running ComfyUI or an LLM (v2.50).** When a GPU machine runs ComfyUI at times and an LLM
+at others (one at a time), give its ComfyUI node `llm: <inference node id>` and that inference node
+`engine: { host, ports, follow: <machine id> }`: the card (ComfyUI / LLM Nodes) shows whichever runs -- with both up,
+the one at work wins, both idle the one started last; a new role needs two detections in a row; with both off it keeps
+the last role and figures. One row of six cells either way; the LLM mode is the inference nodes card's own cells
+(Prefill / Decode with Last, requests / tokens today, the ≈). The Windows agent reports `extra.llm` (llama.cpp /
+LM Studio / Ollama / Strata, found by process name and confirmed over loopback) and the hub follows the port it reports;
+`endpoints: ["host:*"]` gives the node LiteLLM's requests to any port of that host. A status pill with
+`role_chip: <machine id>` follows the role; the detail modal has a role timeline and ComfyUI / LLM tabs.
+
 ---
 
 ## Environment

@@ -49,6 +49,49 @@ on screen is the one from `package.json`, and this file is what needs fixing.
 
 ---
 
+## v2.50.0 — 2026-11-21
+
+**「ComfyUI 节点」改成「ComfyUI / LLM 节点」:m110(RTX 5090)和 m136(RTX 5090 Laptop)轮流跑 ComfyUI 或大模型(一台同时只跑一种),
+每栏按角色显示 —— 位置不动、两种模式同样一排 6 个同样大小的格子,切换时版面不跳;顶部的灯跟着角色变(「110 · LLM」/「136 · ComfyUI」);
+跑大模型时的用量记进同一份用量账本。大模型经 litellm 4003(m110)/ 4004(m136)对外,不设备援。**
+
+*Rebuild required — `server/`、`web/`、`agents/` 改了;`config/` 要加 m110 / m136 的推理节点与 4003 / 4004(见下)。Windows agent 要换版。*
+
+- **角色判断(`server/roles.js`,hub 端)**:哪个服务在就是哪个角色(在 = 连得上,或 agent 报告进程在跑);两个都在(切换过程中)时
+  正在工作的优先(ComfyUI 队列不为空 / 大模型有进行中的请求),都闲置以最后启动的为准(两边进程的启动时间);新角色要**连续侦测到 2 次**
+  (每 10 秒一次)才切换,重启时画面不来回跳;两个都离线时保留最后的角色和最后的数值。状态、角色、最后看到的模型 / 引擎 / 端口 / GPU
+  存在 hub 的数据库(`node_role`),重启 hub 也保留;每次变化记进 `role_log`(详情的时间轴)并打日志 `[role] m136: comfy -> llm (busy-llm)`。
+- **卡片(`web/renderers/comfy.js`)**:第一行加角色标签(ComfyUI 橘色、LLM 紫色),例如「m110 · LLM · llama.cpp · litellm 4003」;
+  第二行 ComfyUI 是 GPU,LLM 是「模型 · GPU · 显存」。ComfyUI 模式的 6 格同前;LLM 模式:状态(第二行延迟)、并发 / 排队、Prefill(「上次」)、
+  Decode(「上次」)、今日请求、今日 Tokens —— 直接用「推理节点」卡的格子(`nodes.js` 的 `speedCells` / `usageCells`,同一数据来源、
+  同一「上次」规则、同一「≈」、Prefill 只算 32 个以上提示词 token 的请求),不另写一套。两个都离线:整栏变暗,状态格灰色「离线 · 最后为 LLM 12:20」,
+  机器关机时写「未开机」,其他格保留最后的数值;今日张数 / 请求 / Tokens 过北京时间午夜才归零。litellm 4003 / 4004 的后端端口和引擎实际端口
+  不一致时,第一行黄色「≠ :端口」(提示里两个端口;不会自动改 litellm)。机器卡标题旁的用途标签也跟着角色。
+- **顶部的灯**:`role_chip: m136` 的灯按角色显示「136 · ComfyUI」/「136 · LLM」,m110 新增「110 · ComfyUI / LLM」(`svc_comfy110`)。
+  颜色照旧:灰色 = 未开机 / 未运行 / 已手动停止 / 离线,黄色 = 连线中断,红色只有自动修复失败(m136 看门狗放弃)。
+- **详情**:最上面一条角色时间轴(今天 / 3d / 7d,ComfyUI 橘、LLM 紫、离线灰,图例算各占多久;`GET /api/roles/timeline`),
+  下面 ComfyUI、LLM 两个分页,预设打开当前角色那一页;LLM 页 = 那台推理节点的速度、请求、Tokens、并发曲线与顶部摘要(tokens、经 LiteLLM、请求数、累计)。
+- **Windows agent(`agents/homenet-agent.ps1`)**:新增 `extra.llm` —— 每 10 秒按进程名找 llama.cpp(`llama-server*.exe`)、LM Studio、Ollama、
+  Strata(`python -m serve.server`),对它们监听的端口经本机回环探测 `/v1/status`、`/props`、`/slots`、`/metrics`、`/api/version`、`/api/v0/models`、
+  `/health`、`/v1/models` 确认引擎类型与模型;回报程序、端口、绑定地址、进行中的请求数。只侦测,不启动、不停止任何服务(m110 照旧不自动启动任何东西)。
+  格式见 `docs/AGENT_PROTOCOL.md`。
+- **引擎识别(`server/engine.js`)**:节点写 `engine.follow: <机器>` 时,先问那台 agent 回报的端口(端口跟随,不用改配置;只绑 127.0.0.1 的不算),
+  agent 说没有大模型进程或机器离线时不探测;另认得 Ollama / LM Studio / 一般 OpenAI 接口(只看在线、延迟与模型);引擎要 key 而 hub 没有时以 agent 的识别为准。
+  计数器选择器对这种节点取整台主机的任何端口。实时读取(`live.js`)多了延迟,Ollama / LM Studio / 要 key 的引擎只看 `/health` 或 `/v1/models`。
+- **用量**:m110 / m136 加进 `inference_nodes`(不上「推理节点」卡),用量账本、Token Usage 卡、详情曲线、顶部摘要、00:10 的自动核对都涵盖它们;
+  以引擎自己的计数器为准,没涵盖的用 litellm 4003 / 4004 的逐笔记录补(和 m25 / m26 / m133 同一套 `nodeFigures`)。`endpoints` 支持 `"host:*"`
+  (`server/endpoints.js`):4003 / 4004 的后端端口和引擎实际端口不同时请求照样归这台。账本回填:这种节点某天完全没有计数器序列(引擎没跑)时,
+  照存 LiteLLM 得出的数字(多半是 0),不再算「缺」;m110 2026-10-20 – 10-28 当推理节点的旧数字以「旧口径」收进账本。
+- **m136 看门狗(私有仓 `m136/comfy-watchdog.ps1`)**:有大模型服务进程在跑就是 `llm-role`,不动作,计时在大模型离开后重来 ——
+  以前「ComfyUI 卡住 + 大模型闲置(GPU < 5%)」5 分钟后会重启 ComfyUI,和大模型抢显存(模拟测试 11 项,旧版在新增的情况上失败)。
+- **设定(`config/`)**:`nodes` 目标加 4003 / 4004 实例与 m110 / m136 节点(`endpoints: ["192.168.1.110:*"]`、`engine: { …, follow: m110 }`);
+  `comfy` 目标的节点加 `llm: m110` / `llm: m136`;`svc_comfy136` 加 `role_chip`,新增 `svc_comfy110`;卡片改名、加 `usage: nodes` / `live: live`;
+  Token Usage 的分类正则加 `-llm\b`(4003 / 4004 的固定模型名 `m110-llm` / `m136-llm`)。旧版 hub(v2.48.1 起)读到 `follow` / `llm` / `role_chip`
+  只记警告、照常启动。
+- **测试**:`test/roles.test.mjs` —— 角色规则、连续 2 次才切换、时间轴、m136 从 ComfyUI 切到 LLM(中间重叠)/ 两个都离线 / 关机 / hub 重启后保留、
+  `host:*` 端点、跟随端口与不探测的时机。`npm test` 共 20 项。另在测试实例上用模拟的两台机器(私有仓 `scripts/homenet-role-sim.cjs`:
+  假 ComfyUI、假 llama.cpp、假 agent)走完各种情况并截图,版面检查 9 宽 × 中英全部为 0。
+
 ## v2.49.0 — 2026-11-13
 
 **推理节点的用量不再出现「计数来源异常」:重启、计数器归零、短暂抓取失败都自动接上(重启前最后读数 + 重启后增量 + 重启前没采到的部分,

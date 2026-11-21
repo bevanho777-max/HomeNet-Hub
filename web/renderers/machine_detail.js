@@ -297,9 +297,19 @@ async function load() {
   const canvas = $('#machineModalCanvas');
   const legend = $('#machineModalLegend');
   if (!canvas || !targetId) return;
+  // v2.50 a ComfyUI / LLM machine: the role timeline on top, then its ComfyUI tab or its LLM tab (the inference node's
+  // own charts and summary line, as its 推理节点 column would show them)
+  if (nodeCtx?.kind === 'comfy') {
+    showRoleBar();
+    const llm = nodeCtx.tab === 'llm' && nodeCtx.llm;
+    showSum(llm ? nodeCtx.llm : null);
+    return llm ? loadNode(canvas, legend, { col: { node: nodeCtx.llm, name: nodeCtx.col.name, name_en: nodeCtx.col.name_en }, usageTarget: nodeCtx.usageTarget, liveTarget: nodeCtx.liveTarget })
+      : loadComfy(canvas, legend);
+  }
+  roleBar(false);
   // v2.46 the summary line: an inference node's column, or the machine card of the same id
-  showSum(nodeCtx ? (nodeCtx.kind === 'comfy' ? null : nodeCtx.col.node) : (nodeIds().has(targetId) ? targetId : null));
-  if (nodeCtx) return nodeCtx.kind === 'comfy' ? loadComfy(canvas, legend) : loadNode(canvas, legend);
+  showSum(nodeCtx ? nodeCtx.col.node : (nodeIds().has(targetId) ? targetId : null));
+  if (nodeCtx) return loadNode(canvas, legend);
   if (inflight) inflight.abort();
   const ctrl = new AbortController();
   inflight = ctrl;
@@ -380,7 +390,7 @@ async function load() {
 // language change can re-derive it without app.js having to remember which card was
 // clicked. Same string as before: the target's display name plus " Detail".
 function modalTitle(id) {
-  if (nodeCtx?.kind === 'comfy') return t('comfy_modal_title', cv(nodeCtx.col, 'name') || nodeCtx.col.node);
+  if (nodeCtx?.kind === 'comfy') return t('comfy_modal_title', cv(nodeCtx.col, 'name') || nodeCtx.col.node, nodeCtx.llm ? (nodeCtx.tab === 'llm' ? 'LLM' : 'ComfyUI') : null);
   if (nodeCtx) return t('node_modal_title', cv(nodeCtx.col, 'name') || nodeCtx.col.node);
   const target = (CONFIG?.targets || []).find((x) => x.id === id);
   return `${cv(target, 'name') || id} Detail`;
@@ -486,8 +496,8 @@ export function openNodeModal({ col, usageTarget, liveTarget = null, ranges: cus
 
 const SPAN_SEC = { '1d': 86400, '24h': 86400, '3d': 259200, '7d': 604800, '30d': 2592000 };
 
-async function loadNode(canvas, legend) {
-  const { col, usageTarget, liveTarget } = nodeCtx;
+async function loadNode(canvas, legend, ctx = nodeCtx) {
+  const { col, usageTarget, liveTarget } = ctx;
   if (inflight) inflight.abort();
   const ctrl = new AbortController();
   inflight = ctrl;
@@ -586,8 +596,10 @@ async function loadNode(canvas, legend) {
 // Same shell again. Two panels: the queue (running / waiting, sampled by the hub every poll,
 // one point per 5 s in the store) and what finished per hour (images and jobs, from the hub's
 // own job table via /api/comfy/hourly -- zero-filled only from when the hub first read the node).
-export function openComfyModal({ col, target, ranges: customRanges }) {
-  nodeCtx = { kind: 'comfy', col, target };
+export function openComfyModal({ col, target, ranges: customRanges, usageTarget = null, liveTarget = null }) {
+  // v2.50 the tab that opens: the machine's role now (server/roles.js)
+  const R = window.__lastSnap?.[target]?.extra?.comfy?.roles?.[col.node] || null;
+  nodeCtx = { kind: 'comfy', col, target, usageTarget, liveTarget, llm: R?.llm && usageTarget ? R.llm : null, tab: R?.role === 'llm' && usageTarget ? 'llm' : 'comfy' };
   targetId = target;
   ranges = Array.isArray(customRanges) && customRanges.length ? customRanges : ['1d', '3d', '7d'];
   if (!ranges.includes(range)) range = ranges[0];
@@ -624,6 +636,8 @@ async function loadComfy(canvas, legend) {
     if (inflight !== ctrl) return;
     secondPanel(false);
     const extra = extraGpuPanels(1);
+    // (v2.50 back from the LLM tab: its note does not belong here)
+    const note = $('#machineModalNote'); if (note) { note.hidden = true; note.textContent = ''; }
     mainTitle(t('comfy_panel_queue'));
     const maxGapSec = Math.max(900, 3 * Math.ceil((SPAN_SEC[range] || 86400) / 250));
     const qm = { [`${p}_running`]: { label: t('comfy_series_running') }, [`${p}_pending`]: { label: t('comfy_series_pending') } };
@@ -643,8 +657,65 @@ async function loadComfy(canvas, legend) {
   }
 }
 
+// ── v2.50 the role timeline and the ComfyUI | LLM tabs ────────────────────────
+// One strip over the window the modal shows (Beijing days: 1d = today since 00:00, 3d / 7d = that many days up to now):
+// ComfyUI orange, LLM purple, off grey, nothing recorded yet blank -- from GET /api/roles/timeline (role_log). Midnights
+// are ticks; the two ends are labelled. Under it the two tabs; a click switches the charts below (and the summary line).
+let roleSeq = 0;
+function roleBar(show) {
+  const el = $('#machineModalRoles');
+  if (!el) return null;
+  el.hidden = !show;
+  if (!show) el.innerHTML = '';
+  return el;
+}
+
+const ROLE_COLOR_CLS = { comfy: 'rs-comfy', llm: 'rs-llm', off: 'rs-off', none: 'rs-none' };
+const p2 = (x) => String(x).padStart(2, '0');
+const hmOf = (ms) => { const d = new Date(ms); return `${p2(d.getHours())}:${p2(d.getMinutes())}`; };
+const mdhm = (ms) => { const d = new Date(ms); return `${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${hmOf(ms)}`; };
+
+async function showRoleBar() {
+  const el = roleBar(true);
+  if (!el || !nodeCtx) return;
+  const seq = ++roleSeq;
+  const ctx = nodeCtx;
+  const tabs = ctx.llm ? `<div class="role-tabs">${['comfy', 'llm'].map((k) => `<button data-tab="${k}" class="${ctx.tab === k ? 'active' : ''}">${esc(k === 'llm' ? 'LLM' : 'ComfyUI')}</button>`).join('')}</div>` : '';
+  const shell = (strip) => `<div class="role-strip">${strip}</div>${tabs}`;
+  if (!el.innerHTML) el.innerHTML = shell(`<div class="rl-head"><span class="rl-title">${esc(t('role_timeline'))}</span></div><div class="rl-track"></div><div class="rl-axis"><span>&nbsp;</span></div>`);
+  let j;
+  try {
+    const r = await fetch(`/api/roles/timeline?node=${encodeURIComponent(ctx.col.node)}&range=${encodeURIComponent(range)}`, { cache: 'no-store' });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    j = await r.json();
+  } catch {
+    if (seq === roleSeq) el.innerHTML = shell(`<div class="rl-head"><span class="rl-title">${esc(t('role_timeline'))}</span><span class="rl-none">${esc(t('role_timeline_none'))}</span></div>`);
+    return;
+  }
+  if (seq !== roleSeq || nodeCtx !== ctx) return;
+  const span = Math.max(1, j.to - j.from);
+  const name = (s) => (s === 'llm' ? 'LLM' : s === 'comfy' ? 'ComfyUI' : s === 'off' ? t('role_offline') : t('role_none'));
+  const segs = (j.segments || []).map((g) => {
+    const left = ((g.from - j.from) / span) * 100, width = ((g.to - g.from) / span) * 100;
+    const title = `${name(g.state)} · ${mdhm(g.from)} – ${g.to >= j.to - 1000 ? t('role_now') : mdhm(g.to)}`;
+    return `<i class="rl-seg ${ROLE_COLOR_CLS[g.state] || 'rs-none'}" style="left:${left.toFixed(3)}%;width:${Math.max(0.15, width).toFixed(3)}%" title="${esc(title)}"></i>`;
+  }).join('');
+  const ticks = [];
+  for (let d = j.from + 86400000; d < j.to; d += 86400000) ticks.push(`<i class="rl-tick" style="left:${(((d - j.from) / span) * 100).toFixed(3)}%"></i>`);
+  // time per state over the window (the legend's figures)
+  const sum = { comfy: 0, llm: 0, off: 0 };
+  for (const g of j.segments || []) if (sum[g.state] != null) sum[g.state] += g.to - g.from;
+  const dur = (ms) => { const m = Math.round(ms / 60000); return m >= 60 ? `${Math.floor(m / 60)}h${p2(m % 60)}` : `${m}m`; };
+  const legend = ['comfy', 'llm', 'off'].map((k) => `<span class="rl-key"><i class="rl-sw ${ROLE_COLOR_CLS[k]}"></i>${esc(name(k))} ${esc(dur(sum[k]))}</span>`).join('');
+  el.innerHTML = shell(`<div class="rl-head"><span class="rl-title">${esc(t('role_timeline'))}</span><span class="rl-legend">${legend}</span></div>`
+    + `<div class="rl-track">${segs}${ticks.join('')}</div>`
+    + `<div class="rl-axis"><span>${esc(range === '1d' || range === '24h' ? hmOf(j.from) : mdhm(j.from))}</span><span>${esc(t('role_now'))} ${esc(hmOf(j.to))}</span></div>`);
+  fitLines(el);
+}
+
 export function closeMachineModal() {
   nodeCtx = null;
+  roleBar(false);
   $('#machineModal').classList.remove('open');
   if (inflight) { inflight.abort(); inflight = null; }
   targetId = null;
@@ -653,6 +724,15 @@ export function closeMachineModal() {
 export function bindMachineModal() {
   $('#machineModalClose').onclick = closeMachineModal;
   $('#machineModal').onclick = (e) => { if (e.target.id === 'machineModal') closeMachineModal(); };
+  // v2.50 the ComfyUI | LLM tabs of a ComfyUI / LLM machine
+  $('#machineModalRoles').onclick = (e) => {
+    const b = e.target.closest('.role-tabs button');
+    if (!b || !nodeCtx || nodeCtx.kind !== 'comfy' || b.dataset.tab === nodeCtx.tab) return;
+    nodeCtx.tab = b.dataset.tab;
+    [...b.parentElement.children].forEach((x) => x.classList.toggle('active', x === b));
+    setLine($('#machineModalTitle'), modalTitle(targetId));
+    load();
+  };
   $('#machineModalRanges').onclick = (e) => {
     const b = e.target.closest('button'); if (!b) return;
     range = b.dataset.r;
