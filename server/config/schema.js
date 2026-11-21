@@ -242,6 +242,9 @@ const targetsSchema = {
                 // v2.50 comfyui: this machine also runs an LLM at times (one or the other) -- the id of its node in the
                 // inference_nodes target; the ComfyUI / LLM card shows whichever runs (server/roles.js)
                 llm: { type: 'string', pattern: '^[a-zA-Z0-9_]+$' },
+                // v2.50.2 comfyui: something outside the hub moves litellm to the engine's port once the two differ for
+                // this many minutes (24's homenet-llm-port-follow); only the 「≠ :port」 tooltip says so -- the hub changes nothing
+                llm_port_follow: { type: 'integer', minimum: 1, maximum: 1440 },
                 // chat host:port; v2.50 "host:*" = every port of that host (server/endpoints.js)
                 endpoints: { type: 'array', items: { type: 'string' } },
                 // v2.25: where the live state is read (inference_live target): llama.cpp

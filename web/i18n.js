@@ -587,7 +587,8 @@ const ZH = {
   role_why_kept: '依据:两个都在,分不出先后,保持原角色',
   role_why_none: '两个都没在跑',
   role_switching: (r, n, need) => `切换中:已连续 ${n} / ${need} 次侦测到「${r}」`,
-  role_mismatch_title: (lp, bp, ep) => `端口不符:litellm ${lp} 送到 :${bp},引擎现在在 :${ep},经 litellm ${lp} 的请求会失败。不会自动改 litellm 的设定。`,
+  role_mismatch_title: (lp, bp, ep, follow) => `端口不符:litellm ${lp} 送到 :${bp},引擎现在在 :${ep},经 litellm ${lp} 的请求会失败。`
+    + (follow ? `持续 ${follow} 分钟以上会自动把 litellm ${lp} 的后端改成 :${ep}(只重启这一个实例,会发通知),改好后这个标记自己消失。` : '不会自动改 litellm 的设定。'),
   llm_conc: '并发 / 排队',
   abbr_llm_conc: '并发',
   llm_conc_unknown: '引擎不回报',
@@ -1171,7 +1172,8 @@ const EN = {
   role_why_kept: 'why: both up, no telling which came last -- role kept',
   role_why_none: 'neither runs',
   role_switching: (r, n, need) => `switching: "${r}" detected ${n} / ${need} times in a row`,
-  role_mismatch_title: (lp, bp, ep) => `Port mismatch: litellm ${lp} sends to :${bp}, the engine is on :${ep} now -- requests through litellm ${lp} will fail. The litellm config is not changed automatically.`,
+  role_mismatch_title: (lp, bp, ep, follow) => `Port mismatch: litellm ${lp} sends to :${bp}, the engine is on :${ep} now -- requests through litellm ${lp} will fail. `
+    + (follow ? `If it stays like this for ${follow} minutes, litellm ${lp} is moved to :${ep} automatically (only that instance restarts, with a notification); this mark then goes away by itself.` : 'The litellm config is not changed automatically.'),
   llm_conc: 'Conc / Queue',
   abbr_llm_conc: 'Conc',
   llm_conc_unknown: 'not reported',

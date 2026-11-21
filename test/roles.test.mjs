@@ -109,7 +109,7 @@ test('RoleTracker: m136 ComfyUI -> LLM with an overlap, off with the role kept, 
     assert.deepEqual([v.state, v.role, v.why], ['llm', 'llm', 'newer-llm']);
     assert.equal(v.info.llm_model, 'qwen3.8-27b-q4');
     assert.equal(v.info.litellm_port, 4004);
-    // litellm 4004 sends to :8080, the engine answers on :8081 -> reported (and logged), never changed
+    // litellm 4004 sends to :8080, the engine answers on :8081 -> reported (and logged); the hub never changes litellm
     assert.deepEqual(v.mismatch, { litellm: 4004, backend: 8080, engine: 8081 });
     assert.ok(lines.some((l) => /litellm 4004 sends to :8080, the engine answers on :8081/.test(l)));
     // ComfyUI closed: LLM alone
@@ -142,6 +142,39 @@ test('RoleTracker: m136 ComfyUI -> LLM with an overlap, off with the role kept, 
     const tl = tr.timeline('m136', T0, now + 1);
     assert.deepEqual(tl.segments.map((s) => s.state), ['none', 'comfy', 'llm', 'off']);
     assert.ok(tl.segments.every((s, i, a) => i === 0 || s.from === a[i - 1].to));
+  } finally {
+    console.log = log;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('mismatch: shown while litellm sends elsewhere (with llm_port_follow), gone by itself once litellm is moved', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'roles-'));
+  const log = console.log; const lines = []; console.log = (s) => lines.push(String(s));
+  try {
+    const tr = new R.RoleTracker(join(dir, 'h.db'));
+    tr.configure({ nodes: [{ id: 'm110', url: 'http://x:8188', llm: 'm110', llm_port_follow: 10 }] }, new Map());
+    const route = (port, live = true) => ({ extra: { nodes: { m110: { routes: [{ port: 4003, live, intended: true, at: [`192.168.1.110:${port}`] }] } } } });
+    let nodesSnap = route(8080);
+    const M = machine({ llm: { since: S(T0), port: 8082 } });
+    const engine = { has: () => true, info: () => ({ engine: 'strata', name: 'Strata', port: 8082, model: 'q4', error: null }) };
+    let now = T0;
+    const step = () => { now += R.EVAL_MS; return tr.update({ now, comfyView: { nodes: {} }, machineOf: () => M, liveView: { nodes: { m110: { reachable: true, busy: 0 } } }, engine, nodesSnap }).m110; };
+    let v = step();
+    assert.deepEqual(v.mismatch, { litellm: 4003, backend: 8080, engine: 8082, follow: 10 });
+    assert.ok(lines.some((l) => /sends to :8080, the engine answers on :8082 -- moved outside the hub after 10 min/.test(l)));
+    // litellm 4003 restarting (route not live): the last backend port is kept, the mark stays
+    nodesSnap = route(8082, false);
+    assert.equal(step().mismatch?.backend, 8080);
+    // 4003 back, now sending to :8082 (homenet-llm-port-follow changed it): the mark is gone, nothing else to do
+    nodesSnap = route(8082);
+    v = step();
+    assert.equal(v.mismatch, undefined);
+    assert.equal(v.info.backend_port, 8082);
+    // without llm_port_follow the mismatch carries no `follow` (tooltip: not changed automatically)
+    tr.configure({ nodes: [{ id: 'm110', url: 'http://x:8188', llm: 'm110' }] }, new Map());
+    nodesSnap = route(8080);
+    assert.deepEqual(step().mismatch, { litellm: 4003, backend: 8080, engine: 8082 });
   } finally {
     console.log = log;
     rmSync(dir, { recursive: true, force: true });

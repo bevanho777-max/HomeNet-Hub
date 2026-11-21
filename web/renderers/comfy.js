@@ -282,7 +282,7 @@ function roleTagTitle(R) {
 
 function head(name, role, rest, R, { mismatch = null } = {}) {
   const tag = `<span class="role-tag role-${role}"${R ? ` title="${esc(roleTagTitle(R))}"` : ''}>${esc(roleName(role))}</span>`;
-  const mm = mismatch ? `<span class="role-mismatch" title="${esc(t('role_mismatch_title', mismatch.litellm || '?', mismatch.backend, mismatch.engine))}">≠ :${esc(String(mismatch.engine))}</span>` : '';
+  const mm = mismatch ? `<span class="role-mismatch" title="${esc(t('role_mismatch_title', mismatch.litellm || '?', mismatch.backend, mismatch.engine, mismatch.follow || 0))}">≠ :${esc(String(mismatch.engine))}</span>` : '';
   return `<div class="node-head"><span class="node-name">${esc(name)}</span>${tag}<span class="node-port fit" data-min="10">${rest ? `· ${rest}` : ''}${mm}</span></div>`;
 }
 

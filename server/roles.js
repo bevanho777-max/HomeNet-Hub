@@ -115,12 +115,13 @@ export class RoleTracker {
     for (const n of comfyTarget?.nodes || []) {
       if (!n?.id || !n.llm) continue;
       const old = this.nodes.get(n.id);
-      if (old) { old.llm = String(n.llm); old.badge = machines.get(n.id)?.badge || null; next.set(n.id, old); continue; }
+      const follow = Number(n.llm_port_follow) || null;
+      if (old) { old.llm = String(n.llm); old.badge = machines.get(n.id)?.badge || null; old.follow = follow; next.set(n.id, old); continue; }
       const row = this._get.get(n.id);
       let info = {};
       try { info = row?.info ? JSON.parse(row.info) : {}; } catch { info = {}; }
       next.set(n.id, {
-        id: n.id, llm: String(n.llm), badge: machines.get(n.id)?.badge || null,
+        id: n.id, llm: String(n.llm), badge: machines.get(n.id)?.badge || null, follow,
         state: row?.state || null, role: row?.role || null, since: row?.since || null, roleSince: row?.role_since || null,
         lastOn: row?.last_on || null, info, cand: null, candN: 0, why: null, lastEval: 0, det: null, savedAt: 0, mismatchLogged: null,
       });
@@ -232,7 +233,7 @@ export class RoleTracker {
     const seen = l && num(l.procs) > 0 ? num(l.api_port) || null : null;
     const now = live || seen;
     if (!now || now === I.backend_port) return null;
-    return { litellm: I.litellm_port || null, backend: I.backend_port, engine: now };
+    return { litellm: I.litellm_port || null, backend: I.backend_port, engine: now, ...(n.follow ? { follow: n.follow } : {}) };
   }
 
   view(now = Date.now(), { machineOf = null, engine = null } = {}) {
@@ -242,7 +243,8 @@ export class RoleTracker {
       const mm = this._mismatch(n, m, engine);
       if (mm && n.mismatchLogged !== `${mm.backend}>${mm.engine}`) {
         n.mismatchLogged = `${mm.backend}>${mm.engine}`;
-        console.log(`[role] ${n.id}: litellm ${mm.litellm || '?'} sends to :${mm.backend}, the engine answers on :${mm.engine} -- not changed automatically`);
+        console.log(`[role] ${n.id}: litellm ${mm.litellm || '?'} sends to :${mm.backend}, the engine answers on :${mm.engine} -- `
+          + (mm.follow ? `moved outside the hub after ${mm.follow} min of this (llm_port_follow)` : 'not changed automatically'));
       } else if (!mm) n.mismatchLogged = null;
       out[n.id] = {
         llm: n.llm, state: n.state, role: n.role, since: n.since, role_since: n.roleSince, last_on: n.lastOn,

@@ -49,6 +49,23 @@ on screen is the one from `package.json`, and this file is what needs fixing.
 
 ---
 
+## v2.50.2 — 2026-11-22
+
+**「ComfyUI / LLM 节点」卡的「≠ :端口」:设了 `llm_port_follow` 时,提示说明会自动跟随。** hub 本身照旧不改 litellm。
+
+*Rebuild required — `server/`、`web/` 改了。*
+
+- **起因**:m110 / m136 跑大模型时,引擎实际端口可能和 litellm 4003 / 4004 的后端端口不同(例如 m110 的 Strata Q4 在 8082、LM Studio 在 12345)。
+  部署端(这里是 24 上的定时任务)现在会在不一致持续 10 分钟后把 litellm 的后端改成实际端口、只重启那一个实例;卡片上的黄色「≠ :端口」
+  在 litellm 改好、hub 重新读到 `/model/info` 后自己消失 —— 这部分 v2.50 就是这样算的,不用改。
+- **新设定** `targets.yaml` → ComfyUI 节点 `llm_port_follow: <分钟>`(可选,1–1440):只用来在「≠ :端口」的提示里写明「持续 N 分钟以上会自动改成 :端口
+  (只重启这一个实例,会发通知),改好后这个标记自己消失」;不设就照旧写「不会自动改 litellm 的设定」。快照里 `roles[<机器>].mismatch` 多一个 `follow`
+  (分钟),hub 日志的那行也照样说明。旧版本遇到这个字段只警告、略过(v2.48.1 的设定容错)。
+- `npm test` 21 项(新增:设了 `llm_port_follow` 时 mismatch 带 `follow`;litellm 重启中保留原来的后端端口、标记还在;litellm 改到引擎端口后标记消失;
+  没设就不带 `follow`)。
+
+---
+
 ## v2.50.1 — 2026-11-21
 
 **Windows agent:收进 m136 上 2026-11-11 的低 WMI 改动,大模型侦测也照同样做法。** 只改 `agents/homenet-agent.ps1`(两台照流程换版)。
