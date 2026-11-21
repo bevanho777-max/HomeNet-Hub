@@ -110,6 +110,73 @@ Write-Host $banner
 $netLog = $true         # from here on, log every NIC state change
 
 # ---------------- collectors (return empty string on failure) ----------------
+# 2026-11-11 (made on m136 by a Codex session, taken into the repo in v2.50.1): memory, uptime and disk are read natively
+# (GlobalMemoryStatusEx, GetTickCount64, DriveInfo) and the ComfyUI processes are cached by the signature of the python
+# processes (Get-ComfyProcesses) -- far fewer WMI / CIM queries; CIM stays the fallback.
+$nativeSystemMetrics = $false
+try {
+  if (-not ('HomeNet.Agent.WindowsMetrics' -as [type])) {
+    Add-Type -ErrorAction Stop -TypeDefinition @'
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+
+namespace HomeNet.Agent {
+    public static class WindowsMetrics {
+        [StructLayout(LayoutKind.Sequential)]
+        public struct MemoryStatus {
+            public uint Length, MemoryLoad;
+            public ulong TotalPhys, AvailPhys, TotalPageFile, AvailPageFile;
+            public ulong TotalVirtual, AvailVirtual, AvailExtendedVirtual;
+        }
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool GlobalMemoryStatusEx(ref MemoryStatus status);
+
+        [DllImport("kernel32.dll")]
+        public static extern ulong GetTickCount64();
+
+        public static MemoryStatus ReadMemory() {
+            MemoryStatus status = new MemoryStatus();
+            status.Length = (uint)Marshal.SizeOf(typeof(MemoryStatus));
+            if (!GlobalMemoryStatusEx(ref status)) {
+                throw new Win32Exception(Marshal.GetLastWin32Error());
+            }
+            return status;
+        }
+    }
+}
+'@
+  }
+  $nativeSystemMetrics = $true
+} catch {
+  Write-Warning 'Native system metrics unavailable; using a shared CIM sample for memory and uptime.'
+}
+
+function Get-SystemMetrics {
+  if ($nativeSystemMetrics) {
+    try {
+      $memory = [HomeNet.Agent.WindowsMetrics]::ReadMemory()
+      return @{
+        TotalGb = $memory.TotalPhys / 1GB
+        UsedGb = ($memory.TotalPhys - $memory.AvailPhys) / 1GB
+        Uptime = [int]([HomeNet.Agent.WindowsMetrics]::GetTickCount64() / 1000)
+      }
+    } catch {
+      # Preserve the sample via CIM if Windows cannot supply native metrics.
+    }
+  }
+
+  $os = Get-CimInstance Win32_OperatingSystem
+  if ($os) {
+    return @{
+      TotalGb = $os.TotalVisibleMemorySize / 1MB
+      UsedGb = ($os.TotalVisibleMemorySize - $os.FreePhysicalMemory) / 1MB
+      Uptime = [int]((Get-Date) - $os.LastBootUpTime).TotalSeconds
+    }
+  }
+}
+
 function Get-CpuJson {
   $c = (Get-Counter '\Processor(_Total)\% Processor Time' -ErrorAction SilentlyContinue).CounterSamples[0].CookedValue
   if ($null -eq $c) { return "" }
@@ -117,25 +184,30 @@ function Get-CpuJson {
   return ('"cpu":{{"pct":{0}}},' -f (N1 $c))
 }
 
-function Get-MemJson {
-  $os = Get-CimInstance Win32_OperatingSystem
-  if (-not $os) { return "" }
-  $totalGb = $os.TotalVisibleMemorySize / 1MB
-  $usedGb  = ($os.TotalVisibleMemorySize - $os.FreePhysicalMemory) / 1MB
-  return ('"mem":{{"used_gb":{0},"total_gb":{1}}},' -f (N1 $usedGb), (N1 $totalGb))
+function Get-MemJson($metrics) {
+  if (-not $metrics) { return "" }
+  return ('"mem":{{"used_gb":{0},"total_gb":{1}}},' -f (N1 $metrics.UsedGb), (N1 $metrics.TotalGb))
 }
 
 function Get-DiskJson {
+  try {
+    $drive = [IO.DriveInfo]::new('C:\')
+    $total = $drive.TotalSize
+    if ($total -gt 0) {
+      $used = $total - $drive.AvailableFreeSpace
+      return ('"disk":{{"used_gb":{0},"total_gb":{1}}},' -f (N0 ($used/1GB)), (N0 ($total/1GB)))
+    }
+  } catch {
+    # Preserve the existing PowerShell collector as a fallback.
+  }
   $d = Get-PSDrive C
   if (-not $d -or ($d.Used + $d.Free) -le 0) { return "" }
   return ('"disk":{{"used_gb":{0},"total_gb":{1}}},' -f (N0 ($d.Used/1GB)), (N0 (($d.Used+$d.Free)/1GB)))
 }
 
-function Get-UptimeJson {
-  $os = Get-CimInstance Win32_OperatingSystem
-  if (-not $os) { return "" }
-  $s = [int]((Get-Date) - $os.LastBootUpTime).TotalSeconds
-  return ('"uptime_s":{0},' -f $s)
+function Get-UptimeJson($metrics) {
+  if (-not $metrics) { return "" }
+  return ('"uptime_s":{0},' -f $metrics.Uptime)
 }
 
 # A nvidia-smi reading as a number; $null for "[N/A]", "[Unknown Error]", "" and the like.
@@ -215,10 +287,58 @@ function Get-ComfyWatch {
   return ''
 }
 
+$comfyProcessSignature = $null
+$comfyProcesses = @()
+
+function Get-ComfyProcesses {
+  $signature = $null
+  $starts = @{}
+  try {
+    $candidates = @(Get-Process -ErrorAction Stop | Where-Object { $_.ProcessName -in 'python', 'pythonw' } | Sort-Object Id)
+    $identities = foreach ($candidate in $candidates) {
+      $started = $candidate.StartTime
+      if (-not $started) { throw 'Process start time unavailable.' }
+      $starts[$candidate.Id] = $started.ToUniversalTime()
+      '{0}:{1}' -f $candidate.Id, $starts[$candidate.Id].Ticks
+    }
+    $signature = $identities -join ','
+  } catch {
+    # CIM remains the authority when the native snapshot is incomplete.
+  }
+
+  if ($signature -eq '') {
+    $script:comfyProcessSignature = ''
+    $script:comfyProcesses = @()
+    $script:strataProcs = @()
+    return
+  }
+  if ($null -ne $signature -and $signature -eq $script:comfyProcessSignature) {
+    return $script:comfyProcesses
+  }
+
+  $script:comfyProcessSignature = $null
+  $snapshot = @(Get-CimInstance Win32_Process -Filter "Name='python.exe' OR Name='pythonw.exe'")
+  $procs = @($snapshot | Where-Object { $_.CommandLine -match '(?i)[\\/]ComfyUI[\\/]main\.py' } | Sort-Object CreationDate)
+  # (v2.50 the same python snapshot names the Strata servers -- Get-LlmExtra reads them, no CIM query of its own)
+  $script:strataProcs = @($snapshot | Where-Object { $_.CommandLine -match '(?i)(-m\s+serve\.server|serve[\\/]server\.py)' })
+  if ($null -ne $signature -and $snapshot.Count -eq $starts.Count) {
+    # Cache only a complete snapshot of the same processes. CIM timestamps can be rounded.
+    $confirmed = @($snapshot | Where-Object {
+      $started = $starts[[int]$_.ProcessId]
+      $started -and $_.CommandLine -and $_.CreationDate -and
+        [math]::Abs(($started - $_.CreationDate.ToUniversalTime()).TotalMilliseconds) -lt 1
+    })
+    if ($confirmed.Count -eq $snapshot.Count) {
+      $script:comfyProcesses = $procs
+      $script:comfyProcessSignature = $signature
+    }
+  }
+  return $procs
+}
+
 function Get-ComfyExtra {
   $watch = Get-ComfyWatch
-  $procs = @(Get-CimInstance Win32_Process -Filter "Name='python.exe' OR Name='pythonw.exe'" |
-    Where-Object { $_.CommandLine -match '(?i)[\\/]ComfyUI[\\/]main\.py' } | Sort-Object CreationDate)
+  $procs = @(Get-ComfyProcesses)
   if (-not $procs.Count) { return ('"comfyui":{"procs":0,"listen":[]' + $watch + '}') }
   $seen = @{}; $list = @(); $cmdPort = 0
   foreach ($p in $procs) {
@@ -248,12 +368,45 @@ function Get-ComfyExtra {
 #   /v1/status (Strata), /props + /slots + /metrics (llama.cpp), /api/version + /api/ps (Ollama),
 #   /api/v0/models (LM Studio), /health, /v1/models (any OpenAI-compatible server: the model ID).
 # A port's answer is kept $LlmProbeTtl seconds; only the busy count of the server reported is read every time.
+# Processes are found the low-WMI way (Get-LlmCandidates), like the ComfyUI side since the 2026-11-11 change made on m136.
 # Fields: procs, engine (llamacpp|strata|ollama|lmstudio|openai), name (process), pid, since (process start, unix s;
 # Ollama: its newest model runner), listen [{port, addr}] (the server process' ports), api_port (the one that
 # answered as the API), confirmed (an endpoint said which engine it is, not only the process name), via (which),
 # auth (it wants a key), model, slots, metrics (llama.cpp /metrics on: Prometheus has counters), busy (requests in
 # flight, -1 = not known), others (more servers than the one reported).
 $script:llmCache = @{}
+$script:strataProcs = @()
+
+# The LLM server processes, with as little WMI as the ComfyUI side: names through Get-Process (native); the command line
+# (CIM) only for ollama.exe (its model runners are not servers) and a start time the native call would not give;
+# Strata from the python snapshot Get-ComfyProcesses keeps (refreshed here when the python processes changed).
+function Get-LlmCandidates {
+  $out = @(); $runners = @()
+  foreach ($p in @(Get-Process -Name 'llama-server*', 'LM Studio', 'lms', 'llmster', 'ollama' -ErrorAction SilentlyContinue)) {
+    $start = $null
+    try { $start = $p.StartTime.ToUniversalTime() } catch { }
+    $kind = 'lmstudio'
+    if ($p.ProcessName -like 'llama-server*') { $kind = 'llamacpp' } elseif ($p.ProcessName -eq 'ollama') { $kind = 'ollama' }
+    $out += [pscustomobject]@{ pid = [int]$p.Id; name = ($p.ProcessName + '.exe'); kind = $kind; start = $start }
+  }
+  $need = @($out | Where-Object { $_.kind -eq 'ollama' -or -not $_.start })
+  if ($need.Count) {
+    $cim = @{}
+    foreach ($w in @(Get-CimInstance Win32_Process -Filter (($need | ForEach-Object { 'ProcessId=' + $_.pid }) -join ' OR '))) { $cim[[int]$w.ProcessId] = $w }
+    $keep = @()
+    foreach ($o in $out) {
+      $w = $cim[$o.pid]
+      if ($w -and -not $o.start -and $w.CreationDate) { $o.start = $w.CreationDate.ToUniversalTime() }
+      if ($o.kind -eq 'ollama' -and $w -and ([string]$w.CommandLine) -match '(?i)\srunner(\s|$)') { $runners += $o } else { $keep += $o }
+    }
+    $out = $keep
+  }
+  Get-ComfyProcesses | Out-Null
+  foreach ($s in @($script:strataProcs)) {
+    if ($s) { $out += [pscustomobject]@{ pid = [int]$s.ProcessId; name = [string]$s.Name; kind = 'strata'; start = $(if ($s.CreationDate) { $s.CreationDate.ToUniversalTime() } else { $null }) } }
+  }
+  return @{ cands = $out; runners = $runners }
+}
 
 function Get-Http([string]$url, [int]$timeoutMs = 700, [int]$maxChars = 65536) {
   $resp = $null
@@ -367,16 +520,8 @@ function Test-LlmPort([string]$addr, [int]$port, [string]$hint) {
 
 function Get-LlmExtra {
   $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
-  $procs = @(Get-CimInstance Win32_Process -Filter "Name LIKE 'llama-server%' OR Name='LM Studio.exe' OR Name='lms.exe' OR Name='llmster.exe' OR Name='ollama.exe' OR Name='python.exe' OR Name='pythonw.exe'")
-  $cands = @(); $runners = @()
-  foreach ($p in $procs) {
-    $n = [string]$p.Name; $cl = [string]$p.CommandLine; $kind = ''
-    if ($n -like 'llama-server*') { $kind = 'llamacpp' }
-    elseif ($n -eq 'ollama.exe') { if ($cl -match '(?i)\srunner(\s|$)') { $runners += $p } else { $kind = 'ollama' } }
-    elseif ($n -eq 'LM Studio.exe' -or $n -eq 'lms.exe' -or $n -eq 'llmster.exe') { $kind = 'lmstudio' }
-    elseif ($cl -match '(?i)(-m\s+serve\.server|serve[\\/]server\.py)') { $kind = 'strata' }
-    if ($kind) { $cands += [pscustomobject]@{ p = $p; kind = $kind } }
-  }
+  $found = Get-LlmCandidates
+  $cands = @($found.cands); $runners = @($found.runners)
   if (-not $cands.Count) { $script:llmCache = @{}; return '"llm":{"procs":0,"listen":[]}' }
   $byPid = @{}
   foreach ($l in @(Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue)) {
@@ -386,7 +531,7 @@ function Get-LlmExtra {
   }
   $servers = @(); $keep = @{}
   foreach ($c in $cands) {
-    $ls = @($byPid[[string]$c.p.ProcessId]); $seen = @{}; $list = @()
+    $ls = @($byPid[[string]$c.pid]); $seen = @{}; $list = @()
     foreach ($l in $ls) {
       if (-not $l) { continue }
       $a = ([string]$l.LocalAddress) -replace '[^0-9A-Fa-f:.]', ''
@@ -408,17 +553,18 @@ function Get-LlmExtra {
       elseif ($e.addr -match '^[0-9.]+$') { $addr = $e.addr }
       elseif ($e.addr -eq '::1') { $addr = '[::1]' }
       if (-not $addr) { continue }
-      $ck = "$($c.p.ProcessId)|$($e.port)"
+      $ck = "$($c.pid)|$($e.port)"
       $hit = $script:llmCache[$ck]
       if ($hit -and ($now - $hit.at) -lt $LlmProbeTtl) { $res = $hit.res } else { $res = Test-LlmPort $addr $e.port $c.kind; $tried++ }
       $keep[$ck] = @{ at = $(if ($hit -and ($now - $hit.at) -lt $LlmProbeTtl) { $hit.at } else { $now }); res = $res; addr = $addr }
       if ($res.engine -and -not $best) { $best = @{ port = $e.port; res = $res; addr = $addr } }
     }
     if ($c.kind -eq 'lmstudio' -and -not $best) { continue }
-    $since = [DateTimeOffset]::new($c.p.CreationDate.ToUniversalTime()).ToUnixTimeSeconds()
+    $since = 0
+    if ($c.start) { $since = [DateTimeOffset]::new($c.start).ToUnixTimeSeconds() }
     if ($c.kind -eq 'ollama' -and $runners.Count) {
-      $nr = ($runners | Sort-Object CreationDate | Select-Object -Last 1)
-      $since = [DateTimeOffset]::new($nr.CreationDate.ToUniversalTime()).ToUnixTimeSeconds()
+      $nr = ($runners | Where-Object { $_.start } | Sort-Object start | Select-Object -Last 1)
+      if ($nr) { $since = [DateTimeOffset]::new($nr.start).ToUnixTimeSeconds() }
     }
     $servers += [pscustomobject]@{ c = $c; list = $list; best = $best; since = $since }
   }
@@ -442,8 +588,8 @@ function Get-LlmExtra {
     }
   }
   $lj = ($pick.list | ForEach-Object { '{{"port":{0},"addr":"{1}"}}' -f $_.port, $_.addr }) -join ','
-  $nm = ([string]$pick.c.p.Name) -replace '[^A-Za-z0-9 ._-]', ''
-  $out = '"llm":{{"procs":{0},"engine":"{1}","name":"{2}","pid":{3},"since":{4},"listen":[{5}]' -f $servers.Count, $engine, $nm, [int]$pick.c.p.ProcessId, $pick.since, $lj
+  $nm = ([string]$pick.c.name) -replace '[^A-Za-z0-9 ._-]', ''
+  $out = '"llm":{{"procs":{0},"engine":"{1}","name":"{2}","pid":{3},"since":{4},"listen":[{5}]' -f $servers.Count, $engine, $nm, [int]$pick.c.pid, $pick.since, $lj
   if ($res) {
     $out += ',"api_port":{0},"confirmed":true,"via":"{1}","auth":{2},"slots":{3},"metrics":{4},"busy":{5}' -f $apiPort, $res.via, $(if ($res.auth) { 'true' } else { 'false' }), [int]$res.slots, $(if ($res.metrics) { 'true' } else { 'false' }), [int]$res.busy
     if ($res.model) { $out += ',"model":"' + $res.model + '"' }
@@ -521,8 +667,9 @@ while ($true) {
   $loop++
   $extraJson = '{' + ((@($claudeFrag, $agentFrag, $hostFrag, $comfyFrag, $llmFrag) | Where-Object { $_ }) -join ',') + '}'
 
+  $systemMetrics = Get-SystemMetrics
   $payload = ('{{"v":1,"id":"{0}","ts":{1},"os":"windows",{2}{3}{4}{5}{6}{7},"extra":{8}}}' -f `
-    $AgentId, $now, (Get-UptimeJson), (Get-CpuJson), (Get-MemJson), (Get-DiskJson), $netJson, (Get-GpusJson), $extraJson)
+    $AgentId, $now, (Get-UptimeJson $systemMetrics), (Get-CpuJson), (Get-MemJson $systemMetrics), (Get-DiskJson), $netJson, (Get-GpusJson), $extraJson)
 
   if ($Once) { Write-Output $payload; exit 0 }
   if ($DumpPayload) { Set-Content -Path "C:\homenet-agent\last-payload.json" -Value $payload -Encoding UTF8 }

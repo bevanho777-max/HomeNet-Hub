@@ -49,6 +49,21 @@ on screen is the one from `package.json`, and this file is what needs fixing.
 
 ---
 
+## v2.50.1 — 2026-11-21
+
+**Windows agent:收进 m136 上 2026-11-11 的低 WMI 改动,大模型侦测也照同样做法。** 只改 `agents/homenet-agent.ps1`(两台照流程换版)。
+
+*Rebuild required — 只为了让 release 导出里的 agent(hub 比对「agent 与 HEAD 一致」用)换成这一版;`server/`、`web/`、`config/` 没改。*
+
+- **起因**:换 v2.50.0 的 agent 时发现 m136 跑的不是 v2.43 那份,而是 2026-11-11 01:02 另一个会话(Codex,备份在 m136
+  `C:\homenet-agent\backups\codex-wmi-20261111-010827\`)改过的版本:记忆体与开机时间改读原生 API(`GlobalMemoryStatusEx`、`GetTickCount64`),
+  磁盘改用 `DriveInfo`,ComfyUI 进程按 python 进程的签名缓存 —— 少很多 WMI / CIM 查询,CIM 留作退路。v2.50.0 换上去把它盖掉了;这一版把那次改动
+  原样收进仓库(m110 也一起受益),不回退别人的工作。任务计划 `HomeNetAgent` 那次没改。
+- **大模型侦测(`extra.llm`)同样少用 WMI**:进程名改用原生 `Get-Process`;只有 `ollama.exe`(要排除 runner)和原生拿不到启动时间的进程才查命令行;
+  Strata 直接用 ComfyUI 那边缓存的 python 快照,不另查。回报格式不变。
+- 验证:m110 / m136 / m133 `-Once` 输出正常(记忆体、磁盘、开机时间、`comfyui`、`llm`;m133 的真 Strata 照样认出);m133 上假的 llama.cpp / Ollama /
+  LM Studio(40 秒、只听 127.0.0.1)各认对引擎、模型与忙碌数。
+
 ## v2.50.0 — 2026-11-21
 
 **「ComfyUI 节点」改成「ComfyUI / LLM 节点」:m110(RTX 5090)和 m136(RTX 5090 Laptop)轮流跑 ComfyUI 或大模型(一台同时只跑一种),
