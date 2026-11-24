@@ -38,6 +38,8 @@ services:
       # llama-server and m133's Strata check one since 2026-11. Unset -> that node's live state / slots are empty.
       - NODE_KEY_M26=${NODE_KEY_M26:-}
       - NODE_KEY_M133=${NODE_KEY_M133:-}
+      # v2.51 m110's Strata (a ComfyUI / LLM machine, BACKLOG 66): the hub reads its counters' engine with this key
+      - NODE_KEY_M110=${NODE_KEY_M110:-}
       - KIWIVM_VEID=${KIWIVM_VEID:-}
       - KIWIVM_API_KEY=${KIWIVM_API_KEY:-}
       - KIWIVM_PROXY=${KIWIVM_PROXY:-}

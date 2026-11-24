@@ -215,3 +215,33 @@ test('engine follow: the agent\'s ports (never loopback-only), the selectors, wh
   assert.deepEqual(det.portsOf(n), [8081, 9000, 8080]);
   det.stop();
 });
+
+test('v2.51 Prometheus SD: a follow node is listed only while its engine runs (off / ComfyUI: no scrape, no failure)', () => {
+  const det = new E.EngineDetector(null, { env: {} });
+  let snap = null;
+  det.machineOf = () => snap;
+  const strata = (port, extra = {}) => ({ procs: 1, engine: 'strata', api_port: port, listen: [{ port, addr: '0.0.0.0' }], ...extra });
+  det.nodes.set('m110', { def: { id: 'm110', host: '192.168.1.110', ports: [8080], follow: 'm110', key_env: 'NODE_KEY_M110' },
+    cur: { engine: 'strata', port: 8082, since: 1 } });
+  det.nodes.set('m133', { def: { id: 'm133', host: '192.168.1.133', ports: [8080] }, cur: { engine: 'strata', port: 8080, since: 1 } });
+  const target = { nodes: [{ id: 'm133', prom_labels: { host: 133 } }, { id: 'm110', prom_labels: { host: 110, gpu: 'RTX5090' } }] };
+  const listed = () => det.sd('strata', target).flatMap((g) => g.targets);
+  snap = { online: true, stale: false, extra: { llm: strata(8082) } };
+  assert.deepEqual(listed(), ['192.168.1.133:8080', '192.168.1.110:8082']);   // Strata Q4 running on 8082
+  assert.deepEqual(det.sd('strata', target)[1].labels, { host: '110', gpu: 'RTX5090' });
+  snap = { online: true, stale: false, extra: { llm: { procs: 0, listen: [] } } };
+  assert.deepEqual(listed(), ['192.168.1.133:8080']);                           // ComfyUI role: not scraped
+  snap = { online: false, stale: true, extra: {} };
+  assert.deepEqual(listed(), ['192.168.1.133:8080']);                           // machine off: not scraped
+  snap = { online: true, stale: false, extra: { llm: strata(8080, { listen: [{ port: 8080, addr: '127.0.0.1' }] }) } };
+  assert.deepEqual(listed(), ['192.168.1.133:8080']);                           // IQ4_XS bound to loopback: unreachable, not listed
+  snap = { online: true, stale: false, extra: { llm: strata(8082) } };
+  det.nodes.get('m110').cur.auth = true;
+  assert.deepEqual(listed(), ['192.168.1.133:8080']);                           // a key the hub lacks: nothing to scrape with
+  det.nodes.get('m133').cur = null;
+  det.nodes.get('m110').cur.auth = false;
+  assert.deepEqual(listed(), ['192.168.1.110:8082']);
+  snap = null;
+  assert.deepEqual(det.sd('strata', target), [{ targets: [], labels: {} }]);    // nothing: an empty group replaces the old list
+  det.stop();
+});

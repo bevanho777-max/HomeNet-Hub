@@ -49,6 +49,24 @@ on screen is the one from `package.json`, and this file is what needs fixing.
 
 ---
 
+## v2.51.0 — 2026-11-24
+
+**m110 跑 Strata 时,Prometheus 照 m25 / m133 的方式抓它的计数器;ComfyUI / LLM 节点只在引擎真的在跑时才列进抓取清单。**
+
+*Rebuild required — `server/` 改了;`docker-compose.yml` 多传一个环境变数 `NODE_KEY_M110`(容器要重建)。*
+
+- **起因**(BACKLOG 66):m110 的 Strata Q4 要 key,hub 探测得到 401,只能当成「要 key 的引擎」(`auth`),不进 `/api/prom/sd`,用量只能靠
+  litellm 4003 的逐笔记录(≈)。
+- **`/api/prom/sd/<job>`**:`follow` 节点(m110 / m136)只在 **机器开着、agent 回报有大模型进程、而且侦测到的端口就是 agent 回报的端口** 时列入
+  (`EngineDetector.scrapable`)。关机或跑 ComfyUI 时不列 —— Prometheus 根本不去抓,不会有失败的抓取、`up == 0` 或告警;卡片照旧保留最后的引擎。
+  固定节点(m25 / m26 / m133)不受影响:它们的引擎常驻,抓取失败照旧是真的故障。
+- **设定**:`targets.yaml` 的 m110 节点 `engine.key_env: NODE_KEY_M110`;`.env` 的 `NODE_KEY_M110`(`docker-compose.yml` 传进容器)。
+  Prometheus 另加 job `strata_m110`(只留 `192.168.1.110`,用 m110 的 key;`strata` job 改成去掉 .25 与 .110)。
+  用量账本不用改:follow 节点的计数器选择器本来就涵盖该机任何端口,和 m25 / m26 / m133 同一套 `nodeFigures`(计数器为准,LiteLLM 逐笔补)。
+- `npm test` 22 项(新增:Strata 在 8082 跑 → 列入;ComfyUI 角色 / 关机 / 只绑 127.0.0.1 / hub 没 key → 不列;都没有 → 空组取代旧清单)。
+
+---
+
 ## v2.50.2 — 2026-11-22
 
 **「ComfyUI / LLM 节点」卡的「≠ :端口」:设了 `llm_port_follow` 时,提示说明会自动跟随。** hub 本身照旧不改 litellm。

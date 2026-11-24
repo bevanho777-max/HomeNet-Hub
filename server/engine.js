@@ -350,6 +350,18 @@ export class EngineDetector {
     };
   }
 
+  /**
+   * v2.51 (BACKLOG 66) whether Prometheus should scrape a node's engine now. Always, for a fixed node (its engine runs
+   * all the time; a failed scrape there is a real fault). A `follow` node (m110 / m136) only while its engine runs:
+   * the machine is on, its agent reports an LLM server, and the port the engine was found on is one the agent reports.
+   * Off, or running ComfyUI: not listed -- Prometheus does not scrape it at all, so there is no failed scrape to count
+   * or alert on (the node keeps its last engine for the card; the counters' last values stay in Prometheus).
+   */
+  scrapable(n) {
+    if (!n.def.follow) return true;
+    return !!n.cur && this.followPorts(n).includes(n.cur.port);
+  }
+
   /** Prometheus http_sd_configs answer for one job */
   sd(job, nodesTarget) {
     const out = [];
@@ -359,7 +371,7 @@ export class EngineDetector {
       const labels = Object.fromEntries(Object.entries(nd.prom_labels || {}).map(([k, v]) => [k, String(v)]));
       if (job === 'llama_logs') {
         if (n.def.logs) out.push({ targets: [`${n.def.host}:${n.def.logs}`], labels });
-      } else if (n.cur?.engine === job && !(n.def.follow && n.cur.auth)) {   // (v2.50 a key the hub lacks: nothing to scrape with)
+      } else if (n.cur?.engine === job && !(n.def.follow && n.cur.auth) && this.scrapable(n)) {   // (v2.50 a key the hub lacks: nothing to scrape with)
         out.push({ targets: [`${n.def.host}:${n.cur.port}`], labels });
       }
     }
