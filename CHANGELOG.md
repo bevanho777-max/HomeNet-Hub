@@ -49,6 +49,19 @@ on screen is the one from `package.json`, and this file is what needs fixing.
 
 ---
 
+## v2.51.1 — 2026-11-24
+
+**建镜像时可以指定 Debian 镜像站(`APT_MIRROR`)。** 功能同 v2.51.0。
+
+*Rebuild required — `Dockerfile`、`docker-compose.yml` 改了。*
+
+- **起因**:24 的磁盘清理(BACKLOG 66)清掉了 Docker 的建置快取,部署 v2.51.0 时 builder 阶段的 `apt-get update` / 装 g++ 要重新下载 ——
+  24 连 deb.debian.org 只有约 25 KB/s(经代理也一样),光工具链就要近一小时;USTC 镜像约 11 MB/s。
+- `Dockerfile` builder 阶段 `ARG APT_MIRROR`(主机名,例如 `mirrors.ustc.edu.cn`):有设就把 `debian.sources` 里的 `deb.debian.org` 换成它;
+  不设照旧。`docker-compose.yml` 从 `.env` 的 `APT_MIRROR` 传进 build。只影响建镜像,不影响运行。v2.51.0 没有单独部署,直接部署这一版。
+
+---
+
 ## v2.51.0 — 2026-11-24
 
 **m110 跑 Strata 时,Prometheus 照 m25 / m133 的方式抓它的计数器;ComfyUI / LLM 节点只在引擎真的在跑时才列进抓取清单。**

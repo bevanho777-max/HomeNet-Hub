@@ -1,6 +1,10 @@
 services:
   homenet-hub:
-    build: .
+    build:
+      context: .
+      # v2.51.1 optional Debian mirror for the image build (.env APT_MIRROR, e.g. mirrors.ustc.edu.cn); unset = deb.debian.org
+      args:
+        APT_MIRROR: ${APT_MIRROR:-}
     container_name: homenet-hub
     restart: unless-stopped
     init: true

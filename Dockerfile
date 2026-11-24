@@ -9,7 +9,11 @@ FROM node:20-bookworm-slim AS builder
 WORKDIR /app
 
 # build toolchain for better-sqlite3 / pg native bits
-RUN apt-get update \
+# v2.51.1 APT_MIRROR (optional, a host name, e.g. mirrors.ustc.edu.cn): fetch these from that Debian mirror instead of
+# deb.debian.org -- some networks reach deb.debian.org at a few dozen KB/s, which only matters once the build cache is gone
+ARG APT_MIRROR=
+RUN if [ -n "$APT_MIRROR" ]; then sed -i "s#//deb.debian.org/#//${APT_MIRROR}/#g" /etc/apt/sources.list.d/debian.sources; fi \
+ && apt-get update \
  && apt-get install -y --no-install-recommends python3 make g++ ca-certificates \
  && rm -rf /var/lib/apt/lists/*
 
