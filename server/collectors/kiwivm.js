@@ -283,7 +283,7 @@ export class KiwiVmCollector {
     if (liveJ) { st.live = pickLive(liveJ); st.liveAt = Date.now(); st.liveErr = null; } else st.liveErr = errs[0] || null;
     // an API error only when neither call answered
     // v2.52 errSince: the first failed poll of this run of errors, saved at once so a restart keeps it (the hub's
-    // GET /api/target-errors and health-lite's 「hub 监测项错误」 alert on a run longer than an hour, BACKLOG 69)
+    // GET /api/target-errors and health-lite's 「hub 监测项错误」 alert on a run longer than an hour, BACKLOG 68)
     if (!svcJ) {
       st.err = errs.join('; ');
       st.errAt = now;

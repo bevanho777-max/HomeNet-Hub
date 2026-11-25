@@ -1,4 +1,4 @@
-// v2.52 「hub 监测项错误」 (BACKLOG 69): which of the hub's own monitored items are in an error state right now,
+// v2.52 「hub 监测项错误」 (BACKLOG 68): which of the hub's own monitored items are in an error state right now,
 // since when, and why -- GET /api/target-errors, read by health-lite (its 「Hub-target-errors」 layer alerts on
 // any error that has lasted more than an hour).
 //

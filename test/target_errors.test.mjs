@@ -1,4 +1,4 @@
-// v2.52 「hub 监测项错误」 (BACKLOG 69) -- `npm test` (node --test).
+// v2.52 「hub 监测项错误」 (BACKLOG 68) -- `npm test` (node --test).
 //   TargetErrors (server/target_errors.js): which monitored items are in an error state and since when, with the
 //   board's exclusions -- a machine that is off, a service that runs only when opened and is not running, 测试中 --
 //   and the KiwiVM card's API errors (the card stays online on its last good data: the 11-24 / 11-25 case).

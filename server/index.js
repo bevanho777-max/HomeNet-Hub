@@ -662,7 +662,7 @@ app.get('/api/node-states', VIEW, async () => {
   return { at: Date.now(), targets, nodes };
 });
 
-// v2.52 「hub 监测项错误」 (BACKLOG 69): every monitored item that is in an error state now -- why and since when --
+// v2.52 「hub 监测项错误」 (BACKLOG 68): every monitored item that is in an error state now -- why and since when --
 // with the board's own exclusions (a machine that is off, a service that runs only when opened and is not
 // running, 测试中); server/target_errors.js has the rules. health-lite alerts on one that lasted over an hour.
 // Recomputed every minute so an error with no start time of its own is timed from (about) when it began.
