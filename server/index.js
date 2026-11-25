@@ -41,6 +41,7 @@ import { EffectiveStore } from './config/effective.js';
 import { materialize, originOf } from './capabilities/catalog.js';
 import { createLitellmKeys, NAME_RE } from './litellm_keys.js';
 import { agentHeads } from './agent_heads.js';
+import { TargetErrors } from './target_errors.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..');
@@ -660,6 +661,22 @@ app.get('/api/node-states', VIEW, async () => {
   }
   return { at: Date.now(), targets, nodes };
 });
+
+// v2.52 「hub 监测项错误」 (BACKLOG 69): every monitored item that is in an error state now -- why and since when --
+// with the board's own exclusions (a machine that is off, a service that runs only when opened and is not
+// running, 测试中); server/target_errors.js has the rules. health-lite alerts on one that lasted over an hour.
+// Recomputed every minute so an error with no start time of its own is timed from (about) when it began.
+const targetErrors = new TargetErrors();
+function computeTargetErrors() {
+  const cfg = effective.get();
+  const targets = (cfg.targets.targets || []).filter((t) => t.enabled !== false);
+  return targetErrors.compute({
+    targets, snap: snapshot.toJSON(targets.map((t) => t.id)), bindings: pushBindings.list(),
+    alerts: pushBindings.alerts(), configError: config.health().lastError,
+  });
+}
+setInterval(() => { try { computeTargetErrors(); } catch (e) { console.error(`[target-errors] ${e?.message || e}`); } }, 60 * 1000);
+app.get('/api/target-errors', VIEW, async () => computeTargetErrors());
 
 // v2.46: the summary line at the top of an inference node's detail (the 推理节点 column, or the machine
 // card of the same id): tokens / tokens via LiteLLM / requests over the window the modal shows (Beijing

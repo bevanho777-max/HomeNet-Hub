@@ -125,6 +125,7 @@ function freshState() {
     days: new Map(),              // 'YYYY-MM-DD' -> { in, out, n } (bytes, multiplier NOT applied)
     rawAt: 0, rawNextAt: 0, rawFails: 0, rawErr: null,
     fails: 0, nextAt: 0, err: null, errAt: 0, triedAt: 0,
+    errSince: 0,                  // v2.52 when the current run of API errors began (kept across restarts)
     liveErr: null,                // the last poll's getLiveServiceInfo error when getServiceInfo stood in
     cycleStart: null,             // exact start of the current cycle once a reset has been seen
     loaded: false,
@@ -212,6 +213,7 @@ export class KiwiVmCollector {
       if (s.svc) { st.svc = s.svc; st.svcAt = Number(s.svcAt) || 0; }
       if (s.live) { st.live = s.live; st.liveAt = Number(s.liveAt) || 0; }
       st.rawAt = Number(s.rawAt) || 0;
+      st.errSince = Number(s.errSince) || 0;
       st.cycleStart = num(s.cycleStart);
       // the hourly raw call is due again an hour after the last one, not at once on every restart
       if (st.rawAt) st.rawNextAt = st.rawAt + 3600000;
@@ -220,7 +222,7 @@ export class KiwiVmCollector {
 
   _save(id, st) {
     try {
-      this._statePut.run(id, JSON.stringify({ svc: st.svc, svcAt: st.svcAt, live: st.live, liveAt: st.liveAt, rawAt: st.rawAt, cycleStart: st.cycleStart }), Date.now());
+      this._statePut.run(id, JSON.stringify({ svc: st.svc, svcAt: st.svcAt, live: st.live, liveAt: st.liveAt, rawAt: st.rawAt, cycleStart: st.cycleStart, errSince: st.errSince || 0 }), Date.now());
     } catch (e) { console.error(`[kiwivm] ${id}: state not saved: ${e?.message || e}`); }
   }
 
@@ -257,6 +259,7 @@ export class KiwiVmCollector {
     if (!creds.veid || !creds.key) {
       st.err = `${target.source?.veid_env || 'KIWIVM_VEID'} / ${target.source?.key_env || 'KIWIVM_API_KEY'} not set`;
       st.errAt = now;
+      if (!st.errSince) { st.errSince = now; this._save(target.id, st); }
       return this.view(target, { now, fresh: false });
     }
     if (now < st.nextAt) return this.view(target, { now, fresh: false });
@@ -279,10 +282,13 @@ export class KiwiVmCollector {
     }
     if (liveJ) { st.live = pickLive(liveJ); st.liveAt = Date.now(); st.liveErr = null; } else st.liveErr = errs[0] || null;
     // an API error only when neither call answered
+    // v2.52 errSince: the first failed poll of this run of errors, saved at once so a restart keeps it (the hub's
+    // GET /api/target-errors and health-lite's 「hub 监测项错误」 alert on a run longer than an hour, BACKLOG 69)
     if (!svcJ) {
       st.err = errs.join('; ');
       st.errAt = now;
-    } else st.err = null;
+      if (!st.errSince) { st.errSince = now; this._save(target.id, st); }
+    } else { st.err = null; st.errSince = 0; }
     if (!svcJ) {
       st.fails += 1;
       st.nextAt = now + Math.min(BACKOFF_MAX_MS, BACKOFF_BASE_MS * 2 ** (st.fails - 1)) - 5000;   // (5 s early: lands on that tick)
@@ -392,7 +398,7 @@ export class KiwiVmCollector {
       days, today,
       data_at: st.svcAt || null, live_at: st.liveAt || null, raw_at: st.rawAt || null,
       api: {
-        ok: !st.err, err: st.err, err_at: st.err ? st.errAt : null, fails: st.fails,
+        ok: !st.err, err: st.err, err_at: st.err ? st.errAt : null, err_since: st.err ? (st.errSince || st.errAt) : null, fails: st.fails,
         live_err: st.err ? null : st.liveErr,
         next_at: st.nextAt || null, raw_err: st.rawErr,
         every: target.source?.interval || '5m', usage_every: target.source?.usage_every || '1h',

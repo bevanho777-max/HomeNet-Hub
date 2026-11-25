@@ -49,6 +49,26 @@ on screen is the one from `package.json`, and this file is what needs fixing.
 
 ---
 
+## v2.52.0 — 2026-11-25
+
+**`GET /api/target-errors`:hub 自己监测的项目里,哪些正在报错、从什么时候起、原因是什么** —— health-lite 新的「Hub-target-errors」层读它,
+连续报错超过 1 小时就发 Telegram(每 10 分钟查一次)。
+
+*Rebuild required — `server/` 改了。*
+
+- **起因**:搬瓦工 VPS 卡片 11-24 15:19 到 11-25 20:05 一直「API 错误」(KiwiVM 700005 认证失败,`.env` 被改坏),29 小时没有任何告警 ——
+  卡片沿用最后一次成功的数据,连「在线」都还是 true。
+- 新模块 `server/target_errors.js`,每分钟算一次(有自己开始时间的用它的,没有的从 hub 第一次看到起算):
+  监测项读不到(API / HTTP 错误、认证、解析失败、服务不通,从离线开始算)、搬瓦工 API 错误(从这一轮第一次失败算)、主机不符被拒收的推送、
+  推理节点卡读不到 litellm 路由、引擎在跑但 Prometheus 计数器读不到 / 停更、配置重载被拒。
+- **不算错误**(按面板自己的规则):机器关机 / 未开机(不推送的机器,以及它上面的服务 —— 机器取 `machine`、`source.node`,或按服务网址的地址
+  对上推送来源);只在打开时才运行的服务(`always_on: false`,例如 m110 / m136 的 ComfyUI 或大模型)没在运行或连不上;测试中。
+  这类服务出别的错(HTTP 错误、认证、回答不对)仍然算。
+- 搬瓦工采集器记下这一轮 API 错误的开始时间 `err_since`(存进数据库,重启不丢),快照的 `extra.vps.api.err_since`。
+- `npm test` 28 项(新增 6 项:KiwiVM 错误照 `err_since` 计时、机器关机 / 开机、随用随开、第一次看到起算与清除、计数器、推送与配置)。
+
+---
+
 ## v2.51.1 — 2026-11-24
 
 **建镜像时可以指定 Debian 镜像站(`APT_MIRROR`)。** 功能同 v2.51.0。
